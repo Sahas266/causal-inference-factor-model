@@ -1,0 +1,762 @@
+"/timeseries/pair-candles": {
+    "servers": [
+      {
+        "url": "https://api.coinmetrics.io/v4"
+      },
+      {
+        "url": "https://community-api.coinmetrics.io/v4"
+      }
+    ],
+    "get": {
+      "summary": "Pair candles",
+      "description": "Returns candles for specified asset pairs.<br/> Results are ordered by tuple `(pair, time)`.<br/> To fetch the next page of results use `next_page_url` JSON response field.<br/>",
+      "operationId": "getTimeseriesPairCandles",
+      "x-codeSamples": [
+        {
+          "label": "Shell",
+          "source": "curl --compressed \"https://api.coinmetrics.io/v4/timeseries/pair-candles?pairs=btc-usd&frequency=1d&pretty=true&api_key=<your_key>\"\n"
+        },
+        {
+          "label": "Python",
+          "source": "import requests\nresponse = requests.get('https://api.coinmetrics.io/v4/timeseries/pair-candles?pairs=btc-usd&frequency=1d&pretty=true&api_key=<your_key>').json()\nprint(response)\n"
+        }
+      ],
+      "tags": [
+        "Timeseries"
+      ],
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/PairWithCandle"
+        },
+        {
+          "$ref": "#/components/parameters/CandleFrequency"
+        },
+        {
+          "$ref": "#/components/parameters/StartTime"
+        },
+        {
+          "$ref": "#/components/parameters/EndTime"
+        },
+        {
+          "$ref": "#/components/parameters/StartInclusive"
+        },
+        {
+          "$ref": "#/components/parameters/EndInclusive"
+        },
+        {
+          "$ref": "#/components/parameters/Timezone"
+        },
+        {
+          "$ref": "#/components/parameters/PageSize"
+        },
+        {
+          "$ref": "#/components/parameters/PagingFrom"
+        },
+        {
+          "$ref": "#/components/parameters/LimitPerPairCandle"
+        },
+        {
+          "$ref": "#/components/parameters/Pretty"
+        },
+        {
+          "$ref": "#/components/parameters/Format"
+        },
+        {
+          "$ref": "#/components/parameters/NextPageToken"
+        }
+      ],
+      "responses": {
+        "200": {
+          "$ref": "#/components/responses/PairCandles"
+        },
+        "400": {
+          "$ref": "#/components/responses/PairNotFound"
+        },
+        "401": {
+          "$ref": "#/components/responses/Unauthorized"
+        },
+        "403": {
+          "$ref": "#/components/responses/Forbidden"
+        },
+        "414": {
+          "$ref": "#/components/responses/UriTooLong"
+        }
+      },
+      "security": [
+        {
+          "api_key": []
+        }
+      ]
+    }
+  },
+
+  "/timeseries/market-openinterest": {
+    "servers": [
+      {
+        "url": "https://api.coinmetrics.io/v4"
+      },
+      {
+        "url": "https://community-api.coinmetrics.io/v4"
+      }
+    ],
+    "get": {
+      "summary": "Market open interest",
+      "description": "Returns open interest for specified futures markets.<br/> Results are ordered by tuple `(market, time)`.<br/> To fetch the next page of results use `next_page_url` JSON response field. Keep in mind that spot markets are not supported by this endpoint.<br/><br/> <b>Note:</b> The `value_usd` field in this endpoint was previously calculated using hardcoded logic that no longer reflects current contract specifications across all exchanges.<br/><br/> To address this, we have deprecated the `value_usd` field and introduced new, more accurate metrics available via the `/timeseries/market-metrics` endpoint.<br/><br/> These two metrics should be used as a replacement for the `value_usd` field going forward:<br/> - `open_interest_reported_future_usd` to represent the notional value of open interest in U.S. dollars for futures markets<br/> - `open_interest_reported_option_notional_usd` to represent the notional value of open interest in U.S. dollars for options markets<br/><br/> We also introduced `open_interest_reported_option_market_value_usd` to represent the market value of open interest in U.S. dollars for options markets.",
+      "operationId": "getTimeseriesMarketOpenIntereset",
+      "x-codeSamples": [
+        {
+          "label": "Shell",
+          "source": "curl --compressed \"https://api.coinmetrics.io/v4/timeseries/market-openinterest?start_time=2020-08-05T23:00:00Z&end_time=2020-08-06T00:00:00Z&paging_from=start&markets=bitmex-XBTUSD-future&pretty=true&api_key=<your_key>\"\n"
+        },
+        {
+          "label": "Python",
+          "source": "import requests\nresponse = requests.get('https://api.coinmetrics.io/v4/timeseries/market-openinterest?start_time=2020-08-05T23:00:00Z&end_time=2020-08-06T00:00:00Z&paging_from=start&markets=bitmex-XBTUSD-future&pretty=true&api_key=<your_key>').json()\nprint(response)\n"
+        },
+        {
+          "label": "Python Client",
+          "source": "from coinmetrics.api_client import CoinMetricsClient\nclient = CoinMetricsClient(<your_key>)\n\nresponse = client.get_market_openinterest(start_time=\"2020-08-05T23:00:00Z\", end_time=\"2020-08-06T00:00:00Z\", paging_from=\"start\", markets=\"bitmex-XBTUSD-future\").to_list()\nprint(response)\n"
+        }
+      ],
+      "tags": [
+        "Timeseries"
+      ],
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/MarketId"
+        },
+        {
+          "$ref": "#/components/parameters/StartTime"
+        },
+        {
+          "$ref": "#/components/parameters/EndTime"
+        },
+        {
+          "$ref": "#/components/parameters/StartInclusive"
+        },
+        {
+          "$ref": "#/components/parameters/EndInclusive"
+        },
+        {
+          "$ref": "#/components/parameters/OpenInterestGranularity"
+        },
+        {
+          "$ref": "#/components/parameters/Timezone"
+        },
+        {
+          "$ref": "#/components/parameters/PageSize"
+        },
+        {
+          "$ref": "#/components/parameters/PagingFrom"
+        },
+        {
+          "$ref": "#/components/parameters/LimitPerMarket"
+        },
+        {
+          "$ref": "#/components/parameters/Pretty"
+        },
+        {
+          "$ref": "#/components/parameters/ResponseFormat"
+        },
+        {
+          "$ref": "#/components/parameters/NextPageToken"
+        }
+      ],
+      "responses": {
+        "200": {
+          "$ref": "#/components/responses/MarketOpenInterest"
+        },
+        "400": {
+          "$ref": "#/components/responses/MarketNotFound"
+        },
+        "401": {
+          "$ref": "#/components/responses/Unauthorized"
+        },
+        "403": {
+          "$ref": "#/components/responses/Forbidden"
+        },
+        "414": {
+          "$ref": "#/components/responses/UriTooLong"
+        }
+      },
+      "security": [
+        {
+          "api_key": []
+        }
+      ]
+    }
+  },
+
+  "/timeseries/market-liquidations": {
+    "servers": [
+      {
+        "url": "https://api.coinmetrics.io/v4"
+      },
+      {
+        "url": "https://community-api.coinmetrics.io/v4"
+      }
+    ],
+    "get": {
+      "summary": "Market liquidations",
+      "description": "Returns liquidations for specified futures markets.<br/> Results are ordered by tuple `(market, time)`.<br/> To fetch the next page of results use `next_page_url` JSON response field. Keep in mind that spot markets are not supported by this endpoint.",
+      "operationId": "getTimeseriesMarketLiquidations",
+      "x-codeSamples": [
+        {
+          "label": "Shell",
+          "source": "curl --compressed \"https://api.coinmetrics.io/v4/timeseries/market-liquidations?start_time=2020-10-10T15:00:00Z&end_time=2020-10-10T16:00:00Z&paging_from=start&markets=bitmex-XBTUSD-future&pretty=true&api_key=<your_key>\"\n"
+        },
+        {
+          "label": "Python",
+          "source": "import requests\nresponse = requests.get('https://api.coinmetrics.io/v4/timeseries/market-liquidations?start_time=2020-10-10T15:00:00Z&end_time=2020-10-10T16:00:00Z&paging_from=start&markets=bitmex-XBTUSD-future&pretty=true&api_key=<your_key>').json()\nprint(response)\n"
+        },
+        {
+          "label": "Python Client",
+          "source": "from coinmetrics.api_client import CoinMetricsClient\nclient = CoinMetricsClient(<your_key>)\n\nresponse = client.get_market_liquidations(start_time=\"2020-10-10T15:00:00Z\", end_time=\"2020-10-10T16:00:00Z\", paging_from=\"start\", markets=\"bitmex-XBTUSD-future\").to_list()\nprint(response)\n"
+        }
+      ],
+      "tags": [
+        "Timeseries"
+      ],
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/MarketId"
+        },
+        {
+          "$ref": "#/components/parameters/StartTime"
+        },
+        {
+          "$ref": "#/components/parameters/EndTime"
+        },
+        {
+          "$ref": "#/components/parameters/StartInclusive"
+        },
+        {
+          "$ref": "#/components/parameters/EndInclusive"
+        },
+        {
+          "$ref": "#/components/parameters/Timezone"
+        },
+        {
+          "$ref": "#/components/parameters/PageSize"
+        },
+        {
+          "$ref": "#/components/parameters/PagingFrom"
+        },
+        {
+          "$ref": "#/components/parameters/LimitPerMarket"
+        },
+        {
+          "$ref": "#/components/parameters/Pretty"
+        },
+        {
+          "$ref": "#/components/parameters/ResponseFormat"
+        },
+        {
+          "$ref": "#/components/parameters/NextPageToken"
+        }
+      ],
+      "responses": {
+        "200": {
+          "$ref": "#/components/responses/MarketLiquidations"
+        },
+        "400": {
+          "$ref": "#/components/responses/MarketNotFound"
+        },
+        "401": {
+          "$ref": "#/components/responses/Unauthorized"
+        },
+        "403": {
+          "$ref": "#/components/responses/Forbidden"
+        },
+        "414": {
+          "$ref": "#/components/responses/UriTooLong"
+        }
+      },
+      "security": [
+        {
+          "api_key": []
+        }
+      ]
+    }
+  },
+
+  "/timeseries/market-funding-rates": {
+    "servers": [
+      {
+        "url": "https://api.coinmetrics.io/v4"
+      },
+      {
+        "url": "https://community-api.coinmetrics.io/v4"
+      }
+    ],
+    "get": {
+      "summary": "Market funding rates",
+      "description": "Returns funding rates for specified futures markets.<br/> Results are ordered by tuple `(market, time)`.<br/> To fetch the next page of results use `next_page_url` JSON response field. Keep in mind that spot markets are not supported by this endpoint.",
+      "operationId": "getTimeseriesMarketFundingRates",
+      "x-codeSamples": [
+        {
+          "label": "Shell",
+          "source": "curl --compressed \"https://api.coinmetrics.io/v4/timeseries/market-funding-rates?start_time=2020-11-11T18:00:00Z&end_time=2020-11-11T19:00:00Z&paging_from=start&markets=bitmex-XBTUSD-future&pretty=true&api_key=<your_key>\"\n"
+        },
+        {
+          "label": "Python",
+          "source": "import requests\nresponse = requests.get('https://api.coinmetrics.io/v4/timeseries/market-funding-rates?start_time=2020-11-11T18:00:00Z&end_time=2020-11-11T19:00:00Z&paging_from=start&markets=bitmex-XBTUSD-future&pretty=true&api_key=<your_key>').json()\nprint(response)\n"
+        },
+        {
+          "label": "Python Client",
+          "source": "from coinmetrics.api_client import CoinMetricsClient\nclient = CoinMetricsClient(<your_key>)\n\nresponse = client.get_market_funding_rates(start_time=\"2020-11-11T18:00:00Z\", end_time=\"2020-11-11T19:00:00Z\", paging_from=\"start\", markets=\"bitmex-XBTUSD-future\").to_list()\nprint(response)\n"
+        }
+      ],
+      "tags": [
+        "Timeseries"
+      ],
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/MarketId"
+        },
+        {
+          "$ref": "#/components/parameters/StartTime"
+        },
+        {
+          "$ref": "#/components/parameters/EndTime"
+        },
+        {
+          "$ref": "#/components/parameters/StartInclusive"
+        },
+        {
+          "$ref": "#/components/parameters/EndInclusive"
+        },
+        {
+          "$ref": "#/components/parameters/Timezone"
+        },
+        {
+          "$ref": "#/components/parameters/PageSize"
+        },
+        {
+          "$ref": "#/components/parameters/PagingFrom"
+        },
+        {
+          "$ref": "#/components/parameters/LimitPerMarket"
+        },
+        {
+          "$ref": "#/components/parameters/Pretty"
+        },
+        {
+          "$ref": "#/components/parameters/ResponseFormat"
+        },
+        {
+          "$ref": "#/components/parameters/NextPageToken"
+        }
+      ],
+      "responses": {
+        "200": {
+          "$ref": "#/components/responses/MarketFundingRates"
+        },
+        "400": {
+          "$ref": "#/components/responses/MarketNotFound"
+        },
+        "401": {
+          "$ref": "#/components/responses/Unauthorized"
+        },
+        "403": {
+          "$ref": "#/components/responses/Forbidden"
+        },
+        "414": {
+          "$ref": "#/components/responses/UriTooLong"
+        }
+      },
+      "security": [
+        {
+          "api_key": []
+        }
+      ]
+    }
+  },
+
+  "/timeseries/market-orderbooks": {
+    "servers": [
+      {
+        "url": "https://api.coinmetrics.io/v4"
+      },
+      {
+        "url": "https://community-api.coinmetrics.io/v4"
+      }
+    ],
+    "get": {
+      "summary": "Market orderbooks",
+      "description": "Returns orderbooks for specified markets.<br/> Results are ordered by tuple `(market, time)`.<br/> To fetch the next page of results use `next_page_url` JSON response field.",
+      "operationId": "getTimeseriesMarketOrderbooks",
+      "x-codeSamples": [
+        {
+          "label": "Shell",
+          "source": "curl --compressed \"https://api.coinmetrics.io/v4/timeseries/market-orderbooks?start_time=2020-06-08T21:00:00Z&end_time=2020-06-08T22:00:00Z&paging_from=start&markets=coinbase-btc-usd-spot&pretty=true&api_key=<your_key>\"\n"
+        },
+        {
+          "label": "Python",
+          "source": "import requests\nresponse = requests.get('https://api.coinmetrics.io/v4/timeseries/market-orderbooks?start_time=2020-06-08T21:00:00Z&end_time=2020-06-08T22:00:00Z&paging_from=start&markets=coinbase-btc-usd-spot&pretty=true&api_key=<your_key>').json()\nprint(response)\n"
+        },
+        {
+          "label": "Python Client",
+          "source": "from coinmetrics.api_client import CoinMetricsClient\nclient = CoinMetricsClient(<your_key>)\n\nresponse = client.get_market_orderbooks(start_time=\"2020-06-08T21:00:00Z\", end_time=\"2020-06-08T22:00:00Z\", paging_from=\"start\", markets=\"coinbase-btc-usd-spot\").to_list()\nprint(response)\n"
+        }
+      ],
+      "tags": [
+        "Timeseries"
+      ],
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/MarketId"
+        },
+        {
+          "$ref": "#/components/parameters/MarketOrderBooksAndQuotesGranularity"
+        },
+        {
+          "$ref": "#/components/parameters/StartTime"
+        },
+        {
+          "$ref": "#/components/parameters/EndTime"
+        },
+        {
+          "$ref": "#/components/parameters/StartInclusive"
+        },
+        {
+          "$ref": "#/components/parameters/EndInclusive"
+        },
+        {
+          "$ref": "#/components/parameters/Timezone"
+        },
+        {
+          "$ref": "#/components/parameters/BookPageSize"
+        },
+        {
+          "$ref": "#/components/parameters/BookDepth"
+        },
+        {
+          "$ref": "#/components/parameters/CatalogResponseFormat"
+        },
+        {
+          "$ref": "#/components/parameters/PagingFrom"
+        },
+        {
+          "$ref": "#/components/parameters/LimitPerMarket"
+        },
+        {
+          "$ref": "#/components/parameters/Pretty"
+        },
+        {
+          "$ref": "#/components/parameters/NextPageToken"
+        }
+      ],
+      "responses": {
+        "200": {
+          "$ref": "#/components/responses/MarketOrderBooks"
+        },
+        "400": {
+          "$ref": "#/components/responses/MarketNotFound"
+        },
+        "401": {
+          "$ref": "#/components/responses/Unauthorized"
+        },
+        "403": {
+          "$ref": "#/components/responses/Forbidden"
+        },
+        "414": {
+          "$ref": "#/components/responses/UriTooLong"
+        }
+      },
+      "security": [
+        {
+          "api_key": []
+        }
+      ]
+    }
+  },
+
+  "/timeseries/market-candles": {
+    "servers": [
+      {
+        "url": "https://api.coinmetrics.io/v4"
+      },
+      {
+        "url": "https://community-api.coinmetrics.io/v4"
+      }
+    ],
+    "get": {
+      "summary": "Market candles",
+      "description": "Returns candles for specified markets.<br/> Results are ordered by tuple `(market, time)`.<br/> To fetch the next page of results use `next_page_url` JSON response field.<br/> Coin Metrics derives candles directly from trades. Candles are only generated if there are trades in the underlying interval. Therefore, gaps in candles data through time are normal and to be expected. To construct gapless candles, the client should fill forward candles through time, setting the open, high, low, and close to the close of the previous candle, setting the vwap to the vwap of the previous candle, and setting the volume to zero.",
+      "operationId": "getTimeseriesMarketCandles",
+      "x-codeSamples": [
+        {
+          "label": "Shell",
+          "source": "curl --compressed \"https://api.coinmetrics.io/v4/timeseries/market-candles?start_time=2020-06-08T20:45:00Z&end_time=2020-06-08T20:50:00Z&paging_from=start&markets=coinbase-btc-usd-spot&pretty=true&api_key=<your_key>\"\n"
+        },
+        {
+          "label": "Python",
+          "source": "import requests\nresponse = requests.get('https://api.coinmetrics.io/v4/timeseries/market-candles?start_time=2020-06-08T20:45:00Z&end_time=2020-06-08T20:50:00Z&paging_from=start&markets=coinbase-btc-usd-spot&pretty=true&api_key=<your_key>').json()\nprint(response)\n"
+        },
+        {
+          "label": "Python Client",
+          "source": "from coinmetrics.api_client import CoinMetricsClient\nclient = CoinMetricsClient(<your_key>)\n\nresponse = client.get_market_candles(start_time=\"2020-06-08T20:45:00Z\", end_time=\"2020-06-08T20:50:00Z\", paging_from=\"start\", markets=\"coinbase-btc-usd-spot\").to_list()\nprint(response)\n"
+        }
+      ],
+      "tags": [
+        "Timeseries"
+      ],
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/MarketId"
+        },
+        {
+          "$ref": "#/components/parameters/CandleFrequency"
+        },
+        {
+          "$ref": "#/components/parameters/StartTime"
+        },
+        {
+          "$ref": "#/components/parameters/EndTime"
+        },
+        {
+          "$ref": "#/components/parameters/StartInclusive"
+        },
+        {
+          "$ref": "#/components/parameters/EndInclusive"
+        },
+        {
+          "$ref": "#/components/parameters/Timezone"
+        },
+        {
+          "$ref": "#/components/parameters/PageSize"
+        },
+        {
+          "$ref": "#/components/parameters/PagingFrom"
+        },
+        {
+          "$ref": "#/components/parameters/LimitPerMarket"
+        },
+        {
+          "$ref": "#/components/parameters/Pretty"
+        },
+        {
+          "$ref": "#/components/parameters/ResponseFormat"
+        },
+        {
+          "$ref": "#/components/parameters/NextPageToken"
+        }
+      ],
+      "responses": {
+        "200": {
+          "$ref": "#/components/responses/MarketCandles"
+        },
+        "400": {
+          "$ref": "#/components/responses/MarketNotFound"
+        },
+        "401": {
+          "$ref": "#/components/responses/Unauthorized"
+        },
+        "403": {
+          "$ref": "#/components/responses/Forbidden"
+        },
+        "414": {
+          "$ref": "#/components/responses/UriTooLong"
+        }
+      },
+      "security": [
+        {
+          "api_key": []
+        }
+      ]
+    }
+  },
+
+  "/timeseries/market-implied-volatility": {
+    "servers": [
+      {
+        "url": "https://api.coinmetrics.io/v4"
+      },
+      {
+        "url": "https://community-api.coinmetrics.io/v4"
+      }
+    ],
+    "get": {
+      "summary": "Market implied volatility",
+      "description": "Returns implied volatility for specified markets.<br/> Results are ordered by tuple `(market, time)`.<br/> To fetch the next page of results use `next_page_url` JSON response field.<br/> Implied volatility is calculated using an options pricing model. It represents the market's expectation of future volatility and is the value, when input to an options pricing model, that makes the actual options price equal to its theoretical price.",
+      "operationId": "getTimeseriesMarketImpliedVolatility",
+      "x-codeSamples": [
+        {
+          "label": "Shell",
+          "source": "curl --compressed \"https://api.coinmetrics.io/v4/timeseries/market-implied-volatility?start_time=2021-09-05T13:00:00Z&end_time=2021-09-05T14:00:00Z&paging_from=start&markets=deribit-ETH-10SEP21-3200-P-option&pretty=true&api_key=<your_key>\"\n"
+        },
+        {
+          "label": "Python",
+          "source": "import requests\nresponse = requests.get('https://api.coinmetrics.io/v4/timeseries/market-implied-volatility?start_time=2021-09-05T13:00:00Z&end_time=2021-09-05T14:00:00Z&paging_from=start&markets=deribit-ETH-10SEP21-3200-P-option&pretty=true&api_key=<your_key>').json()\nprint(response)\n"
+        },
+        {
+          "label": "Python Client",
+          "source": "from coinmetrics.api_client import CoinMetricsClient\nclient = CoinMetricsClient(<your_key>)\n\nresponse = client.get_market_implied_volatility(start_time=\"2021-09-05T13:00:00Z\", end_time=\"2021-09-05T14:00:00Z\", paging_from=\"start\", markets=\"deribit-ETH-10SEP21-3200-P-option\").to_list()\nprint(response)\n"
+        }
+      ],
+      "tags": [
+        "Timeseries"
+      ],
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/MarketId"
+        },
+        {
+          "$ref": "#/components/parameters/StartTime"
+        },
+        {
+          "$ref": "#/components/parameters/EndTime"
+        },
+        {
+          "$ref": "#/components/parameters/StartInclusive"
+        },
+        {
+          "$ref": "#/components/parameters/EndInclusive"
+        },
+        {
+          "$ref": "#/components/parameters/Timezone"
+        },
+        {
+          "$ref": "#/components/parameters/PageSize"
+        },
+        {
+          "$ref": "#/components/parameters/PagingFrom"
+        },
+        {
+          "$ref": "#/components/parameters/LimitPerMarket"
+        },
+        {
+          "$ref": "#/components/parameters/ImpliedVolatilityGranularity"
+        },
+        {
+          "$ref": "#/components/parameters/Pretty"
+        },
+        {
+          "$ref": "#/components/parameters/ResponseFormat"
+        },
+        {
+          "$ref": "#/components/parameters/NextPageToken"
+        }
+      ],
+      "responses": {
+        "200": {
+          "$ref": "#/components/responses/MarketImpliedVolatility"
+        },
+        "400": {
+          "$ref": "#/components/responses/MarketNotFound"
+        },
+        "401": {
+          "$ref": "#/components/responses/Unauthorized"
+        },
+        "403": {
+          "$ref": "#/components/responses/Forbidden"
+        },
+        "414": {
+          "$ref": "#/components/responses/UriTooLong"
+        }
+      },
+      "security": [
+        {
+          "api_key": []
+        }
+      ]
+    }
+  },
+
+  "/timeseries/market-greeks": {
+    "servers": [
+      {
+        "url": "https://api.coinmetrics.io/v4"
+      },
+      {
+        "url": "https://community-api.coinmetrics.io/v4"
+      }
+    ],
+    "get": {
+      "summary": "Market greeks",
+      "description": "Returns greeks for option markets.<br/> Results are ordered by tuple `(market, time)`.<br/> To fetch the next page of results use `next_page_url` JSON response field.<br/> Option greeks represent the sensitivity of the price of an options contract with respect to changes in its underlying parameters. Greeks are used in risk management and hedging so that market participants can achieve their desired exposure.",
+      "operationId": "getTimeseriesMarketGreeks",
+      "x-codeSamples": [
+        {
+          "label": "Shell",
+          "source": "curl --compressed \"https://api.coinmetrics.io/v4/timeseries/market-greeks?start_time=2021-09-01&end_time=2021-09-02&paging_from=start&markets=deribit-ETH-25MAR22-1200-P-option&pretty=true&api_key=<your_key>\"\n"
+        },
+        {
+          "label": "Python",
+          "source": "import requests\nresponse = requests.get('https://api.coinmetrics.io/v4/timeseries/market-greeks?start_time=2021-09-01&end_time=2021-09-02&paging_from=start&markets=deribit-ETH-25MAR22-1200-P-option&pretty=true&api_key=<your_key>').json()\nprint(response)\n"
+        },
+        {
+          "label": "Python Client",
+          "source": "from coinmetrics.api_client import CoinMetricsClient\nclient = CoinMetricsClient(<your_key>)\n\nresponse = client.get_market_greeks(start_time=\"2021-09-01\", end_time=\"2021-09-02\", paging_from=\"start\", markets=\"deribit-ETH-25MAR22-1200-P-option\").to_list()\nprint(response)\n"
+        }
+      ],
+      "tags": [
+        "Timeseries"
+      ],
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/MarketId"
+        },
+        {
+          "$ref": "#/components/parameters/StartTime"
+        },
+        {
+          "$ref": "#/components/parameters/EndTime"
+        },
+        {
+          "$ref": "#/components/parameters/StartInclusive"
+        },
+        {
+          "$ref": "#/components/parameters/EndInclusive"
+        },
+        {
+          "$ref": "#/components/parameters/Timezone"
+        },
+        {
+          "$ref": "#/components/parameters/PageSize"
+        },
+        {
+          "$ref": "#/components/parameters/PagingFrom"
+        },
+        {
+          "$ref": "#/components/parameters/LimitPerMarket"
+        },
+        {
+          "$ref": "#/components/parameters/GreeksGranularity"
+        },
+        {
+          "$ref": "#/components/parameters/Pretty"
+        },
+        {
+          "$ref": "#/components/parameters/ResponseFormat"
+        },
+        {
+          "$ref": "#/components/parameters/NextPageToken"
+        }
+      ],
+      "responses": {
+        "200": {
+          "$ref": "#/components/responses/MarketGreeks"
+        },
+        "400": {
+          "$ref": "#/components/responses/MarketNotFound"
+        },
+        "401": {
+          "$ref": "#/components/responses/Unauthorized"
+        },
+        "403": {
+          "$ref": "#/components/responses/Forbidden"
+        },
+        "414": {
+          "$ref": "#/components/responses/UriTooLong"
+        }
+      },
+      "security": [
+        {
+          "api_key": []
+        }
+      ]
+    }
+  },
+
+  
