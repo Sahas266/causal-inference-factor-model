@@ -1,0 +1,28 @@
+{
+  "provider_name": "coinmetrics",
+  "display_name": "Coin Metrics",
+  "enabled": true,
+  "api_config": {
+    "base_url": "https://api.coinmetrics.io/v4",
+    "api_key_env": "COINMETRICS_API_KEY",
+    "tier": "pro"
+  },
+  "rate_limits": {
+    "requests_per_window": 6000,
+    "window_seconds": 20,
+    "safety_margin": 0.9
+  },
+  "retry_config": {
+    "max_attempts": 3,
+    "backoff_multiplier": 2,
+    "max_wait_seconds": 60
+  },
+  "capabilities": [
+    "asset_metrics",
+    "market_trades",
+    "exchange_metrics",
+    "market_orderbooks"
+  ],
+  "description": "CoinMetrics provides comprehensive cryptocurrency market and on-chain data"
+}
+

@@ -1,0 +1,32 @@
+{
+  "endpoint_id": "eth_price_metrics",
+  "description": "Ethereum price and market capitalization metrics",
+  "table": "asset_metrics",
+  "primary_keys": ["provider", "asset", "metric", "time"],
+  "date_range": {
+    "start": "2016-01-01",
+    "end": "2024-12-31"
+  },
+  "providers": [
+    {
+      "name": "coinmetrics",
+      "enabled": true,
+      "priority": 1,
+      "config": {
+        "endpoint_type": "timeseries/asset-metrics",
+        "params": {
+          "assets": "eth",
+          "metrics": "PriceUSD,CapMrktCurUSD,TxCnt,AdrActCnt,GasLmtTx,GasLmtBlk",
+          "frequency": "1d",
+          "page_size": 10000
+        }
+      }
+    }
+  ],
+  "fallback_strategy": "use_all",
+  "deduplication": {
+    "strategy": "prefer_priority",
+    "conflict_resolution": "keep_highest_priority"
+  }
+}
+

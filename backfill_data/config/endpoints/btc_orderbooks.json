@@ -1,0 +1,32 @@
+{
+  "endpoint_id": "btc_usd_orderbooks",
+  "description": "Bitcoin orderbook snapshots from major exchanges",
+  "table": "market_orderbooks",
+  "primary_keys": ["provider", "market", "time", "snapshot_id", "side", "level"],
+  "date_range": {
+    "start": "2024-01-01",
+    "end": "2024-12-31"
+  },
+  "providers": [
+    {
+      "name": "coinmetrics",
+      "enabled": true,
+      "priority": 1,
+      "config": {
+        "endpoint_type": "timeseries/market-orderbooks",
+        "params": {
+          "markets": "coinbase-btc-usd-spot,binance-btc-usdt-spot",
+          "granularity": "1m",
+          "depth": 10,
+          "page_size": 1000
+        }
+      }
+    }
+  ],
+  "fallback_strategy": "use_all",
+  "deduplication": {
+    "strategy": "prefer_priority",
+    "conflict_resolution": "keep_highest_priority"
+  }
+}
+
