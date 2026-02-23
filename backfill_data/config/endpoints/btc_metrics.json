@@ -4,8 +4,8 @@
   "table": "asset_metrics",
   "primary_keys": ["provider", "asset", "metric", "time"],
   "date_range": {
-    "start": "2015-01-01",
-    "end": "2024-12-31"
+    "start": "2021-01-01",
+    "end": "2026-01-01"
   },
   "providers": [
     {
