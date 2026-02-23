@@ -1,0 +1,103 @@
+﻿python : C:\Users\sah
+as\AppData\Roaming\Py
+thon\Python312\site-p
+ackages\requests\__in
+it__.py:113: Requests
+DependencyWarning: 
+urllib3 (2.5.0) or 
+chardet (6.0.0.post1)
+/charset_normalizer 
+(3.4.2) doesn't 
+match a supported 
+version!
+At line:1 char:1
++ python -m pytest 
+tests\providers\ 
+--tb=short 2>&1 | 
+Out-File -FilePat ...
++ ~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~
+    + CategoryInfo   
+           : NotSpe  
+  cified: (C:\User   
+ s\sahas\...porte    
+d version!:Strin    
+g) [], RemoteExc    
+eption
+    + FullyQualified 
+   ErrorId : Native  
+  CommandError
+ 
+  warnings.warn(
+============================= test session starts =============================
+platform win32 -- Python 3.12.6, pytest-8.4.1, pluggy-1.6.0 -- C:\Program Files\Python312\python.exe
+cachedir: .pytest_cache
+rootdir: C:\Users\sahas\Github Repos\causal-inference-factor-model\backfill_data
+configfile: pytest.ini
+plugins: anyio-4.8.0, logfire-3.22.0
+collecting ... collected 61 items
+
+tests/providers/test_coinmetrics.py::test_provider_name PASSED           [  1%]
+tests/providers/test_coinmetrics.py::test_provider_initialization PASSED [  3%]
+tests/providers/test_coinmetrics.py::test_rate_limiter_initialization PASSED [  4%]
+tests/providers/test_coinmetrics.py::test_rate_limiter_acquire PASSED    [  6%]
+tests/providers/test_coinmetrics.py::test_rate_limiter_try_acquire PASSED [  8%]
+tests/providers/test_coinmetrics.py::test_transformer_asset_metrics PASSED [  9%]
+tests/providers/test_coinmetrics.py::test_transformer_infer_schema_type PASSED [ 11%]
+tests/providers/test_coinmetrics.py::test_provider_validation PASSED     [ 13%]
+tests/providers/test_coinmetrics.py::test_provider_error_handling PASSED [ 14%]
+tests/providers/test_coinmetrics_new_endpoints.py::TestTransformPairCandles::test_basic_transform PASSED [ 16%]
+tests/providers/test_coinmetrics_new_endpoints.py::TestTransformPairCandles::test_missing_optional_fields PASSED [ 18%]
+tests/providers/test_coinmetrics_new_endpoints.py::TestTransformPairCandles::test_empty_data PASSED [ 19%]
+tests/providers/test_coinmetrics_new_endpoints.py::TestTransformPairCandles::test_multiple_records PASSED [ 21%]
+tests/providers/test_coinmetrics_new_endpoints.py::TestTransformMarketOpenInterest::test_basic_transform PASSED [ 22%]
+tests/providers/test_coinmetrics_new_endpoints.py::TestTransformMarketOpenInterest::test_missing_value_usd PASSED [ 24%]
+tests/providers/test_coinmetrics_new_endpoints.py::TestTransformMarketOpenInterest::test_empty_data PASSED [ 26%]
+tests/providers/test_coinmetrics_new_endpoints.py::TestTransformMarketLiquidations::test_basic_transform PASSED [ 27%]
+tests/providers/test_coinmetrics_new_endpoints.py::TestTransformMarketLiquidations::test_missing_optional_fields PASSED [ 29%]
+tests/providers/test_coinmetrics_new_endpoints.py::TestTransformMarketLiquidations::test_empty_data PASSED [ 31%]
+tests/providers/test_coinmetrics_new_endpoints.py::TestTransformMarketFundingRates::test_basic_transform PASSED [ 32%]
+tests/providers/test_coinmetrics_new_endpoints.py::TestTransformMarketFundingRates::test_negative_rate PASSED [ 34%]
+tests/providers/test_coinmetrics_new_endpoints.py::TestTransformMarketFundingRates::test_empty_data PASSED [ 36%]
+tests/providers/test_coinmetrics_new_endpoints.py::TestTransformMarketCandles::test_basic_transform PASSED [ 37%]
+tests/providers/test_coinmetrics_new_endpoints.py::TestTransformMarketCandles::test_missing_optional_fields PASSED [ 39%]
+tests/providers/test_coinmetrics_new_endpoints.py::TestTransformMarketCandles::test_empty_data PASSED [ 40%]
+tests/providers/test_coinmetrics_new_endpoints.py::TestTransformMarketImpliedVolatility::test_basic_transform PASSED [ 42%]
+tests/providers/test_coinmetrics_new_endpoints.py::TestTransformMarketImpliedVolatility::test_missing_iv PASSED [ 44%]
+tests/providers/test_coinmetrics_new_endpoints.py::TestTransformMarketImpliedVolatility::test_empty_data PASSED [ 45%]
+tests/providers/test_coinmetrics_new_endpoints.py::TestTransformMarketGreeks::test_basic_transform PASSED [ 47%]
+tests/providers/test_coinmetrics_new_endpoints.py::TestTransformMarketGreeks::test_partial_greeks PASSED [ 49%]
+tests/providers/test_coinmetrics_new_endpoints.py::TestTransformMarketGreeks::test_negative_greeks PASSED [ 50%]
+tests/providers/test_coinmetrics_new_endpoints.py::TestTransformMarketGreeks::test_empty_data PASSED [ 52%]
+tests/providers/test_coinmetrics_new_endpoints.py::TestInferSchemaTypeNew::test_infer_pair_candles PASSED [ 54%]
+tests/providers/test_coinmetrics_new_endpoints.py::TestInferSchemaTypeNew::test_infer_market_open_interest PASSED [ 55%]
+tests/providers/test_coinmetrics_new_endpoints.py::TestInferSchemaTypeNew::test_infer_market_liquidations PASSED [ 57%]
+tests/providers/test_coinmetrics_new_endpoints.py::TestInferSchemaTypeNew::test_infer_market_funding_rates PASSED [ 59%]
+tests/providers/test_coinmetrics_new_endpoints.py::TestInferSchemaTypeNew::test_infer_market_candles PASSED [ 60%]
+tests/providers/test_coinmetrics_new_endpoints.py::TestInferSchemaTypeNew::test_infer_market_implied_volatility PASSED [ 62%]
+tests/providers/test_coinmetrics_new_endpoints.py::TestInferSchemaTypeNew::test_infer_market_greeks PASSED [ 63%]
+tests/providers/test_coinmetrics_new_endpoints.py::TestInferSchemaTypeNew::test_existing_types_still_work PASSED [ 65%]
+tests/providers/test_coinmetrics_new_endpoints.py::TestDispatchNew::test_dispatch_pair_candles PASSED [ 67%]
+tests/providers/test_coinmetrics_new_endpoints.py::TestDispatchNew::test_dispatch_market_open_interest PASSED [ 68%]
+tests/providers/test_coinmetrics_new_endpoints.py::TestDispatchNew::test_dispatch_market_liquidations PASSED [ 70%]
+tests/providers/test_coinmetrics_new_endpoints.py::TestDispatchNew::test_dispatch_market_funding_rates PASSED [ 72%]
+tests/providers/test_coinmetrics_new_endpoints.py::TestDispatchNew::test_dispatch_market_candles PASSED [ 73%]
+tests/providers/test_coinmetrics_new_endpoints.py::TestDispatchNew::test_dispatch_market_implied_volatility PASSED [ 75%]
+tests/providers/test_coinmetrics_new_endpoints.py::TestDispatchNew::test_dispatch_market_greeks PASSED [ 77%]
+tests/providers/test_coinmetrics_new_endpoints.py::TestDispatchNew::test_dispatch_unknown_raises PASSED [ 78%]
+tests/providers/test_coinmetrics_new_endpoints.py::TestEdgeCases::test_invalid_decimal_skipped PASSED [ 80%]
+tests/providers/test_coinmetrics_new_endpoints.py::TestEdgeCases::test_invalid_time_skipped PASSED [ 81%]
+tests/providers/test_coinmetrics_orderbooks.py::test_transform_market_orderbooks_basic PASSED [ 83%]
+tests/providers/test_coinmetrics_orderbooks.py::test_transform_orderbooks_bid_levels PASSED [ 85%]
+tests/providers/test_coinmetrics_orderbooks.py::test_transform_orderbooks_ask_levels PASSED [ 86%]
+tests/providers/test_coinmetrics_orderbooks.py::test_transform_orderbooks_metadata PASSED [ 88%]
+tests/providers/test_coinmetrics_orderbooks.py::test_transform_orderbooks_empty_data PASSED [ 90%]
+tests/providers/test_coinmetrics_orderbooks.py::test_transform_orderbooks_missing_snapshot_id PASSED [ 91%]
+tests/providers/test_coinmetrics_orderbooks.py::test_transform_orderbooks_price_decimal_conversion PASSED [ 93%]
+tests/providers/test_coinmetrics_orderbooks.py::test_infer_schema_type_orderbooks PASSED [ 95%]
+tests/providers/test_coinmetrics_orderbooks.py::test_transform_orderbooks_multiple_snapshots PASSED [ 96%]
+tests/providers/test_coinmetrics_orderbooks.py::test_transform_orderbooks_invalid_price PASSED [ 98%]
+tests/providers/test_coinmetrics_orderbooks.py::test_transform_method_dispatches_orderbooks PASSED [100%]
+
+============================= 61 passed in 0.07s ==============================
