@@ -218,6 +218,16 @@ python backfill.py --config <path> [options]
 
 ## Data Schemas
 
+The system supports the following schemas (implemented in `src/schemas`):
+- **Asset Metrics** (`asset_metrics`)
+- **Market Trades** (`market_trades`)
+- **Exchange Metrics** (`exchange_metrics`)
+- **Market Orderbooks** (`market_orderbooks`)
+- **Pair Candles** (`pair_candle`)
+- **Market Candles** (`market_candle`)
+- **Derivatives Data**: Funding Rates, Open Interest, Liquidations (`derivatives_data`)
+- **Options Data**: Implied Volatility, Greeks (`options_data`)
+
 ### Asset Metrics
 
 ```python

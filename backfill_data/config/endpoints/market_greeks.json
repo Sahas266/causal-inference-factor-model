@@ -1,0 +1,34 @@
+{
+    "endpoint_id": "market_greeks_btc_eth",
+    "description": "Option greeks (delta, gamma, vega, theta, rho) for BTC and ETH",
+    "table": "market_greeks",
+    "primary_keys": [
+        "provider",
+        "market",
+        "time"
+    ],
+    "date_range": {
+        "start": "2021-01-01",
+        "end": "2026-01-01"
+    },
+    "providers": [
+        {
+            "name": "coinmetrics",
+            "enabled": true,
+            "priority": 1,
+            "config": {
+                "endpoint_type": "timeseries/market-greeks",
+                "params": {
+                    "markets": "deribit-BTC-PERPETUAL-future",
+                    "granularity": "1d",
+                    "page_size": 10000
+                }
+            }
+        }
+    ],
+    "fallback_strategy": "use_all",
+    "deduplication": {
+        "strategy": "prefer_priority",
+        "conflict_resolution": "keep_highest_priority"
+    }
+}
