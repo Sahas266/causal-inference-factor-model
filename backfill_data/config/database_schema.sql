@@ -328,6 +328,156 @@ CREATE TRIGGER update_exchange_metrics_updated_at
     EXECUTE FUNCTION update_updated_at_column();
 
 -- ============================================================================
+-- PAIR CANDLES (FM-13)
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS pair_candles (
+    provider TEXT NOT NULL,
+    provider_priority INTEGER NOT NULL,
+    pair TEXT NOT NULL,
+    time TIMESTAMPTZ NOT NULL,
+    price_open NUMERIC,
+    price_high NUMERIC,
+    price_low NUMERIC,
+    price_close NUMERIC,
+    volume NUMERIC,
+    vwap NUMERIC,
+    candle_usd_volume NUMERIC,
+    frequency TEXT NOT NULL DEFAULT '1d',
+    metadata JSONB,
+    created_at TIMESTAMPTZ DEFAULT now(),
+    PRIMARY KEY (provider, pair, time)
+);
+
+CREATE INDEX IF NOT EXISTS idx_pair_candles_pair_time ON pair_candles (pair, time DESC);
+CREATE INDEX IF NOT EXISTS idx_pair_candles_provider ON pair_candles (provider);
+
+-- ============================================================================
+-- MARKET OPEN INTEREST (FM-13)
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS market_open_interest (
+    provider TEXT NOT NULL,
+    provider_priority INTEGER NOT NULL,
+    market TEXT NOT NULL,
+    time TIMESTAMPTZ NOT NULL,
+    contract_count NUMERIC,
+    value_usd NUMERIC,
+    metadata JSONB,
+    created_at TIMESTAMPTZ DEFAULT now(),
+    PRIMARY KEY (provider, market, time)
+);
+
+CREATE INDEX IF NOT EXISTS idx_market_oi_market_time ON market_open_interest (market, time DESC);
+CREATE INDEX IF NOT EXISTS idx_market_oi_provider ON market_open_interest (provider);
+
+-- ============================================================================
+-- MARKET LIQUIDATIONS (FM-13)
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS market_liquidations (
+    provider TEXT NOT NULL,
+    provider_priority INTEGER NOT NULL,
+    market TEXT NOT NULL,
+    time TIMESTAMPTZ NOT NULL,
+    coin_metrics_id TEXT NOT NULL,
+    amount NUMERIC,
+    price NUMERIC,
+    side TEXT CHECK (side IN ('buy', 'sell', 'unknown')),
+    type TEXT,
+    metadata JSONB,
+    created_at TIMESTAMPTZ DEFAULT now(),
+    PRIMARY KEY (provider, market, time, coin_metrics_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_market_liq_market_time ON market_liquidations (market, time DESC);
+CREATE INDEX IF NOT EXISTS idx_market_liq_provider ON market_liquidations (provider);
+
+-- ============================================================================
+-- MARKET FUNDING RATES (FM-13)
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS market_funding_rates (
+    provider TEXT NOT NULL,
+    provider_priority INTEGER NOT NULL,
+    market TEXT NOT NULL,
+    time TIMESTAMPTZ NOT NULL,
+    rate NUMERIC,
+    period TEXT,
+    metadata JSONB,
+    created_at TIMESTAMPTZ DEFAULT now(),
+    PRIMARY KEY (provider, market, time)
+);
+
+CREATE INDEX IF NOT EXISTS idx_market_fr_market_time ON market_funding_rates (market, time DESC);
+CREATE INDEX IF NOT EXISTS idx_market_fr_provider ON market_funding_rates (provider);
+
+-- ============================================================================
+-- MARKET CANDLES (FM-13)
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS market_candles (
+    provider TEXT NOT NULL,
+    provider_priority INTEGER NOT NULL,
+    market TEXT NOT NULL,
+    time TIMESTAMPTZ NOT NULL,
+    price_open NUMERIC,
+    price_high NUMERIC,
+    price_low NUMERIC,
+    price_close NUMERIC,
+    volume NUMERIC,
+    vwap NUMERIC,
+    candle_usd_volume NUMERIC,
+    frequency TEXT NOT NULL DEFAULT '1d',
+    metadata JSONB,
+    created_at TIMESTAMPTZ DEFAULT now(),
+    PRIMARY KEY (provider, market, time)
+);
+
+CREATE INDEX IF NOT EXISTS idx_market_candles_market_time ON market_candles (market, time DESC);
+CREATE INDEX IF NOT EXISTS idx_market_candles_provider ON market_candles (provider);
+
+-- ============================================================================
+-- MARKET IMPLIED VOLATILITY (FM-13)
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS market_implied_volatility (
+    provider TEXT NOT NULL,
+    provider_priority INTEGER NOT NULL,
+    market TEXT NOT NULL,
+    time TIMESTAMPTZ NOT NULL,
+    implied_volatility NUMERIC,
+    metadata JSONB,
+    created_at TIMESTAMPTZ DEFAULT now(),
+    PRIMARY KEY (provider, market, time)
+);
+
+CREATE INDEX IF NOT EXISTS idx_market_iv_market_time ON market_implied_volatility (market, time DESC);
+CREATE INDEX IF NOT EXISTS idx_market_iv_provider ON market_implied_volatility (provider);
+
+-- ============================================================================
+-- MARKET GREEKS (FM-13)
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS market_greeks (
+    provider TEXT NOT NULL,
+    provider_priority INTEGER NOT NULL,
+    market TEXT NOT NULL,
+    time TIMESTAMPTZ NOT NULL,
+    delta NUMERIC,
+    gamma NUMERIC,
+    vega NUMERIC,
+    theta NUMERIC,
+    rho NUMERIC,
+    metadata JSONB,
+    created_at TIMESTAMPTZ DEFAULT now(),
+    PRIMARY KEY (provider, market, time)
+);
+
+CREATE INDEX IF NOT EXISTS idx_market_greeks_market_time ON market_greeks (market, time DESC);
+CREATE INDEX IF NOT EXISTS idx_market_greeks_provider ON market_greeks (provider);
+
+-- ============================================================================
 -- COMMENTS
 -- ============================================================================
 
@@ -335,6 +485,13 @@ COMMENT ON TABLE backfill_progress IS 'Tracks progress of backfill operations fo
 COMMENT ON TABLE asset_metrics IS 'Asset-level metrics from multiple providers with priority-based deduplication';
 COMMENT ON TABLE market_trades IS 'Individual trades from exchanges across multiple providers';
 COMMENT ON TABLE exchange_metrics IS 'Exchange-level metrics (flows, balances) from multiple providers';
+COMMENT ON TABLE pair_candles IS 'OHLCV candle data for asset pairs from multiple providers';
+COMMENT ON TABLE market_open_interest IS 'Open interest data for futures markets from multiple providers';
+COMMENT ON TABLE market_liquidations IS 'Liquidation events for futures markets from multiple providers';
+COMMENT ON TABLE market_funding_rates IS 'Funding rate data for perpetual futures from multiple providers';
+COMMENT ON TABLE market_candles IS 'Exchange-specific OHLCV candle data from multiple providers';
+COMMENT ON TABLE market_implied_volatility IS 'Implied volatility data for options markets from multiple providers';
+COMMENT ON TABLE market_greeks IS 'Option greeks data from multiple providers';
 
 COMMENT ON VIEW asset_metrics_best IS 'Returns best available data per metric based on provider priority';
 COMMENT ON VIEW exchange_metrics_best IS 'Returns best available exchange metrics based on provider priority';

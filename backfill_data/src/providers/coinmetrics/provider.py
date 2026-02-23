@@ -99,6 +99,34 @@ class CoinMetricsProvider(DataProviderInterface):
                 catalog_endpoint = 'catalog-v2/exchange-metrics'
                 identifier_key = 'exchanges'
                 identifier = params.get('exchanges', '').split(',')[0]
+            elif 'pair-candles' in endpoint_type:
+                catalog_endpoint = 'catalog-v2/pair-candles'
+                identifier_key = 'pairs'
+                identifier = params.get('pairs', '').split(',')[0]
+            elif 'market-openinterest' in endpoint_type:
+                catalog_endpoint = 'catalog-v2/market-openinterest'
+                identifier_key = 'markets'
+                identifier = params.get('markets', '').split(',')[0]
+            elif 'market-liquidations' in endpoint_type:
+                catalog_endpoint = 'catalog-v2/market-liquidations'
+                identifier_key = 'markets'
+                identifier = params.get('markets', '').split(',')[0]
+            elif 'market-funding-rates' in endpoint_type:
+                catalog_endpoint = 'catalog-v2/market-funding-rates'
+                identifier_key = 'markets'
+                identifier = params.get('markets', '').split(',')[0]
+            elif 'market-candles' in endpoint_type:
+                catalog_endpoint = 'catalog-v2/market-candles'
+                identifier_key = 'markets'
+                identifier = params.get('markets', '').split(',')[0]
+            elif 'market-implied-volatility' in endpoint_type:
+                catalog_endpoint = 'catalog-v2/market-implied-volatility'
+                identifier_key = 'markets'
+                identifier = params.get('markets', '').split(',')[0]
+            elif 'market-greeks' in endpoint_type:
+                catalog_endpoint = 'catalog-v2/market-greeks'
+                identifier_key = 'markets'
+                identifier = params.get('markets', '').split(',')[0]
             else:
                 return ValidationResult(
                     valid=False,

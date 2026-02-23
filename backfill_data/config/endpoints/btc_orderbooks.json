@@ -2,10 +2,17 @@
   "endpoint_id": "btc_usd_orderbooks",
   "description": "Bitcoin orderbook snapshots from major exchanges",
   "table": "market_orderbooks",
-  "primary_keys": ["provider", "market", "time", "snapshot_id", "side", "level"],
+  "primary_keys": [
+    "provider",
+    "market",
+    "time",
+    "snapshot_id",
+    "side",
+    "level"
+  ],
   "date_range": {
-    "start": "2024-01-01",
-    "end": "2024-12-31"
+    "start": "2021-01-01",
+    "end": "2026-01-01"
   },
   "providers": [
     {
@@ -29,4 +36,3 @@
     "conflict_resolution": "keep_highest_priority"
   }
 }
-

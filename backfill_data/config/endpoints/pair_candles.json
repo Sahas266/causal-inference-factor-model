@@ -1,0 +1,34 @@
+{
+    "endpoint_id": "pair_candles_btc_eth",
+    "description": "OHLCV candles for BTC-USD and ETH-USD pairs",
+    "table": "pair_candles",
+    "primary_keys": [
+        "provider",
+        "pair",
+        "time"
+    ],
+    "date_range": {
+        "start": "2021-01-01",
+        "end": "2026-01-01"
+    },
+    "providers": [
+        {
+            "name": "coinmetrics",
+            "enabled": true,
+            "priority": 1,
+            "config": {
+                "endpoint_type": "timeseries/pair-candles",
+                "params": {
+                    "pairs": "btc-usd,eth-usd",
+                    "frequency": "1d",
+                    "page_size": 10000
+                }
+            }
+        }
+    ],
+    "fallback_strategy": "use_all",
+    "deduplication": {
+        "strategy": "prefer_priority",
+        "conflict_resolution": "keep_highest_priority"
+    }
+}

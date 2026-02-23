@@ -1,0 +1,34 @@
+{
+    "endpoint_id": "market_open_interest_btc_eth",
+    "description": "Open interest for BTC and ETH futures markets",
+    "table": "market_open_interest",
+    "primary_keys": [
+        "provider",
+        "market",
+        "time"
+    ],
+    "date_range": {
+        "start": "2021-01-01",
+        "end": "2026-01-01"
+    },
+    "providers": [
+        {
+            "name": "coinmetrics",
+            "enabled": true,
+            "priority": 1,
+            "config": {
+                "endpoint_type": "timeseries/market-openinterest",
+                "params": {
+                    "markets": "binance-BTCUSDT-future,binance-ETHUSDT-future",
+                    "granularity": "1d",
+                    "page_size": 10000
+                }
+            }
+        }
+    ],
+    "fallback_strategy": "use_all",
+    "deduplication": {
+        "strategy": "prefer_priority",
+        "conflict_resolution": "keep_highest_priority"
+    }
+}

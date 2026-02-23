@@ -1,0 +1,34 @@
+{
+    "endpoint_id": "market_implied_vol_btc_eth",
+    "description": "Implied volatility for BTC and ETH options markets",
+    "table": "market_implied_volatility",
+    "primary_keys": [
+        "provider",
+        "market",
+        "time"
+    ],
+    "date_range": {
+        "start": "2021-01-01",
+        "end": "2026-01-01"
+    },
+    "providers": [
+        {
+            "name": "coinmetrics",
+            "enabled": true,
+            "priority": 1,
+            "config": {
+                "endpoint_type": "timeseries/market-implied-volatility",
+                "params": {
+                    "markets": "deribit-BTC-PERPETUAL-future",
+                    "granularity": "1d",
+                    "page_size": 10000
+                }
+            }
+        }
+    ],
+    "fallback_strategy": "use_all",
+    "deduplication": {
+        "strategy": "prefer_priority",
+        "conflict_resolution": "keep_highest_priority"
+    }
+}

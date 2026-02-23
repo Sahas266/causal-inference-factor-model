@@ -1,0 +1,46 @@
+﻿python : C:\Users\sah
+as\AppData\Roaming\Py
+thon\Python312\site-p
+ackages\requests\__in
+it__.py:113: Requests
+DependencyWarning: 
+urllib3 (2.5.0) or 
+chardet (6.0.0.post1)
+/charset_normalizer 
+(3.4.2) doesn't 
+match a supported 
+version!
+At line:1 char:1
++ python -m pytest 
+tests\providers\ 
+tests\unit\ 
+--tb=short 2>&1 | 
+Out-F ...
++ ~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo   
+           : NotSpe  
+  cified: (C:\User   
+ s\sahas\...porte    
+d version!:Strin    
+g) [], RemoteExc    
+eption
+    + FullyQualified 
+   ErrorId : Native  
+  CommandError
+ 
+  warnings.warn(
+============================= test session starts =============================
+platform win32 -- Python 3.12.6, pytest-8.4.1, pluggy-1.6.0 -- C:\Program Files\Python312\python.exe
+cachedir: .pytest_cache
+rootdir: C:\Users\sahas\Github Repos\causal-inference-factor-model\backfill_data
+configfile: pytest.ini
+plugins: anyio-4.8.0, logfire-3.22.0
+ERROR: file or 
+directory not found: 
+tests\unit\
+
+collecting ... collected 0 items
+
+============================ no tests ran in 0.00s ============================
