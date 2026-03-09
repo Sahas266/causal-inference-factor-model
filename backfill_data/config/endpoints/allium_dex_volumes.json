@@ -1,0 +1,30 @@
+{
+  "endpoint_id": "allium_dex_daily_volumes",
+  "description": "Daily DEX swap volumes on Ethereum — Uniswap V2/V3, Curve, Balancer",
+  "table": "asset_metrics",
+  "primary_keys": ["provider", "asset", "metric", "time"],
+  "date_range": {
+    "start": "2021-01-01",
+    "end": "2026-01-01"
+  },
+  "providers": [
+    {
+      "name": "allium",
+      "enabled": true,
+      "priority": 1,
+      "config": {
+        "endpoint_type": "explorer/sql",
+        "params": {
+          "schema_type": "dex_metrics",
+          "timeout_seconds": 120,
+          "sql": "SELECT DATE_TRUNC('day', block_timestamp) AS time, protocol AS protocol, COUNT(*) AS swap_count, SUM(amount_usd) AS volume_usd FROM ethereum.defi.dex_swaps WHERE block_timestamp >= '{start_time}' AND block_timestamp < '{end_time}' AND amount_usd IS NOT NULL GROUP BY 1, 2 ORDER BY 1, 2"
+        }
+      }
+    }
+  ],
+  "fallback_strategy": "use_all",
+  "deduplication": {
+    "strategy": "prefer_priority",
+    "conflict_resolution": "keep_highest_priority"
+  }
+}

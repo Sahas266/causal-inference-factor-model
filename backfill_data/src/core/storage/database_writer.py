@@ -56,18 +56,32 @@ class DatabaseWriter:
             batch = data[i:i + batch_size]
             
             try:
-                # Upsert with conflict resolution
-                result = self.client.table(table).upsert(
-                    batch,
-                    on_conflict=','.join(primary_keys)
-                ).execute()
-                
+                # Upsert with conflict resolution, retry on transient errors
+                import time as _time
+                for attempt in range(3):
+                    try:
+                        result = self.client.table(table).upsert(
+                            batch,
+                            on_conflict=','.join(primary_keys)
+                        ).execute()
+                        break
+                    except Exception as retry_err:
+                        err_str = str(retry_err).lower()
+                        if attempt < 2 and ('disconnect' in err_str or 'timeout' in err_str or 'connection' in err_str):
+                            logger.warning(
+                                f"Batch {i//batch_size + 1} attempt {attempt+1} failed "
+                                f"({retry_err}), retrying in 3s..."
+                            )
+                            _time.sleep(3)
+                            continue
+                        raise
+
                 total_upserted += len(batch)
                 logger.debug(
                     f"Upserted {len(batch)} records to {table} "
                     f"(total: {total_upserted}/{len(data)})"
                 )
-                
+
             except Exception as e:
                 logger.error(
                     f"Failed to upsert batch {i//batch_size + 1} to {table}: {e}",

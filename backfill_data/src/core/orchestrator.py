@@ -2,7 +2,7 @@
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, List, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 import logging
 
 from src.providers.registry import ProviderRegistry
@@ -13,6 +13,32 @@ from src.core.utils.config_loader import ConfigLoader
 from src.core.interfaces import DataProviderInterface
 
 logger = logging.getLogger('backfill_system.orchestrator')
+
+
+def _parse_date_range_bound(value: Optional[str], default_hour: int) -> Optional[datetime]:
+    """
+    Parse endpoint date range values (YYYY-MM-DD or ISO) into UTC datetimes.
+
+    Args:
+        value: Raw date/date-time string from endpoint config.
+        default_hour: Hour to use when only a date is provided.
+
+    Returns:
+        Parsed datetime in UTC, or None if no value is provided.
+    """
+    if not value:
+        return None
+
+    # Date-only format (YYYY-MM-DD)
+    if len(value) == 10:
+        dt = datetime.fromisoformat(value)
+        return datetime(dt.year, dt.month, dt.day, default_hour, 0, 0, tzinfo=timezone.utc)
+
+    # Full ISO timestamp
+    dt = datetime.fromisoformat(value.replace('Z', '+00:00'))
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
 
 
 class BackfillOrchestrator:
@@ -190,7 +216,7 @@ class BackfillOrchestrator:
         validated_config = endpoint_config.copy()
         validated_providers = []
         
-        for provider_config in endpoint_config.get('providers', []):
+        for provider_index, provider_config in enumerate(endpoint_config.get('providers', [])):
             provider_name = provider_config['name']
             
             if provider_name not in self.providers:
@@ -203,25 +229,40 @@ class BackfillOrchestrator:
                 validation = provider.validate_endpoint(provider_config.get('config', {}))
                 
                 if validation.valid:
+                    # Prefer provider-adjusted bounds; fall back to endpoint date_range.
+                    endpoint_range = endpoint_config.get('date_range', {})
+                    actual_start = (
+                        validation.adjusted_start_time
+                        or _parse_date_range_bound(endpoint_range.get('start'), default_hour=0)
+                    )
+                    actual_end = (
+                        validation.adjusted_end_time
+                        or _parse_date_range_bound(endpoint_range.get('end'), default_hour=23)
+                    )
+
                     # Add adjusted date range
                     adjusted_provider_config = provider_config.copy()
-                    adjusted_provider_config['actual_start'] = validation.adjusted_start_time
-                    adjusted_provider_config['actual_end'] = validation.adjusted_end_time
+                    adjusted_provider_config['actual_start'] = actual_start
+                    adjusted_provider_config['actual_end'] = actual_end
+                    adjusted_provider_config['provider_instance_id'] = provider_config.get(
+                        'provider_instance_id',
+                        str(provider_index),
+                    )
                     validated_providers.append(adjusted_provider_config)
                     
                     logger.info(
-                        f"✓ Validated {endpoint_config['endpoint_id']} for {provider_name}: "
-                        f"{validation.adjusted_start_time} to {validation.adjusted_end_time}"
+                        f"Validated {endpoint_config['endpoint_id']} for {provider_name}: "
+                        f"{actual_start} to {actual_end}"
                     )
                 else:
                     logger.warning(
-                        f"✗ Validation failed for {endpoint_config['endpoint_id']} "
+                        f"Validation failed for {endpoint_config['endpoint_id']} "
                         f"on {provider_name}: {validation.reason}"
                     )
                     
             except Exception as e:
                 logger.error(
-                    f"✗ Validation error for {endpoint_config['endpoint_id']} "
+                    f"Validation error for {endpoint_config['endpoint_id']} "
                     f"on {provider_name}: {e}"
                 )
         
@@ -249,7 +290,8 @@ class BackfillOrchestrator:
         """
         provider_name = provider_config['name']
         provider = self.providers[provider_name]
-        endpoint_id = f"{endpoint_config['endpoint_id']}_{provider_name}"
+        provider_instance_id = provider_config.get('provider_instance_id', '0')
+        endpoint_id = f"{endpoint_config['endpoint_id']}_{provider_name}_{provider_instance_id}"
         
         try:
             logger.info(f"Starting backfill: {endpoint_id}")
@@ -330,7 +372,7 @@ class BackfillOrchestrator:
             
             # Mark as completed
             self.progress_tracker.mark_completed(endpoint_id)
-            logger.info(f"✓ Completed {endpoint_id}: {total_records} records")
+            logger.info(f"Completed {endpoint_id}: {total_records} records")
             
             return {
                 'success': True,
@@ -340,7 +382,7 @@ class BackfillOrchestrator:
             }
             
         except Exception as e:
-            logger.error(f"✗ Backfill failed for {endpoint_id}: {e}", exc_info=True)
+            logger.error(f"Backfill failed for {endpoint_id}: {e}", exc_info=True)
             self.progress_tracker.mark_failed(endpoint_id, str(e))
             
             return {

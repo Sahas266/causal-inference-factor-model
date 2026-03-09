@@ -1,0 +1,33 @@
+{
+  "endpoint_id": "eth_funding_rates_coinmetrics",
+  "description": "ETH perpetual futures funding rates",
+  "table": "market_funding_rates",
+  "primary_keys": [
+    "provider",
+    "market",
+    "time"
+  ],
+  "date_range": {
+    "start": "2025-01-01",
+    "end": "2026-01-01"
+  },
+  "providers": [
+    {
+      "name": "coinmetrics",
+      "enabled": true,
+      "priority": 1,
+      "config": {
+        "endpoint_type": "timeseries/market-funding-rates",
+        "params": {
+          "markets": "binance-ETHUSDT-future",
+          "page_size": 10000
+        }
+      }
+    }
+  ],
+  "fallback_strategy": "use_all",
+  "deduplication": {
+    "strategy": "prefer_priority",
+    "conflict_resolution": "keep_highest_priority"
+  }
+}

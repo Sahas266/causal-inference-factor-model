@@ -86,7 +86,11 @@ class ConfigLoader:
         if os.path.isabs(endpoint_file):
             config_file = Path(endpoint_file)
         else:
-            config_file = self.config_dir / 'endpoints' / endpoint_file
+            candidate = Path(endpoint_file)
+            if candidate.exists():
+                config_file = candidate
+            else:
+                config_file = self.config_dir / 'endpoints' / endpoint_file
         
         if not config_file.exists():
             raise FileNotFoundError(f"Endpoint config not found: {config_file}")

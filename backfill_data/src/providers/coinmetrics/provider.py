@@ -47,15 +47,26 @@ class CoinMetricsProvider(DataProviderInterface):
         """
         self.config = provider_config
         
+        api_config = provider_config.get('api_config', {})
+        base_url = api_config.get('base_url', 'https://api.coinmetrics.io/v4')
+        community_base_url = api_config.get(
+            'community_base_url',
+            'https://community-api.coinmetrics.io/v4'
+        )
+        is_community_base = base_url.rstrip('/') == community_base_url.rstrip('/')
+        api_key_required = api_config.get('api_key_required', not is_community_base)
+
         # Initialize client
-        api_key = provider_config['api_config'].get('api_key')
+        api_key = api_config.get('api_key')
         if not api_key:
-            api_key = os.getenv(provider_config['api_config'].get('api_key_env', ''))
+            api_key = os.getenv(api_config.get('api_key_env', ''))
         
-        if not api_key:
-            raise ValueError("CoinMetrics API key not found in config or environment")
-        
-        base_url = provider_config['api_config'].get('base_url', 'https://api.coinmetrics.io/v4')
+        if api_key_required and not api_key:
+            raise ValueError(
+                "CoinMetrics API key not found in config or environment "
+                f"(base_url={base_url})"
+            )
+
         self.client = CoinMetricsClient(api_key, base_url)
         
         # Initialize rate limiter
@@ -67,7 +78,8 @@ class CoinMetricsProvider(DataProviderInterface):
         )
         
         self._initialized = True
-        logger.info(f"CoinMetrics provider initialized")
+        mode = "community" if is_community_base else "pro"
+        logger.info("CoinMetrics provider initialized (%s mode)", mode)
     
     def validate_endpoint(self, endpoint_config: Dict) -> ValidationResult:
         """
@@ -152,6 +164,17 @@ class CoinMetricsProvider(DataProviderInterface):
                     metadata={'catalog_data': catalog_data}
                 )
             else:
+                # Some community catalog endpoints omit min/max bounds.
+                # In that case, allow backfill to proceed using configured date_range.
+                if catalog_data.get('data'):
+                    return ValidationResult(
+                        valid=True,
+                        reason=(
+                            f"Catalog available for {identifier} but without min/max bounds; "
+                            "using endpoint-configured date range"
+                        ),
+                        metadata={'catalog_data': catalog_data}
+                    )
                 return ValidationResult(
                     valid=False,
                     reason=f"No data availability found for {identifier}"
@@ -356,6 +379,13 @@ class CoinMetricsProvider(DataProviderInterface):
                     'error_type': 'auth_error',
                     'fatal': True
                 }
+            elif status_code == 403:
+                # Forbidden - metric not available on community tier
+                return {
+                    'retry': False,
+                    'error_type': 'forbidden',
+                    'fatal': True
+                }
             elif status_code == 404:
                 # Not found - don't retry
                 return {
@@ -363,7 +393,7 @@ class CoinMetricsProvider(DataProviderInterface):
                     'error_type': 'not_found',
                     'fatal': True
                 }
-        
+
         # Default: retry with backoff
         return {
             'retry': True,

@@ -120,6 +120,24 @@ python backfill.py --config config/endpoints/
 python backfill.py --resume-failed
 ```
 
+### 5. Run Provider-Specific Backfill Scripts
+
+Provider-specific scripts are available in `scripts/`:
+
+```bash
+# CoinMetrics
+python scripts/backfill_coinmetrics.py --validate-only
+
+# DeFi Llama
+python scripts/backfill_defillama.py --validate-only
+
+# CoinGecko (script scaffold; requires provider adapter + endpoint configs)
+python scripts/backfill_coingecko.py --list-endpoints
+
+# Dune (script scaffold; requires provider adapter + endpoint configs)
+python scripts/backfill_dune.py --list-endpoints
+```
+
 ## Adding a New Provider
 
 Adding a new provider requires just 4 steps:
@@ -183,6 +201,7 @@ Located in `config/providers/{provider_name}.json`:
 - `provider_name`: Unique provider identifier
 - `enabled`: Enable/disable provider
 - `api_config`: API credentials and base URL
+  - CoinMetrics note: `community_base_url` can be set to `https://community-api.coinmetrics.io/v4` for community endpoints (no API key required)
 - `rate_limits`: Rate limiting parameters
 - `retry_config`: Retry behavior configuration
 
@@ -411,4 +430,9 @@ For issues and questions:
 - Check documentation in `docs/` directory
 - Review project_goals.md for architecture details
 - Open an issue on GitHub
+
+## ETH Data Catalog
+
+- ETH provider-by-provider pull checklist:
+  - `ETH_DATA_POINTS_CATALOG.md`
 

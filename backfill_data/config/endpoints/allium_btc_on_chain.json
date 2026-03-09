@@ -1,0 +1,30 @@
+{
+  "endpoint_id": "allium_btc_on_chain_daily",
+  "description": "Daily Bitcoin on-chain metrics: active addresses, transaction count, total fees",
+  "table": "asset_metrics",
+  "primary_keys": ["provider", "asset", "metric", "time"],
+  "date_range": {
+    "start": "2021-01-01",
+    "end": "2026-01-01"
+  },
+  "providers": [
+    {
+      "name": "allium",
+      "enabled": true,
+      "priority": 1,
+      "config": {
+        "endpoint_type": "explorer/sql",
+        "params": {
+          "schema_type": "on_chain_metrics",
+          "timeout_seconds": 120,
+          "sql": "SELECT DATE_TRUNC('day', block_timestamp) AS time, 'btc' AS asset, COUNT(DISTINCT sender) AS active_addresses, COUNT(*) AS tx_count, SUM(fee) AS total_fees_btc, AVG(fee) AS avg_fee_btc FROM bitcoin.raw.transactions WHERE block_timestamp >= '{start_time}' AND block_timestamp < '{end_time}' GROUP BY 1, 2 ORDER BY 1"
+        }
+      }
+    }
+  ],
+  "fallback_strategy": "use_all",
+  "deduplication": {
+    "strategy": "prefer_priority",
+    "conflict_resolution": "keep_highest_priority"
+  }
+}

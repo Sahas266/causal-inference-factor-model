@@ -1,0 +1,24 @@
+{
+  "provider_name": "dune",
+  "display_name": "Dune",
+  "enabled": false,
+  "api_config": {
+    "base_url": "https://api.dune.com/api/v1",
+    "api_key_env": "DUNE_API_KEY"
+  },
+  "rate_limits": {
+    "requests_per_window": 120,
+    "window_seconds": 60,
+    "safety_margin": 0.9
+  },
+  "retry_config": {
+    "max_attempts": 3,
+    "backoff_multiplier": 2,
+    "max_wait_seconds": 60
+  },
+  "capabilities": [
+    "query_results",
+    "timeseries_metrics"
+  ],
+  "description": "Dune provider scaffold. Uses DUNE_API_KEY from environment."
+}

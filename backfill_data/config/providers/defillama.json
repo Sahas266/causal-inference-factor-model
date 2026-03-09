@@ -1,0 +1,31 @@
+{
+  "provider_name": "defillama",
+  "display_name": "DefiLlama",
+  "enabled": true,
+  "api_config": {
+    "free_base_url": "https://api.llama.fi",
+    "stablecoins_base_url": "https://stablecoins.llama.fi",
+    "coins_base_url": "https://coins.llama.fi",
+    "pro_base_url": "https://pro-api.llama.fi",
+    "api_key_env": "DEFILLAMA_API_KEY"
+  },
+  "rate_limits": {
+    "requests_per_window": 200,
+    "window_seconds": 60,
+    "safety_margin": 0.9
+  },
+  "retry_config": {
+    "max_attempts": 3,
+    "backoff_multiplier": 2,
+    "max_wait_seconds": 60
+  },
+  "capabilities": [
+    "protocol_tvl",
+    "chain_tvl",
+    "dex_volumes",
+    "fees",
+    "stablecoin_flow",
+    "coin_prices"
+  ],
+  "description": "DefiLlama aggregates TVL, volume, fees, yield and stablecoin data across 200+ DeFi protocols. Free endpoints require no API key; Pro endpoints require DEFILLAMA_API_KEY."
+}

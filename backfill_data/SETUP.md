@@ -25,6 +25,9 @@ SUPABASE_KEY=your-service-role-key-here
 # CoinMetrics API Key
 COINMETRICS_API_KEY=your-coinmetrics-api-key-here
 
+# Dune API Key
+DUNE_API_KEY=your-dune-api-key-here
+
 # Optional
 LOG_LEVEL=INFO
 MAX_WORKERS=10
@@ -45,6 +48,10 @@ EOF
 1. Go to https://coinmetrics.io/
 2. Sign up for an account
 3. Get your API key from the dashboard
+
+**CoinMetrics Community API**:
+- Base URL: `https://community-api.coinmetrics.io/v4`
+- Community endpoints do not require an API key
 
 ## Step 3: Set Up Database
 
@@ -94,6 +101,20 @@ python backfill.py --config config/endpoints/btc_metrics.json
 ```
 
 This will fetch Bitcoin metrics from CoinMetrics and store them in your Supabase database.
+
+### Option C: Run Provider-Specific Script
+
+```bash
+# CoinMetrics
+python scripts/backfill_coinmetrics.py --validate-only
+
+# DeFi Llama
+python scripts/backfill_defillama.py --validate-only
+
+# CoinGecko and Dune script entry points
+python scripts/backfill_coingecko.py --list-endpoints
+python scripts/backfill_dune.py --list-endpoints
+```
 
 ## Step 6: Monitor Progress
 

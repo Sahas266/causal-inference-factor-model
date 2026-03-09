@@ -8,6 +8,21 @@ from .supabase_manager import SupabaseManager
 logger = logging.getLogger('backfill_system.storage')
 
 
+def _to_json_safe(value):
+    """
+    Recursively convert values to JSON-serializable forms.
+
+    Supabase upserts fail if config payloads contain datetime objects.
+    """
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, dict):
+        return {k: _to_json_safe(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_to_json_safe(v) for v in value]
+    return value
+
+
 class ProgressTracker:
     """
     Track backfill progress with checkpoint support.
@@ -79,7 +94,7 @@ class ProgressTracker:
                 'total_records_fetched': 0,
                 'total_api_calls': 0,
                 'started_at': datetime.utcnow().isoformat(),
-                'config': config,
+                'config': _to_json_safe(config),
                 'created_at': datetime.utcnow().isoformat(),
                 'updated_at': datetime.utcnow().isoformat()
             }

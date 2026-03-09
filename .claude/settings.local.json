@@ -1,0 +1,40 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__atlassian__getAccessibleAtlassianResources",
+      "mcp__atlassian__searchJiraIssuesUsingJql",
+      "Bash(gh pr list)",
+      "Read(//c/Users/sahas/.claude/projects/c--Users-sahas-Github-Repos-causal-inference-factor-model/memory/**)",
+      "Bash(git pull)",
+      "mcp__allium__skills_list_skills",
+      "mcp__allium__docs_browse_docs",
+      "mcp__allium__realtime_list_assets",
+      "mcp__allium__explorer_browse_schemas",
+      "mcp__allium__explorer_search_schemas",
+      "Bash(./venv/Scripts/python.exe:*)",
+      "Bash(python:*)",
+      "mcp__supabase__list_projects",
+      "mcp__supabase__list_tables",
+      "mcp__supabase__restore_project",
+      "mcp__supabase__apply_migration",
+      "mcp__supabase__execute_sql",
+      "Bash(echo:*)",
+      "Bash(curl:*)",
+      "Bash(head:*)",
+      "Bash(__NEW_LINE_9cb8f87561d4bfae__ curl:*)",
+      "Bash(__NEW_LINE_b0bf2abf073414df__ curl:*)",
+      "Bash(__NEW_LINE_22f1f0060205e973__ echo:*)",
+      "Bash(\"C:/Users/sahas/Github Repos/causal-inference-factor-model/backfill_data/.env\":*)",
+      "Bash(grep:*)",
+      "Bash(source .env:*)",
+      "Bash(echo $result:*)",
+      "Bash(mkdir:*)",
+      "Bash(\"C:/Users/sahas/Github Repos/causal-inference-factor-model/venv/Scripts/python.exe\":*)"
+    ]
+  },
+  "enableAllProjectMcpServers": true,
+  "enabledMcpjsonServers": [
+    "supabase",
+    "atlassian"
+  ]
+}

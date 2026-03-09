@@ -3,9 +3,11 @@
   "display_name": "Coin Metrics",
   "enabled": true,
   "api_config": {
-    "base_url": "https://api.coinmetrics.io/v4",
+    "base_url": "https://community-api.coinmetrics.io/v4",
+    "community_base_url": "https://community-api.coinmetrics.io/v4",
     "api_key_env": "COINMETRICS_API_KEY",
-    "tier": "pro"
+    "community_api_key_required": false,
+    "tier": "community"
   },
   "rate_limits": {
     "requests_per_window": 6000,
@@ -23,6 +25,6 @@
     "exchange_metrics",
     "market_orderbooks"
   ],
-  "description": "CoinMetrics provides comprehensive cryptocurrency market and on-chain data"
+  "description": "CoinMetrics provides comprehensive cryptocurrency market and on-chain data. Community endpoints are available at community_base_url and do not require an API key."
 }
 

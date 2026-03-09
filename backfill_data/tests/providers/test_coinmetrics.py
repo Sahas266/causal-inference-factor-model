@@ -42,6 +42,40 @@ def test_provider_initialization(provider_config):
     assert provider.rate_limiter is not None
 
 
+def test_provider_initialization_requires_api_key_for_pro(monkeypatch):
+    """Pro API mode should still require an API key."""
+    monkeypatch.delenv("COINMETRICS_API_KEY", raising=False)
+    provider = CoinMetricsProvider()
+
+    with pytest.raises(ValueError, match="API key"):
+        provider.initialize(
+            {
+                "provider_name": "coinmetrics",
+                "enabled": True,
+                "api_config": {"base_url": "https://api.coinmetrics.io/v4"},
+            }
+        )
+
+
+def test_provider_initialization_allows_community_without_api_key(monkeypatch):
+    """Community API mode should initialize without API key."""
+    monkeypatch.delenv("COINMETRICS_API_KEY", raising=False)
+    provider = CoinMetricsProvider()
+    provider.initialize(
+        {
+            "provider_name": "coinmetrics",
+            "enabled": True,
+            "api_config": {
+                "base_url": "https://community-api.coinmetrics.io/v4",
+                "community_base_url": "https://community-api.coinmetrics.io/v4",
+            },
+        }
+    )
+
+    assert provider._initialized is True
+    assert provider.client is not None
+
+
 def test_rate_limiter_initialization():
     """Test rate limiter initialization"""
     limiter = CoinMetricsRateLimiter(

@@ -1,0 +1,30 @@
+{
+  "endpoint_id": "defillama_dex_volumes_daily",
+  "description": "Daily DEX trading volumes for Uniswap V3 via DefiLlama",
+  "table": "asset_metrics",
+  "primary_keys": ["provider", "asset", "metric", "time"],
+  "date_range": {
+    "start": "2021-05-01",
+    "end": "2026-01-01"
+  },
+  "providers": [
+    {
+      "name": "defillama",
+      "enabled": true,
+      "priority": 1,
+      "config": {
+        "endpoint_type": "dex/summary",
+        "params": {
+          "schema_type": "dex_volumes",
+          "protocol": "uniswap-v3",
+          "asset": "uniswap_v3"
+        }
+      }
+    }
+  ],
+  "fallback_strategy": "use_all",
+  "deduplication": {
+    "strategy": "prefer_priority",
+    "conflict_resolution": "keep_highest_priority"
+  }
+}

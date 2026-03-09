@@ -14,21 +14,20 @@ class CoinMetricsClient:
     Handles pagination, catalog queries, and response parsing.
     """
     
-    def __init__(self, api_key: str, base_url: str = "https://api.coinmetrics.io/v4"):
+    def __init__(self, api_key: Optional[str], base_url: str = "https://api.coinmetrics.io/v4"):
         """
         Initialize CoinMetrics client.
         
         Args:
-            api_key: CoinMetrics API key
+            api_key: CoinMetrics API key (optional for community endpoints)
             base_url: Base URL for CoinMetrics API
         """
-        self.api_key = api_key
+        self.api_key = api_key or ""
         self.base_url = base_url.rstrip('/')
         self.session = requests.Session()
-        self.session.headers.update({
-            'Api-Key': self.api_key,
-            'Accept': 'application/json'
-        })
+        self.session.headers.update({'Accept': 'application/json'})
+        if self.api_key:
+            self.session.headers.update({'Api-Key': self.api_key})
         
         logger.info(f"CoinMetrics client initialized: {self.base_url}")
     
@@ -187,7 +186,14 @@ class CoinMetricsClient:
             data = catalog_data.get('data', [])
             
             for item in data:
-                if item.get('asset') == asset_or_market or item.get('market') == asset_or_market:
+                # Catalog payload shape differs by endpoint family (asset/market/pair/exchange).
+                identifier_matches = (
+                    item.get('asset') == asset_or_market
+                    or item.get('market') == asset_or_market
+                    or item.get('pair') == asset_or_market
+                    or item.get('exchange') == asset_or_market
+                )
+                if identifier_matches:
                     min_time_str = item.get('min_time')
                     max_time_str = item.get('max_time')
                     
@@ -196,6 +202,16 @@ class CoinMetricsClient:
                         min_time = datetime.fromisoformat(min_time_str.replace('Z', '+00:00'))
                         max_time = datetime.fromisoformat(max_time_str.replace('Z', '+00:00'))
                         return (min_time, max_time)
+            
+            # Fallback: if catalog returned a single item, use it even if identifier key differs.
+            if len(data) == 1:
+                item = data[0]
+                min_time_str = item.get('min_time')
+                max_time_str = item.get('max_time')
+                if min_time_str and max_time_str:
+                    min_time = datetime.fromisoformat(min_time_str.replace('Z', '+00:00'))
+                    max_time = datetime.fromisoformat(max_time_str.replace('Z', '+00:00'))
+                    return (min_time, max_time)
             
             # If not found, return None
             return (None, None)

@@ -1,0 +1,46 @@
+{
+  "endpoint_id": "eth_asset_metrics_primary",
+  "description": "ETH core market and on-chain metrics from CoinMetrics community tier, with DefiLlama price fallback",
+  "table": "asset_metrics",
+  "primary_keys": ["provider", "asset", "metric", "time"],
+  "date_range": {
+    "start": "2021-01-01",
+    "end": "2026-01-01"
+  },
+  "providers": [
+    {
+      "name": "coinmetrics",
+      "enabled": true,
+      "priority": 1,
+      "config": {
+        "endpoint_type": "timeseries/asset-metrics",
+        "params": {
+          "assets": "eth",
+          "metrics": "PriceUSD,CapMrktCurUSD,TxCnt,AdrActCnt,SplyCur,BlkCnt,HashRate,ROI30d,FeeTotNtv,IssTotNtv,FlowInExNtv,FlowOutExNtv,TxTfrCnt",
+          "frequency": "1d",
+          "page_size": 10000
+        }
+      }
+    },
+    {
+      "name": "defillama",
+      "enabled": true,
+      "priority": 2,
+      "config": {
+        "endpoint_type": "coin/chart",
+        "params": {
+          "schema_type": "coin_prices",
+          "coins": "coingecko:ethereum",
+          "period": "2000d",
+          "span": 24,
+          "asset": "eth"
+        }
+      }
+    }
+  ],
+  "fallback_strategy": "use_all",
+  "deduplication": {
+    "strategy": "prefer_priority",
+    "conflict_resolution": "keep_highest_priority"
+  }
+}
