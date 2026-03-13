@@ -1,6 +1,6 @@
 {
   "endpoint_id": "allium_eth_on_chain_daily",
-  "description": "Daily Ethereum on-chain metrics: active addresses, transaction count, average gas price",
+  "description": "Daily Ethereum on-chain block data from Allium Developer API",
   "table": "asset_metrics",
   "primary_keys": ["provider", "asset", "metric", "time"],
   "date_range": {
@@ -13,11 +13,17 @@
       "enabled": true,
       "priority": 1,
       "config": {
-        "endpoint_type": "explorer/sql",
+        "endpoint_type": "developer/prices/history",
         "params": {
-          "schema_type": "on_chain_metrics",
-          "timeout_seconds": 120,
-          "sql": "SELECT DATE_TRUNC('day', block_timestamp) AS time, 'eth' AS asset, COUNT(DISTINCT from_address) AS active_addresses, COUNT(*) AS tx_count, AVG(gas_price / 1e9) AS avg_gas_price_gwei, SUM(gas_used * gas_price / 1e18) AS total_fees_eth FROM ethereum.raw.transactions WHERE block_timestamp >= '{start_time}' AND block_timestamp < '{end_time}' GROUP BY 1, 2 ORDER BY 1"
+          "schema_type": "token_price_history",
+          "asset": "eth",
+          "addresses": [
+            {
+              "chain": "ethereum",
+              "token_address": "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2"
+            }
+          ],
+          "time_granularity": "1d"
         }
       }
     }

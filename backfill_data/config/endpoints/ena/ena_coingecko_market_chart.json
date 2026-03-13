@@ -1,0 +1,36 @@
+{
+  "endpoint_id": "coingecko_ena_market_chart",
+  "description": "Daily Ethena price, market cap, and volume from CoinGecko",
+  "table": "asset_metrics",
+  "primary_keys": [
+    "provider",
+    "asset",
+    "metric",
+    "time"
+  ],
+  "date_range": {
+    "start": "2024-04-01",
+    "end": "2026-01-01"
+  },
+  "providers": [
+    {
+      "name": "coingecko",
+      "enabled": true,
+      "priority": 3,
+      "config": {
+        "endpoint_type": "market_chart",
+        "params": {
+          "schema_type": "market_chart",
+          "coin_id": "ethena",
+          "vs_currency": "usd",
+          "asset": "ena"
+        }
+      }
+    }
+  ],
+  "fallback_strategy": "use_all",
+  "deduplication": {
+    "strategy": "prefer_priority",
+    "conflict_resolution": "keep_highest_priority"
+  }
+}

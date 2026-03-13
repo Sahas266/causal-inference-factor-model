@@ -126,30 +126,38 @@ Examples:
         action='store_true',
         help='Use JSON formatted logs'
     )
-    
+
+    parser.add_argument(
+        '--recursive',
+        action='store_true',
+        help='Recursively scan subdirectories for config files'
+    )
+
     return parser.parse_args()
 
 
-def load_endpoint_configs(config_path: str, config_loader: ConfigLoader) -> List[dict]:
+def load_endpoint_configs(config_path: str, config_loader: ConfigLoader, recursive: bool = False) -> List[dict]:
     """
     Load endpoint configurations from file or directory.
-    
+
     Args:
         config_path: Path to config file or directory
         config_loader: ConfigLoader instance
-        
+        recursive: If True, scan subdirectories for config files
+
     Returns:
         List of endpoint configurations
     """
     path = Path(config_path)
-    
+
     if path.is_file():
         # Single config file
         return [config_loader.load_endpoint_config(str(path))]
     elif path.is_dir():
         # Directory of config files
+        pattern = '**/*.json' if recursive else '*.json'
         configs = []
-        for config_file in path.glob('*.json'):
+        for config_file in sorted(path.glob(pattern)):
             try:
                 config = config_loader.load_endpoint_config(str(config_file))
                 configs.append(config)
@@ -255,7 +263,7 @@ def main():
         
         logger.info(f"Loading endpoint configurations from: {args.config}")
         config_loader = ConfigLoader(args.config_dir)
-        endpoint_configs = load_endpoint_configs(args.config, config_loader)
+        endpoint_configs = load_endpoint_configs(args.config, config_loader, recursive=args.recursive)
         
         if not endpoint_configs:
             logger.error("No endpoint configurations loaded")

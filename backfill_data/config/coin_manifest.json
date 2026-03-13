@@ -1,0 +1,269 @@
+{
+  "coins": [
+    {
+      "ticker": "btc",
+      "display": "Bitcoin",
+      "category": "l1",
+      "date_range": {"start": "2021-01-01", "end": "2026-01-01"},
+      "providers": {
+        "coinmetrics": {"asset": "btc", "metrics": "PriceUSD,CapMrktCurUSD,TxCnt,AdrActCnt,SplyCur,BlkCnt,HashRate,ROI30d,FeeTotNtv,IssTotNtv,FlowInExNtv,FlowOutExNtv,TxTfrCnt"},
+        "coingecko": {"coin_id": "bitcoin"},
+        "defillama_chain": {"chain": "Bitcoin"}
+      }
+    },
+    {
+      "ticker": "eth",
+      "display": "Ethereum",
+      "category": "l1",
+      "date_range": {"start": "2021-01-01", "end": "2026-01-01"},
+      "skip": true,
+      "providers": {
+        "coinmetrics": {"asset": "eth", "metrics": "PriceUSD,CapMrktCurUSD,TxCnt,AdrActCnt,SplyCur,BlkCnt,HashRate,ROI30d,FeeTotNtv,IssTotNtv,FlowInExNtv,FlowOutExNtv,TxTfrCnt"},
+        "coingecko": {"coin_id": "ethereum"},
+        "defillama_chain": {"chain": "Ethereum"}
+      }
+    },
+    {
+      "ticker": "sol",
+      "display": "Solana",
+      "category": "l1",
+      "date_range": {"start": "2021-01-01", "end": "2026-01-01"},
+      "providers": {
+        "coinmetrics": {"asset": "sol", "metrics": "PriceUSD,CapMrktCurUSD,TxCnt,AdrActCnt,SplyCur,BlkCnt,FeeTotNtv,IssTotNtv,FlowInExNtv,FlowOutExNtv,TxTfrCnt"},
+        "coingecko": {"coin_id": "solana"},
+        "defillama_chain": {"chain": "Solana"}
+      }
+    },
+    {
+      "ticker": "bnb",
+      "display": "BNB",
+      "category": "l1",
+      "date_range": {"start": "2021-01-01", "end": "2026-01-01"},
+      "providers": {
+        "coinmetrics": {"asset": "bnb", "metrics": "PriceUSD,CapMrktCurUSD,TxCnt,AdrActCnt,SplyCur"},
+        "coingecko": {"coin_id": "binancecoin"},
+        "defillama_chain": {"chain": "BSC"}
+      }
+    },
+    {
+      "ticker": "xrp",
+      "display": "XRP",
+      "category": "l1",
+      "date_range": {"start": "2021-01-01", "end": "2026-01-01"},
+      "providers": {
+        "coinmetrics": {"asset": "xrp", "metrics": "PriceUSD,CapMrktCurUSD,TxCnt,AdrActCnt,SplyCur,FeeTotNtv,IssTotNtv,FlowInExNtv,FlowOutExNtv,TxTfrCnt"},
+        "coingecko": {"coin_id": "ripple"}
+      }
+    },
+    {
+      "ticker": "avax",
+      "display": "Avalanche",
+      "category": "l1",
+      "date_range": {"start": "2021-01-01", "end": "2026-01-01"},
+      "providers": {
+        "coinmetrics": {"asset": "avax", "metrics": "PriceUSD,CapMrktCurUSD,TxCnt,AdrActCnt,SplyCur"},
+        "coingecko": {"coin_id": "avalanche-2"},
+        "defillama_chain": {"chain": "Avalanche"}
+      }
+    },
+    {
+      "ticker": "pol",
+      "display": "Polygon",
+      "category": "l1",
+      "date_range": {"start": "2021-01-01", "end": "2026-01-01"},
+      "providers": {
+        "coinmetrics": {"asset": "matic", "metrics": "PriceUSD,CapMrktCurUSD,TxCnt,AdrActCnt,SplyCur"},
+        "coingecko": {"coin_id": "matic-network"},
+        "defillama_chain": {"chain": "Polygon"}
+      }
+    },
+    {
+      "ticker": "doge",
+      "display": "Dogecoin",
+      "category": "l1",
+      "date_range": {"start": "2021-01-01", "end": "2026-01-01"},
+      "providers": {
+        "coinmetrics": {"asset": "doge", "metrics": "PriceUSD,CapMrktCurUSD,TxCnt,AdrActCnt,SplyCur,BlkCnt,HashRate,FeeTotNtv,IssTotNtv,TxTfrCnt"},
+        "coingecko": {"coin_id": "dogecoin"}
+      }
+    },
+    {
+      "ticker": "zec",
+      "display": "Zcash",
+      "category": "l1",
+      "date_range": {"start": "2021-01-01", "end": "2026-01-01"},
+      "providers": {
+        "coinmetrics": {"asset": "zec", "metrics": "PriceUSD,CapMrktCurUSD,TxCnt,AdrActCnt,SplyCur,BlkCnt,HashRate,FeeTotNtv,IssTotNtv,TxTfrCnt"},
+        "coingecko": {"coin_id": "zcash"}
+      }
+    },
+    {
+      "ticker": "uni",
+      "display": "Uniswap",
+      "category": "defi",
+      "date_range": {"start": "2021-01-01", "end": "2026-01-01"},
+      "providers": {
+        "coinmetrics": {"asset": "uni", "metrics": "PriceUSD,CapMrktCurUSD,SplyCur,FlowInExNtv,FlowOutExNtv"},
+        "coingecko": {"coin_id": "uniswap"},
+        "defillama_protocol": {"protocol": "uniswap"}
+      }
+    },
+    {
+      "ticker": "aave",
+      "display": "Aave",
+      "category": "defi",
+      "date_range": {"start": "2021-01-01", "end": "2026-01-01"},
+      "providers": {
+        "coinmetrics": {"asset": "aave", "metrics": "PriceUSD,CapMrktCurUSD,SplyCur,FlowInExNtv,FlowOutExNtv"},
+        "coingecko": {"coin_id": "aave"},
+        "defillama_protocol": {"protocol": "aave"}
+      }
+    },
+    {
+      "ticker": "crv",
+      "display": "Curve DAO",
+      "category": "defi",
+      "date_range": {"start": "2021-01-01", "end": "2026-01-01"},
+      "providers": {
+        "coingecko": {"coin_id": "curve-dao-token"},
+        "defillama_protocol": {"protocol": "curve-dex"}
+      }
+    },
+    {
+      "ticker": "pendle",
+      "display": "Pendle",
+      "category": "defi",
+      "date_range": {"start": "2021-01-01", "end": "2026-01-01"},
+      "providers": {
+        "coingecko": {"coin_id": "pendle"},
+        "defillama_protocol": {"protocol": "pendle"}
+      }
+    },
+    {
+      "ticker": "morpho",
+      "display": "Morpho",
+      "category": "defi",
+      "date_range": {"start": "2024-01-01", "end": "2026-01-01"},
+      "providers": {
+        "coingecko": {"coin_id": "morpho"},
+        "defillama_protocol": {"protocol": "morpho"}
+      }
+    },
+    {
+      "ticker": "aero",
+      "display": "Aerodrome",
+      "category": "defi",
+      "date_range": {"start": "2023-08-01", "end": "2026-01-01"},
+      "providers": {
+        "coingecko": {"coin_id": "aerodrome-finance"},
+        "defillama_protocol": {"protocol": "aerodrome-finance"}
+      }
+    },
+    {
+      "ticker": "link",
+      "display": "Chainlink",
+      "category": "defi",
+      "date_range": {"start": "2021-01-01", "end": "2026-01-01"},
+      "providers": {
+        "coinmetrics": {"asset": "link", "metrics": "PriceUSD,CapMrktCurUSD,SplyCur,FlowInExNtv,FlowOutExNtv"},
+        "coingecko": {"coin_id": "chainlink"}
+      }
+    },
+    {
+      "ticker": "ena",
+      "display": "Ethena",
+      "category": "defi",
+      "date_range": {"start": "2024-04-01", "end": "2026-01-01"},
+      "providers": {
+        "coingecko": {"coin_id": "ethena"},
+        "defillama_protocol": {"protocol": "ethena"}
+      }
+    },
+    {
+      "ticker": "jup",
+      "display": "Jupiter",
+      "category": "defi",
+      "date_range": {"start": "2024-01-01", "end": "2026-01-01"},
+      "providers": {
+        "coingecko": {"coin_id": "jupiter-exchange-solana"},
+        "defillama_protocol": {"protocol": "jupiter"}
+      }
+    },
+    {
+      "ticker": "usdc",
+      "display": "USD Coin",
+      "category": "stablecoin",
+      "date_range": {"start": "2021-01-01", "end": "2026-01-01"},
+      "providers": {
+        "coinmetrics": {"asset": "usdc", "metrics": "PriceUSD,CapMrktCurUSD,SplyCur,TxCnt,TxTfrCnt,FlowInExNtv,FlowOutExNtv"},
+        "coingecko": {"coin_id": "usd-coin"}
+      }
+    },
+    {
+      "ticker": "usdt",
+      "display": "Tether",
+      "category": "stablecoin",
+      "date_range": {"start": "2021-01-01", "end": "2026-01-01"},
+      "providers": {
+        "coinmetrics": {"asset": "usdt", "metrics": "PriceUSD,CapMrktCurUSD,SplyCur,TxCnt,TxTfrCnt,FlowInExNtv,FlowOutExNtv"},
+        "coingecko": {"coin_id": "tether"}
+      }
+    },
+    {
+      "ticker": "usde",
+      "display": "USDe",
+      "category": "stablecoin",
+      "date_range": {"start": "2024-02-01", "end": "2026-01-01"},
+      "providers": {
+        "coingecko": {"coin_id": "ethena-usde"}
+      }
+    },
+    {
+      "ticker": "hype",
+      "display": "Hyperliquid",
+      "category": "alt",
+      "date_range": {"start": "2024-11-01", "end": "2026-01-01"},
+      "providers": {
+        "coingecko": {"coin_id": "hyperliquid"},
+        "defillama_chain": {"chain": "Hyperliquid"}
+      }
+    },
+    {
+      "ticker": "tao",
+      "display": "Bittensor",
+      "category": "alt",
+      "date_range": {"start": "2021-01-01", "end": "2026-01-01"},
+      "providers": {
+        "coingecko": {"coin_id": "bittensor"}
+      }
+    },
+    {
+      "ticker": "wlfi",
+      "display": "World Liberty Financial",
+      "category": "alt",
+      "date_range": {"start": "2024-10-01", "end": "2026-01-01"},
+      "providers": {
+        "coingecko": {"coin_id": "world-liberty-financial"}
+      }
+    },
+    {
+      "ticker": "pepe",
+      "display": "Pepe",
+      "category": "alt",
+      "date_range": {"start": "2023-04-01", "end": "2026-01-01"},
+      "providers": {
+        "coingecko": {"coin_id": "pepe"}
+      }
+    },
+    {
+      "ticker": "shib",
+      "display": "Shiba Inu",
+      "category": "alt",
+      "date_range": {"start": "2021-01-01", "end": "2026-01-01"},
+      "providers": {
+        "coinmetrics": {"asset": "shib", "metrics": "PriceUSD,CapMrktCurUSD,SplyCur"},
+        "coingecko": {"coin_id": "shiba-inu"}
+      }
+    }
+  ]
+}

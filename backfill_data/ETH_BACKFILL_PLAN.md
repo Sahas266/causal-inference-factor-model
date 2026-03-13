@@ -1,20 +1,21 @@
 # ETH Backfill Plan — All Providers
 
-> Generated: 2026-03-09
+> Generated: 2026-03-09 | **Last updated: 2026-03-11**
 > Date range: **2021-01-01 → 2026-01-01** (5 years daily)
 > Target table: `asset_metrics` in Supabase (`jnulpcqpftnwvknwuqpa`)
+> **Current total: 86,065 rows across 5 providers, 42 distinct metrics**
 
 ---
 
 ## Provider Access Summary (Verified Live)
 
-| Provider | Auth | Status | Limits |
-|---|---|---|---|
-| **CoinMetrics** | Community (no key) | Working — subset of metrics available | 6000 req/20s |
-| **DefiLlama** | Free (no key) | Working — all free endpoints | 200 req/min |
-| **Allium** | `ALLIUM_API_KEY` | Working — Developer REST API only (Explorer SQL out of credits) | 60 req/min |
-| **Dune** | `DUNE_API_KEY` | Key present but API requires pre-saved query IDs — **not viable for custom SQL** without creating queries in the UI first |
-| **CoinGecko** | MCP configured (not yet activated) | Not available this session — requires Claude Code restart |
+| Provider | Auth | Status | Rows | Limits |
+|---|---|---|---|---|
+| **CoinMetrics** | Community (no key) | **DONE** — 13 core metrics backfilled | 23,751 | 6000 req/20s |
+| **DefiLlama** | Free (no key) | **DONE** — chain/protocol TVL, DEX volumes, fees, stablecoins | 21,201 | 200 req/min |
+| **Allium** | `ALLIUM_API_KEY` | **DONE** — WETH OHLCV fallback | 9,135 | 60 req/min |
+| **CoinGecko** | `COINGECKO_API_KEY` (Demo) | **DONE** — last 365 days only (Demo key limit) | 1,368 | 30 req/min |
+| **Dune** | `DUNE_API_KEY` | **DONE** — 5 queries created and backfilled | 30,610 | 40 req/min |
 
 ---
 
@@ -130,117 +131,91 @@
 
 ---
 
-## Phase 4: Dune (Deferred)
+## Phase 4: Dune — COMPLETED (2026-03-11)
 
-Dune's API model requires pre-saved queries (created in the Dune UI) referenced by query ID. Custom SQL cannot be run ad-hoc via API alone.
+5 queries created and backfilled (30,610 total records):
 
-**If/when Dune queries are created in the UI**, the following would be high-value additions:
+| Query ID | Name | Metrics | Records | Date Range |
+|---|---|---|---|---|
+| 6811495 | ETH Staking Stats | eth_staked_daily, depositor_count, deposit_count, cumulative_eth_staked | 7,304 | 2021-01-01 → 2026-01-01 |
+| 6811496 | ETH Burn/Issuance | eth_burned, block_count | 3,220 | 2021-08-05 → 2026-01-01 |
+| 6811497 | Whale Transfers | whale_transfer_usd, whale_transfer_count | 3,652 | 2021-01-01 → 2026-01-01 |
+| 6811498 | Bridge Flows | bridge_outflow/inflow/netflow_usd, deposit/withdrawal_count | 9,130 | 2021-01-01 → 2026-01-01 |
+| 6811499 | CEX Flows | cex_inflow/outflow/netflow_usd, cex_transfer_count | 7,304 | 2021-01-01 → 2026-01-01 |
 
-| Query | Metrics | Priority |
+Endpoint configs: `config/endpoints/eth/eth_dune_staking.json`, `eth_dune_burn.json`, `eth_dune_whales.json`, `eth_dune_bridges.json`, `eth_dune_cex_flows.json`
+
+Dune CLI installed at `~/.local/bin/dune.exe` for query management.
+
+---
+
+## Phase 5: CoinGecko — COMPLETED (2026-03-11)
+
+Provider built and backfilled (1,368 records):
+
+| Metric | Records | Notes |
 |---|---|---|
-| ETH daily staking stats | `eth_staked`, `validator_count`, `staking_apr` | High |
-| ETH burn/issuance post-merge | `eth_burned`, `eth_net_issuance` | High |
-| ETH L2 settlement value | `l2_settlement_value_usd` | Medium |
-| Whale transfers >$1M | `whale_transfer_usd`, `whale_transfer_count` | Medium |
+| `price_usd` | 456 | ~365 daily data points |
+| `market_cap_usd` | 456 | ~365 daily data points |
+| `spot_volume_usd_24h` | 456 | ~365 daily data points |
 
-**Action**: Create queries in Dune UI, save them, then build the provider to fetch results by query ID.
+**Limitation**: Using Demo API key (`CG-` prefix) which limits data to last 365 days. Pro key needed for full 2021-01-01 range.
+
+**Not yet backfilled** (require Pro key or `coin_data` endpoint):
+- `fdv_usd`, `total_supply`, `max_supply`, `ath_usd`, `atl_usd` (snapshot data from `/coins/{id}`)
+
+Endpoint config: `config/endpoints/eth/eth_coingecko.json`
 
 ---
 
-## Phase 5: CoinGecko (Deferred)
+## Actual Record Counts (Verified 2026-03-11, updated after gap resolution)
 
-CoinGecko MCP is configured in `.mcp.json` but requires a Claude Code restart to activate.
-
-**Planned data points (when available):**
-
-| Data Point | Metric | Notes |
+| Provider | Rows | Distinct Metrics |
 |---|---|---|
-| Market cap (USD) | `market_cap_usd` | Redundant with CoinMetrics |
-| Fully diluted valuation | `fdv_usd` | **Unique to CoinGecko** |
-| 24h volume | `spot_volume_usd_24h` | Cross-reference with CM |
-| Total/max supply | `total_supply`, `max_supply` | Supply context |
-| ATH/ATL + drawdowns | `ath_usd`, `atl_usd`, `ath_drawdown_pct` | **Unique** |
-
-**Action**: Restart Claude Code, verify MCP access, then build provider.
-
----
-
-## Implementation Steps (In Order)
-
-### Step 1: Fix bugs
-1. **Fix stablecoin transformer string-epoch bug** in `src/providers/defillama/transformer.py`
-   - `_unix_to_iso(ts)` and `_in_range(ts, ...)` must cast `ts = int(ts)` to handle string epochs
-2. **Fix CoinMetrics 403 handling** — treat 403 as `fatal: True` instead of retrying
-
-### Step 2: Update endpoint configs
-1. `eth_asset_metrics_primary.json` — expand metrics to all 13 working ones, date range → 2021-01-01
-2. `eth_chain_tvl_defillama.json` — date range → 2021-01-01
-3. `eth_protocol_tvl_defillama.json` — date range → 2021-01-01, add makerdao
-4. `eth_dex_volumes_defillama.json` — date range → 2021-01-01, add curve-dex
-5. `eth_fees_defillama.json` — date range → 2021-01-01, add lido + aave
-6. `eth_stablecoin_flow_defillama.json` — date range → 2021-01-01
-7. `eth_price_allium_fallback.json` — date range → 2021-01-01
-
-### Step 3: Reset stale backfill progress
-- Delete existing `backfill_progress` rows (they have the old 2025-01-01 range and stale states)
-
-### Step 4: Run backfills in order
-```bash
-cd backfill_data
-
-# Phase 1: CoinMetrics core metrics (largest, most important)
-python backfill.py --config config/endpoints/eth/eth_asset_metrics_primary.json
-
-# Phase 2: DefiLlama DeFi data
-python backfill.py --config config/endpoints/eth/eth_chain_tvl_defillama.json
-python backfill.py --config config/endpoints/eth/eth_protocol_tvl_defillama.json
-python backfill.py --config config/endpoints/eth/eth_dex_volumes_defillama.json
-python backfill.py --config config/endpoints/eth/eth_fees_defillama.json
-python backfill.py --config config/endpoints/eth/eth_stablecoin_flow_defillama.json
-
-# Phase 3: Allium fallback
-python backfill.py --config config/endpoints/eth_fallback/eth_price_allium_fallback.json
-```
-
-### Step 5: Verify in Supabase
-```sql
-SELECT provider, asset, metric, COUNT(*) as rows,
-       MIN(time) as earliest, MAX(time) as latest
-FROM asset_metrics
-GROUP BY provider, asset, metric
-ORDER BY provider, asset, metric;
-```
+| coinmetrics | 23,751 | 13 |
+| defillama | 21,201 | 4 |
+| allium | 9,135 | 5 |
+| coingecko | 1,372 | 7 (price_usd, market_cap_usd, spot_volume_usd_24h + fdv_usd, total_supply, ath_usd, atl_usd snapshots) |
+| dune | 49,752 | 28 (across 9 queries: original 5 + staking_apr, net_issuance, l2_settlement, stablecoin_netflow) |
+| derived | 5,443 | 3 (realized_volatility_7d, realized_volatility_30d, dex_cex_volume_ratio) |
+| **Total** | **110,654** | **59** |
 
 ---
 
-## Expected Final Record Count
+## Resolved Gaps (2026-03-11)
 
-| Provider | Asset | Metrics | Est. Records |
-|---|---|---|---|
-| coinmetrics | eth | 13 core metrics | ~23,738 |
-| defillama | ethereum | tvl_usd | ~1,826 |
-| defillama | aave | tvl_usd | ~1,826 |
-| defillama | uniswap | tvl_usd, volume_usd, fees_usd | ~5,478 |
-| defillama | curve | tvl_usd, volume_usd | ~3,652 |
-| defillama | lido | tvl_usd, fees_usd | ~3,652 |
-| defillama | makerdao | tvl_usd | ~1,826 |
-| defillama | eth_stablecoins | stablecoin_circulating_usd | ~1,826 |
-| defillama | eth | price_usd (fallback) | ~1,826 |
-| allium | eth | price_usd, open/high/low/close_usd | ~9,130 |
-| **Total** | | | **~54,780** |
+### DefiLlama Stablecoin Transformer Bug — FIXED
+- **Bug**: `_unix_to_iso()` and `_in_range()` failed on string-epoch timestamps like `"1511913600"`
+- **Fix**: Changed `int(ts)` to `int(float(ts))` in both functions in `src/providers/defillama/transformer.py`
+- **Why `float()`**: Ensures robustness for both string integers and potential float-strings
+
+### CoinGecko Snapshot Data — DONE (4 records)
+- Created `config/endpoints/eth/eth_coingecko_snapshot.json` (endpoint_type: `coin_data`)
+- Backfilled: `fdv_usd`, `total_supply`, `ath_usd`, `atl_usd` (max_supply is null for ETH)
+- These are point-in-time snapshots, not historical timeseries
+
+### Dune — 4 New Queries Created & Backfilled (19,142 records)
+| Query ID | Name | Source Table | Records | Metrics |
+|---|---|---|---|---|
+| 6815240 | ETH Staking APR | `staking_ethereum.flows` | 5,478 | daily_rewards_eth, cumulative_staked_eth, staking_apr |
+| 6815241 | ETH Net Issuance | `staking_ethereum.flows` + `ethereum.blocks` | 4,830 | consensus_rewards_eth, eth_burned_calc, eth_net_issuance |
+| 6815242 | L2 Settlement | `rollup_economics_ethereum.l2_revenue` | 3,356 | l2_settlement_value_usd, l2_chain_count |
+| 6815244 | Stablecoin Netflow | `stablecoins_ethereum.transfers` | 5,478 | stablecoin_minted_usd, stablecoin_burned_usd, stablecoin_netflow_usd |
+
+### Derived Metrics — DONE (5,443 records)
+Computed from existing Supabase data via `scripts/compute_derived_metrics.py`:
+- `realized_volatility_7d` (1,820 records): 7-day rolling annualized % from CoinMetrics PriceUSD log returns
+- `realized_volatility_30d` (1,797 records): 30-day rolling annualized % from CoinMetrics PriceUSD log returns
+- `dex_cex_volume_ratio` (1,826 records): DefiLlama volume_usd (sum) / abs(Dune cex_netflow_usd)
+- All tagged with `provider='derived'`, `provider_priority=99`, `metadata.source` documenting inputs
 
 ---
 
-## Files to Modify
+## Remaining Gaps (Require Paid Keys)
 
-| File | Change |
-|---|---|
-| `src/providers/defillama/transformer.py` | Fix string-epoch bug in `_unix_to_iso` and `_in_range` |
-| `src/providers/coinmetrics/provider.py` | Treat 403 as fatal (no retry) |
-| `config/endpoints/eth/eth_asset_metrics_primary.json` | Expand metrics, widen date range |
-| `config/endpoints/eth/eth_chain_tvl_defillama.json` | Widen date range |
-| `config/endpoints/eth/eth_protocol_tvl_defillama.json` | Add makerdao, widen date range |
-| `config/endpoints/eth/eth_dex_volumes_defillama.json` | Add curve-dex, widen date range |
-| `config/endpoints/eth/eth_fees_defillama.json` | Add lido + aave, widen date range |
-| `config/endpoints/eth/eth_stablecoin_flow_defillama.json` | Widen date range |
-| `config/endpoints/eth_fallback/eth_price_allium_fallback.json` | Widen date range |
+| Item | Blocker | Est. Rows |
+|---|---|---|
+| CoinGecko full history (2021-01-01 → 2025-03-12) | Pro API key (~$130/mo) | ~4,380 |
+| CoinMetrics derivatives (candles, OI, funding, liquidations) | Pro API key | ~30,000+ |
+| CoinMetrics advanced metrics (GasPriceAvg, VtyDayRet, NVTAdj, etc.) | Pro API key | ~20,000+ |
+| Derived: spread_bps, microprice, futures_basis, perp_premium | Requires CoinMetrics derivatives data | N/A |

@@ -1,0 +1,35 @@
+{
+  "endpoint_id": "coingecko_pepe_coin_data",
+  "description": "Pepe snapshot data from CoinGecko: fdv, supply, ath, atl",
+  "table": "asset_metrics",
+  "primary_keys": [
+    "provider",
+    "asset",
+    "metric",
+    "time"
+  ],
+  "date_range": {
+    "start": "2026-03-11",
+    "end": "2026-03-12"
+  },
+  "providers": [
+    {
+      "name": "coingecko",
+      "enabled": true,
+      "priority": 3,
+      "config": {
+        "endpoint_type": "coin_data",
+        "params": {
+          "schema_type": "coin_data",
+          "coin_id": "pepe",
+          "asset": "pepe"
+        }
+      }
+    }
+  ],
+  "fallback_strategy": "use_all",
+  "deduplication": {
+    "strategy": "prefer_priority",
+    "conflict_resolution": "keep_highest_priority"
+  }
+}

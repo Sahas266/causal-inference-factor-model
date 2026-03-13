@@ -3,19 +3,22 @@
 This is a comprehensive ETH-focused pull list across the five providers.
 
 Status tags:
-- `Implemented`: already supported in this repo today.
+- `Backfilled`: data exists in Supabase `asset_metrics` table.
+- `Implemented`: provider/endpoint wired but not yet backfilled (or partially backfilled).
 - `Planned`: provider/endpoint not yet fully wired in this repo, but recommended.
+
+> **Last verified: 2026-03-11** — 86,065 rows across 5 providers, 42 distinct metrics.
 
 ## 1. Core Market + Network State (Daily Minimum)
 
 | Data Point | Canonical Metric | Provider(s) | Status | Notes |
 |---|---|---|---|---|
-| ETH spot price (USD) | `price_usd` | CoinMetrics, CoinGecko, DeFi Llama, Allium | Implemented (CM/DL/Allium), Planned (CG) | Anchor series for all downstream models. |
-| Market cap (USD) | `market_cap_usd` | CoinMetrics, CoinGecko | Implemented (CM), Planned (CG) | Use circulating market cap where possible. |
-| Fully diluted valuation | `fdv_usd` | CoinGecko | Planned | Useful for supply overhang context. |
-| 24h spot volume (USD) | `spot_volume_usd_24h` | CoinGecko, CoinMetrics | Planned (CG), Implemented (CM via candles/trades) | Normalize exchange-aggregated vs venue-specific. |
-| Daily tx count | `tx_count` | CoinMetrics, Allium, Dune | Implemented (CM/Allium), Planned (Dune) | ETH L1 usage baseline. |
-| Daily active addresses | `active_addresses` | CoinMetrics, Allium, Dune | Implemented (CM/Allium), Planned (Dune) | EOA + contract split is useful if available. |
+| ETH spot price (USD) | `price_usd` | CoinMetrics, CoinGecko, DeFi Llama, Allium | Backfilled (CM/DL/Allium/CG) | Anchor series for all downstream models. |
+| Market cap (USD) | `market_cap_usd` | CoinMetrics, CoinGecko | Backfilled (CM/CG) | Use circulating market cap where possible. |
+| Fully diluted valuation | `fdv_usd` | CoinGecko | Implemented (coin_data endpoint) | Useful for supply overhang context. |
+| 24h spot volume (USD) | `spot_volume_usd_24h` | CoinGecko, CoinMetrics | Backfilled (CG) | Normalize exchange-aggregated vs venue-specific. |
+| Daily tx count | `tx_count` | CoinMetrics, Allium, Dune | Backfilled (CM) | ETH L1 usage baseline. |
+| Daily active addresses | `active_addresses` | CoinMetrics, Allium, Dune | Backfilled (CM) | EOA + contract split is useful if available. |
 | Avg gas price (gwei) | `avg_gas_price_gwei` | Allium, Dune, CoinMetrics | Implemented (Allium), Planned (Dune/CM extension) | Key congestion proxy. |
 | Gas used / gas limits | `gas_used`, `gas_limit_tx`, `gas_limit_block` | CoinMetrics, Dune, Allium | Implemented (CM limit metrics), Planned (Dune/Allium extension) | Pair with fee/burn analysis. |
 | Total daily fees (ETH/USD) | `fees_eth`, `fees_usd` | Allium, Dune, DeFi Llama | Implemented (Allium), Planned (Dune/DL mapping) | Post-EIP-1559 decomposition preferred. |
@@ -59,9 +62,9 @@ Status tags:
 | Data Point | Canonical Metric | Provider(s) | Status | Notes |
 |---|---|---|---|---|
 | Circulating supply | `eth_circulating_supply` | CoinMetrics, CoinGecko | Planned (explicit mapping) | Supply-adjusted valuation metrics. |
-| Net issuance / burn | `eth_net_issuance`, `eth_burned` | CoinMetrics, Dune, Allium | Planned | Post-merge monetary policy lens. |
-| Staked ETH | `eth_staked` | Dune, CoinGecko, DeFi Llama | Planned | Include staking ratio of total supply. |
-| Validator count | `validator_count` | Dune | Planned | Security/decentralization trend. |
+| Net issuance / burn | `eth_net_issuance`, `eth_burned` | CoinMetrics, Dune, Allium | Backfilled (Dune 6811496) | eth_burned, block_count from EIP-1559 (Aug 2021). |
+| Staked ETH | `eth_staked` | Dune, CoinGecko, DeFi Llama | Backfilled (Dune 6811495) | eth_staked_daily, cumulative_eth_staked, depositor_count, deposit_count. |
+| Validator count | `validator_count` | Dune | Backfilled (Dune 6811495) | Via depositor_count proxy. |
 | Staking yield (APR) | `staking_apr` | CoinGecko, Dune | Planned | Compare against funding/carry signals. |
 | Exchange reserves (ETH) | `exchange_reserve_eth` | CoinMetrics, Dune | Planned | Supply-on-exchange risk indicator. |
 
@@ -69,10 +72,10 @@ Status tags:
 
 | Data Point | Canonical Metric | Provider(s) | Status | Notes |
 |---|---|---|---|---|
-| Exchange inflow/outflow | `exchange_inflow_eth`, `exchange_outflow_eth` | CoinMetrics, Dune | Planned (explicit CM mapping), Planned (Dune) | Spot selling/buying pressure proxy. |
-| Whale transfer volume | `whale_transfer_usd` | Allium, Dune | Planned | Define threshold rules clearly. |
+| Exchange inflow/outflow | `exchange_inflow_eth`, `exchange_outflow_eth` | CoinMetrics, Dune | Backfilled (CM: FlowInExNtv/FlowOutExNtv, Dune 6811499: cex_inflow/outflow/netflow_usd) | Spot selling/buying pressure proxy. |
+| Whale transfer volume | `whale_transfer_usd` | Allium, Dune | Backfilled (Dune 6811497) | whale_transfer_usd, whale_transfer_count (>$1M). |
 | CEX vs DEX share | `dex_cex_volume_ratio` | DeFi Llama, CoinMetrics, Dune | Planned (derived) | Market-structure regime indicator. |
-| Bridge inflow/outflow to Ethereum | `bridge_netflow_usd` | DeFi Llama, Dune | Planned | Captures cross-chain liquidity rotation. |
+| Bridge inflow/outflow to Ethereum | `bridge_netflow_usd` | DeFi Llama, Dune | Backfilled (Dune 6811498) | bridge_outflow/inflow/netflow_usd, deposit/withdrawal_count. |
 | L2 to L1 settlement activity | `l2_settlement_value_usd` | Dune, Allium | Planned | Helpful for Ethereum demand decomposition. |
 
 ## 7. Recommended ETH Pull Pack by Provider
@@ -86,17 +89,10 @@ Status tags:
 - `dex_trade_count`
 - `eth_token_price_ohlc` (`price_usd`, `open_usd`, `high_usd`, `low_usd`, `close_usd`)
 
-### CoinGecko
-- `price_usd`
-- `market_cap_usd`
-- `fdv_usd`
-- `spot_volume_usd_24h`
-- `circulating_supply`
-- `total_supply`, `max_supply`
-- `ath`, `atl`, drawdowns
-- `derivatives_open_interest`
-- `funding_rate` (where available)
-- `liquidations` (where available)
+### CoinGecko (backfilled — 1,368 rows, last 365 days)
+- **Backfilled**: `price_usd`, `market_cap_usd`, `spot_volume_usd_24h` (via `market_chart`)
+- **Implemented but not backfilled**: `fdv_usd`, `total_supply`, `max_supply`, `ath_usd`, `atl_usd` (via `coin_data`)
+- **Limitation**: Demo key (`CG-` prefix) restricts to last 365 days; Pro key needed for full range
 
 ### CoinMetrics
 - Asset metrics: `PriceUSD`, `CapMrktCurUSD`, `TxCnt`, `AdrActCnt`, `GasLmtTx`, `GasLmtBlk`
@@ -107,13 +103,13 @@ Status tags:
 - Perp/futures: open interest, funding rates, liquidations
 - Options: implied volatility + greeks
 
-### Dune
-- ETH L1 fundamentals: tx/users/gas/fees/burn/net issuance
-- Staking: validators, staked ETH, APR, exits/entries
-- Exchange/whale flows
-- Stablecoin and bridge flows
-- DEX protocol + pool-level volumes
-- L2 settlement and rollup activity
+### Dune (5 queries backfilled — 30,610 rows)
+- **6811495**: Staking — eth_staked_daily, depositor_count, deposit_count, cumulative_eth_staked
+- **6811496**: Burn — eth_burned, block_count (from EIP-1559 Aug 2021)
+- **6811497**: Whales — whale_transfer_usd, whale_transfer_count (>$1M)
+- **6811498**: Bridges — bridge_outflow/inflow/netflow_usd, deposit/withdrawal_count
+- **6811499**: CEX Flows — cex_inflow/outflow/netflow_usd, cex_transfer_count
+- Planned: L2 settlement, staking APR, stablecoin flows
 
 ### DeFi Llama
 - Ethereum chain TVL

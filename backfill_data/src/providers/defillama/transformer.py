@@ -18,11 +18,13 @@ def _to_decimal(value) -> Optional[str]:
 
 
 def _unix_to_iso(ts) -> str:
-    return datetime.fromtimestamp(int(ts), tz=timezone.utc).isoformat()
+    """Convert unix epoch (int or string) to ISO-8601 UTC string."""
+    return datetime.fromtimestamp(int(float(ts)), tz=timezone.utc).isoformat()
 
 
 def _in_range(ts, start: datetime, end: datetime) -> bool:
-    dt = datetime.fromtimestamp(int(ts), tz=timezone.utc)
+    """Check if a unix epoch (int or string) falls within the given range."""
+    dt = datetime.fromtimestamp(int(float(ts)), tz=timezone.utc)
     return start <= dt <= end
 
 

@@ -1,0 +1,36 @@
+{
+  "endpoint_id": "coingecko_usdc_market_chart",
+  "description": "Daily USD Coin price, market cap, and volume from CoinGecko",
+  "table": "asset_metrics",
+  "primary_keys": [
+    "provider",
+    "asset",
+    "metric",
+    "time"
+  ],
+  "date_range": {
+    "start": "2021-01-01",
+    "end": "2026-01-01"
+  },
+  "providers": [
+    {
+      "name": "coingecko",
+      "enabled": true,
+      "priority": 3,
+      "config": {
+        "endpoint_type": "market_chart",
+        "params": {
+          "schema_type": "market_chart",
+          "coin_id": "usd-coin",
+          "vs_currency": "usd",
+          "asset": "usdc"
+        }
+      }
+    }
+  ],
+  "fallback_strategy": "use_all",
+  "deduplication": {
+    "strategy": "prefer_priority",
+    "conflict_resolution": "keep_highest_priority"
+  }
+}

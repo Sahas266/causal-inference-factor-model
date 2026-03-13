@@ -1,6 +1,6 @@
 {
   "provider_name": "allium",
-  "display_name": "Allium Explorer",
+  "display_name": "Allium Developer API",
   "enabled": true,
   "api_config": {
     "base_url": "https://api.allium.so/api/v1",
@@ -17,9 +17,8 @@
     "max_wait_seconds": 120
   },
   "capabilities": [
-    "on_chain_metrics",
-    "dex_metrics",
-    "asset_metrics"
+    "token_price_history",
+    "dex_trades"
   ],
-  "description": "Allium provides historical blockchain data via a Snowflake SQL explorer API. Supports Ethereum, Bitcoin, Solana, and 20+ other chains."
+  "description": "Allium Developer REST API provides token price history and DEX trade data. Uses subscription-based endpoints (not Explorer SQL which requires separate credits)."
 }

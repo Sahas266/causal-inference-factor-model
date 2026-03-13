@@ -1,0 +1,31 @@
+{
+  "endpoint_id": "dune_eth_net_issuance",
+  "description": "Daily ETH net issuance (consensus rewards - burn) from Dune",
+  "table": "asset_metrics",
+  "primary_keys": ["provider", "asset", "metric", "time"],
+  "date_range": {
+    "start": "2021-01-01",
+    "end": "2026-01-01"
+  },
+  "providers": [
+    {
+      "name": "dune",
+      "enabled": true,
+      "priority": 5,
+      "config": {
+        "endpoint_type": "query_results",
+        "params": {
+          "schema_type": "query_results",
+          "query_id": 6815241,
+          "asset": "eth",
+          "limit": 10000
+        }
+      }
+    }
+  ],
+  "fallback_strategy": "use_all",
+  "deduplication": {
+    "strategy": "prefer_priority",
+    "conflict_resolution": "keep_highest_priority"
+  }
+}

@@ -17,7 +17,7 @@ This monorepo contains three interconnected systems for a **causal inference fac
 - **`uvloop` is Windows-incompatible** — always keep it conditional: `uvloop>=0.19.0; sys_platform != "win32"` in `requirements.txt`
 - **Supabase**: used as the database backend across all modules (project ID: `jnulpcqpftnwvknwuqpa`)
 - **Required env vars** (in `backfill_data/.env`): `SUPABASE_URL`, `SUPABASE_KEY`, `ALLIUM_API_KEY`
-- **Optional env vars**: `COINMETRICS_API_KEY` (community tier works without it), `DEFILLAMA_API_KEY` (Pro endpoints only), `DUNE_API_KEY`
+- **Optional env vars**: `COINMETRICS_API_KEY` (community tier works without it), `DEFILLAMA_API_KEY` (Pro endpoints only), `DUNE_API_KEY`, `COINGECKO_API_KEY` (Pro tier for full history)
 - **Supabase auth**: Use `service_role` key (not `sbp_...` management token) for data API writes
 
 ## Commands
@@ -125,10 +125,13 @@ CLI (backfill.py)
 - `src/providers/coinmetrics/` — market data: asset metrics, trades, candles, orderbooks, derivatives
 - `src/providers/allium/` — token prices and DEX trades via Developer REST API (`ALLIUM_API_KEY`)
 - `src/providers/defillama/` — TVL, DEX volumes, fees, stablecoin flow, coin prices (free + Pro)
+- `src/providers/coingecko/` — market chart (price/mcap/volume timeseries) and coin data (ath/atl/supply snapshots)
+- `src/providers/dune/` — pre-saved query results from Dune Analytics (`DUNE_API_KEY`)
 - `src/schemas/` — Pydantic models for each data type
 - `config/providers/{name}.json` — provider-level config (API URL, rate limits, retry policy)
 - `config/endpoints/{name}.json` — endpoint configs specifying table, primary keys, provider params
-- `config/endpoints/eth/` — ETH-specific primary endpoint pack (11 configs across CoinMetrics + DefiLlama)
+- `config/endpoints/eth/` — ETH-specific endpoint pack (12 configs across CoinMetrics, DefiLlama, CoinGecko, Dune)
+- `config/endpoints/eth_disabled/` — CoinMetrics derivatives endpoints blocked on community tier (5 configs)
 - `config/endpoints/eth_fallback/` — Allium fallback endpoints for ETH price data
 - `scripts/` — Per-provider convenience backfill scripts
 - `ETH_DATA_POINTS_CATALOG.md` — Prioritized ETH metrics catalog with provider mapping
@@ -160,7 +163,7 @@ CLI (backfill.py)
 - Auth: `X-API-KEY` header against `https://api.allium.so/api/v1`
 - OpenAPI spec: `https://api.allium.so/openapi.json` — useful for discovering new endpoints
 - Note: Allium MCP server (mcp.allium.so) uses Explorer credits (exhausted) — use REST API directly
-- Endpoint configs: `allium_eth_on_chain.json`, `allium_btc_on_chain.json`, `allium_dex_volumes.json` (being migrated to Developer API)
+- Endpoint configs: `allium_eth_on_chain.json`, `allium_btc_on_chain.json`, `allium_dex_volumes.json` (migrated to Developer API)
 
 *DefiLlama* (`config/providers/defillama.json`) — no key needed for free endpoints:
 - `protocol/tvl`, `chain/tvl`, `dex/summary`, `fees/summary`, `stablecoin/charts`, `coin/chart`
@@ -169,6 +172,23 @@ CLI (backfill.py)
 - Pro API: `pro-api.llama.fi/{api_key}/...`
 - Most endpoints return full history in one call; transformer handles date filtering
 - Endpoint configs: `defillama_chain_tvl.json`, `defillama_protocol_tvl.json`, `defillama_stablecoin_flow.json`, `defillama_dex_volumes.json`, ETH configs in `config/endpoints/eth/`
+
+*CoinGecko* (`config/providers/coingecko.json`) — Pro API via `COINGECKO_API_KEY`:
+- `market_chart` — `/coins/{id}/market_chart/range`: daily price, market cap, volume timeseries
+- `coin_data` — `/coins/{id}`: snapshot data (fdv, ath, atl, total_supply, max_supply)
+- Free tier: `api.coingecko.com/api/v3` (30 req/min, last 365 days only)
+- Pro tier: `pro-api.coingecko.com/api/v3` (500 req/min, full historical range)
+- CoinGecko MCP also available via `.mcp.json` for interactive queries
+- Endpoint configs: `config/endpoints/eth/eth_coingecko.json`
+
+*Dune Analytics* (`config/providers/dune.json`) — requires `DUNE_API_KEY`:
+- `query_results` — `/query/{id}/results`: fetches pre-saved query results
+- Queries must be created in the Dune UI first; the API only reads results
+- Each endpoint config specifies a `query_id`
+- Rate limit: 40 req/min on standard tier
+- Dune CLI installed at `~/.local/bin/dune.exe` for interactive query management
+- Active queries: 6811495 (staking), 6811496 (burn), 6811497 (whales), 6811498 (bridges), 6811499 (CEX flows)
+- Endpoint configs: `config/endpoints/eth/eth_dune_*.json` (5 configs)
 
 ### causal_portfolio — SCM-Based Portfolio Model
 
@@ -193,25 +213,23 @@ FastAPI + Celery + PostgreSQL/TimescaleDB pipeline collecting 7 on-chain indicat
 
 ## ETH Backfill Status
 
-Current state (as of March 9, 2026): **61,395 rows** in `asset_metrics` covering 2021-01-01 → 2026-01-01. See `ETH_BACKFILL_PLAN.md`, `ETH_BACKFILL_WORKLOG.md`, and `ETH_DATA_POINTS_CATALOG.md` for details.
+Current state (as of March 11, 2026): **110,654 rows** in `asset_metrics` across 6 providers, covering 2021-01-01 → 2026-01-01. See `ETH_BACKFILL_PLAN.md`, `ETH_BACKFILL_WORKLOG.md`, and `ETH_DATA_POINTS_CATALOG.md` for details.
 
-**Backfilled data (3 providers):**
-- *CoinMetrics* (31,059 rows): PriceUSD, CapMrktCurUSD, TxCnt, AdrActCnt, SplyCur, BlkCnt, HashRate, ROI30d, FeeTotNtv, IssTotNtv, FlowInExNtv, FlowOutExNtv, TxTfrCnt
-- *DefiLlama* (21,201 rows): ethereum chain TVL, protocol TVL (aave/uniswap/curve/lido/makerdao), DEX volumes (uniswap/curve), fees (uniswap/lido/aave), stablecoin circulating
-- *Allium* (9,135 rows): WETH OHLCV (price_usd, open/high/low/close_usd) as fallback
+**Backfilled data (6 providers, 59 distinct metrics):**
+- *CoinMetrics* (23,751 rows, 13 metrics): PriceUSD, CapMrktCurUSD, TxCnt, AdrActCnt, SplyCur, BlkCnt, HashRate, ROI30d, FeeTotNtv, IssTotNtv, FlowInExNtv, FlowOutExNtv, TxTfrCnt
+- *DefiLlama* (21,201 rows, 4 metrics): tvl_usd, volume_usd, fees_usd, stablecoin_circulating_usd — across ethereum chain + 5 protocols
+- *Allium* (9,135 rows, 5 metrics): WETH OHLCV (price_usd, open/high/low/close_usd) as fallback
+- *CoinGecko* (1,372 rows, 7 metrics): price_usd, market_cap_usd, spot_volume_usd_24h (last 365 days), fdv_usd, total_supply, ath_usd, atl_usd (snapshots)
+- *Dune* (49,752 rows, 28 metrics): 9 queries — staking, burn, whales, bridges, CEX flows, staking APR, net issuance, L2 settlement, stablecoin netflow
+- *Derived* (5,443 rows, 3 metrics): realized_volatility_7d, realized_volatility_30d (from CoinMetrics PriceUSD), dex_cex_volume_ratio (from DefiLlama volume_usd / Dune cex_netflow_usd)
 
-**Fixed bugs (this session):**
-- DefiLlama stablecoin flow string-epoch timestamps — `_unix_to_iso`/`_in_range` now cast `int(ts)`
-- DefiLlama DEX volumes — transformer reads `totalDataChart` not just `dailyVolume`
-- CoinMetrics 403 — now treated as `fatal: True` (no retry)
-- Supabase disconnect on large upserts — database writer retries transient connection errors
+**Dune query IDs:** 6811495 (staking), 6811496 (burn), 6811497 (whales), 6811498 (bridges), 6811499 (CEX flows), 6815240 (staking APR), 6815241 (net issuance), 6815242 (L2 settlement), 6815244 (stablecoin netflow)
 
-**Remaining issues:**
-- CoinMetrics derivatives endpoints: 403 on community tier — configs moved to `config/endpoints/eth_disabled/`
-- Allium endpoint configs (`allium_*.json`) still reference old `explorer/sql` — need migration to Developer API
-- Allium tests (`test_allium.py`) still test V1 SQL interface — need rewrite for V2 Developer API
-- Dune requires pre-saved queries in the Dune UI — API cannot run ad-hoc SQL
-- CoinGecko free API limits historical data to last 365 days; Pro key needed for full range
+**Derived metrics script:** `scripts/compute_derived_metrics.py` — computes realized volatility and DEX/CEX volume ratio from existing Supabase data, inserts with `provider='derived'`
+
+**Remaining limitations (require paid keys):**
+- CoinMetrics derivatives endpoints: 403 on community tier — configs in `config/endpoints/eth_disabled/`
+- CoinGecko: Demo key (`CG-` prefix) limited to last 365 days; Pro key needed for full 2021-01-01 range
 
 **Provider priority**: CoinMetrics > DefiLlama > CoinGecko > Allium (fallback only).
 
@@ -228,7 +246,7 @@ Project ID: `jnulpcqpftnwvknwuqpa` (may be INACTIVE — call `restore_project` i
 - **Atlassian**: enabled via plugin, domain `whitestarcapital.atlassian.net`
 - **Supabase**: enabled via plugin
 - **Allium**: configured at user scope (`mcp.allium.so`) — MCP server credits are separate from the REST API key
-- **CoinGecko**: added to project `.mcp.json` (`mcp-remote` → `https://mcp.pro-api.coingecko.com/mcp`) — requires Claude Code restart to activate
+- **CoinGecko**: active via project `.mcp.json` (`mcp-remote` → `https://mcp.pro-api.coingecko.com/mcp`) — Pro API with full historical range
 
 ## Test Markers
 

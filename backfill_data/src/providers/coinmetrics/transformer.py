@@ -91,6 +91,10 @@ class CoinMetricsTransformer:
             for key, value in record.items():
                 if key in ['asset', 'time']:
                     continue
+
+                # Skip CoinMetrics status metadata fields (e.g. FlowInExNtv-status)
+                if '-status' in key:
+                    continue
                 
                 # Convert value to Decimal if not None
                 decimal_value = None

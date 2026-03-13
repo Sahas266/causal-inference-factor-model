@@ -1,24 +1,23 @@
 {
   "provider_name": "dune",
-  "display_name": "Dune",
-  "enabled": false,
+  "display_name": "Dune Analytics",
+  "enabled": true,
   "api_config": {
     "base_url": "https://api.dune.com/api/v1",
     "api_key_env": "DUNE_API_KEY"
   },
   "rate_limits": {
-    "requests_per_window": 120,
+    "requests_per_window": 40,
     "window_seconds": 60,
     "safety_margin": 0.9
   },
   "retry_config": {
     "max_attempts": 3,
     "backoff_multiplier": 2,
-    "max_wait_seconds": 60
+    "max_wait_seconds": 120
   },
   "capabilities": [
-    "query_results",
-    "timeseries_metrics"
+    "query_results"
   ],
-  "description": "Dune provider scaffold. Uses DUNE_API_KEY from environment."
+  "description": "Dune Analytics provides blockchain data via pre-saved SQL queries. Queries must be created in the Dune UI first; the API fetches their results."
 }

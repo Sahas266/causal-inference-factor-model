@@ -1,0 +1,31 @@
+{
+  "endpoint_id": "coingecko_eth_market_chart",
+  "description": "Daily ETH price, market cap, and volume from CoinGecko",
+  "table": "asset_metrics",
+  "primary_keys": ["provider", "asset", "metric", "time"],
+  "date_range": {
+    "start": "2025-03-12",
+    "end": "2026-03-10"
+  },
+  "providers": [
+    {
+      "name": "coingecko",
+      "enabled": true,
+      "priority": 3,
+      "config": {
+        "endpoint_type": "market_chart",
+        "params": {
+          "schema_type": "market_chart",
+          "coin_id": "ethereum",
+          "vs_currency": "usd",
+          "asset": "eth"
+        }
+      }
+    }
+  ],
+  "fallback_strategy": "use_all",
+  "deduplication": {
+    "strategy": "prefer_priority",
+    "conflict_resolution": "keep_highest_priority"
+  }
+}

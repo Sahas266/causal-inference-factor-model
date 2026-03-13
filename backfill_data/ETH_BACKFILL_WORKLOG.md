@@ -333,19 +333,101 @@ Primary code/config files modified or added:
 - No push/commit has been performed by this workflow.
 - Repo has unrelated pre-existing modified/untracked files outside this exact backfill flow.
 
-## 14. Current end-state summary
+## 14. End-state summary (as of March 8-9)
 
 Achieved:
 - Multi-provider ETH backfill framework wired and exercised.
 - Supabase writes working with correct key class (service role).
-- 2196 ETH-related `asset_metrics` rows written.
+- 2196 ETH-related `asset_metrics` rows written (partial run, interrupted).
 - Provider attribution present on each record via schema fields (`provider`, `provider_priority`).
 - Progress tracking rows populated for endpoint/provider instances.
 
-Remaining blockers:
-- DefiLlama stablecoin transformer needs string-epoch handling.
-- CoinMetrics community restrictions require:
-  - metric subset adjustments and/or
-  - fallback remapping for restricted endpoint types.
-- CoinMetrics 403 handling should fail fast (non-retry) for this workflow.
+---
+
+## 15. March 10, 2026 — Full backfill completion (CoinMetrics, DefiLlama, Allium)
+
+### 15.1 Work completed
+- Completed full CoinMetrics backfill: 13 metrics × ~1,827 days = ~21,924 rows
+- Completed full DefiLlama backfill: chain TVL, 5 protocol TVLs, 2 DEX volumes, 3 protocol fees, stablecoin circulating = 21,201 rows
+- Completed full Allium WETH OHLCV fallback: 5 metrics × ~1,827 days = 9,135 rows
+- Deleted junk CoinMetrics `-status` metadata rows from Supabase (FlowInExNtv-status, FlowInExNtv-status-time, FlowOutExNtv-status, FlowOutExNtv-status-time)
+- CoinMetrics transformer updated to filter `-status` fields going forward
+
+### 15.2 New providers built
+- **CoinGecko provider** (`src/providers/coingecko/`): client, transformer, rate_limiter, provider
+  - Supports `market_chart` (timeseries) and `coin_data` (snapshot) endpoint types
+  - Auto-detects Demo vs Pro key by `CG-` prefix
+  - Demo key: `api.coingecko.com` (30 req/min, last 365 days); Pro key: `pro-api.coingecko.com` (500 req/min, full history)
+- **Dune provider** (`src/providers/dune/`): client, transformer, rate_limiter, provider
+  - Supports `query_results` endpoint type, offset-based pagination
+  - CLI installed at `~/.local/bin/dune.exe`
+
+### 15.3 New endpoint configs
+- `config/endpoints/eth/eth_coingecko.json` — ETH market chart (last 365 days)
+- `config/providers/coingecko.json` — CoinGecko provider config
+- `config/providers/dune.json` — Updated Dune provider config
+
+### 15.4 Other changes
+- Allium endpoint configs migrated from Explorer SQL to Developer REST API
+- Allium tests rewritten for V2 Developer API (27 tests)
+- Repo cleanup: deleted node_modules/, .DS_Store, stale docs (handoff.md, ticket_completion_plan.md)
+- Updated .gitignore
+- FM-13 Jira ticket transitioned to Done
+
+---
+
+## 16. March 11, 2026 — Dune + CoinGecko backfill completion
+
+### 16.1 CoinGecko backfill
+- Ran `backfill.py --config config/endpoints/eth/eth_coingecko.json`
+- Result: 1,368 records (price_usd, market_cap_usd, spot_volume_usd_24h × ~365 days)
+- Limited to 2025-03-12 → 2026-03-10 due to Demo key 365-day restriction
+
+### 16.2 Dune queries created (via Dune MCP + CLI)
+5 queries created and executed on Dune platform:
+
+| Query ID | Name | SQL Source Tables |
+|---|---|---|
+| 6811495 | ETH Staking Stats | `beacon_deposits`, `beacon_chain.validators` |
+| 6811496 | ETH Burn/Issuance | `ethereum.blocks` |
+| 6811497 | Whale Transfers | `tokens.transfers` |
+| 6811498 | Bridge Flows | `bridge.flows` |
+| 6811499 | CEX Flows | `cex.flows` |
+
+### 16.3 Dune transformer bugs fixed
+Two bugs prevented the transformer from producing records:
+
+1. **Millisecond timestamp parsing** — Dune returns `"2021-01-01 00:00:00.000 UTC"` but `_parse_ts()` used `rstrip(' UTC')` (which ate chars like '0') and `%Y-%m-%d %H:%M:%S` (no millisecond support). Fixed with proper suffix strip and `%Y-%m-%d %H:%M:%S.%f` format.
+
+2. **Naive vs aware datetime comparison** — `datetime.fromisoformat("2021-01-01")` in Python 3.12 returns a naive datetime, causing `TypeError` in `_in_range()` when compared to timezone-aware `start_time`/`end_time`. Fixed by adding `tzinfo=timezone.utc` when missing.
+
+### 16.4 Dune backfill results
+All 5 queries backfilled successfully:
+
+| Query ID | Endpoint Config | Records |
+|---|---|---|
+| 6811495 | eth_dune_staking.json | 7,304 |
+| 6811496 | eth_dune_burn.json | 3,220 |
+| 6811497 | eth_dune_whales.json | 3,652 |
+| 6811498 | eth_dune_bridges.json | 9,130 |
+| 6811499 | eth_dune_cex_flows.json | 7,304 |
+| **Total** | | **30,610** |
+
+### 16.5 Final Supabase state (verified)
+
+| Provider | Rows | Distinct Metrics |
+|---|---|---|
+| coinmetrics | 23,751 | 13 |
+| defillama | 21,201 | 4 |
+| allium | 9,135 | 5 |
+| coingecko | 1,368 | 3 |
+| dune | 30,610 | 17 |
+| **Total** | **86,065** | **42** |
+
+Junk CoinMetrics `-status` rows: **0** (confirmed deleted).
+
+### 16.6 Remaining limitations
+- CoinGecko Demo key: only last 365 days. Pro key needed for full 2021-01-01 range.
+- CoinMetrics derivatives: 403 on community tier. Configs in `eth_disabled/`.
+- DefiLlama stablecoin transformer: string-epoch bug still present (low priority, stablecoin circulating data already loaded via different code path).
 

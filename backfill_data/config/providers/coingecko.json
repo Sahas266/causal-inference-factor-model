@@ -1,0 +1,25 @@
+{
+  "provider_name": "coingecko",
+  "display_name": "CoinGecko",
+  "enabled": true,
+  "api_config": {
+    "base_url": "https://pro-api.coingecko.com/api/v3",
+    "free_base_url": "https://api.coingecko.com/api/v3",
+    "api_key_env": "COINGECKO_API_KEY"
+  },
+  "rate_limits": {
+    "requests_per_window": 500,
+    "window_seconds": 60,
+    "safety_margin": 0.9
+  },
+  "retry_config": {
+    "max_attempts": 3,
+    "backoff_multiplier": 2,
+    "max_wait_seconds": 60
+  },
+  "capabilities": [
+    "market_chart",
+    "coin_data"
+  ],
+  "description": "CoinGecko provides crypto market data including prices, market caps, volumes, and coin metadata. Pro API key enables full historical range."
+}
