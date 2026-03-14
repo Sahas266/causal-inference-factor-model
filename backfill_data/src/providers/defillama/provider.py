@@ -275,7 +275,8 @@ class DefiLlamaProvider(DataProviderInterface):
 
         elif endpoint_type == 'stablecoin/charts':
             chain = params.get('chain', 'all')
-            return self.client.get_stablecoin_charts(chain)
+            stablecoin_id = params.get('stablecoin_id')
+            return self.client.get_stablecoin_charts(chain, stablecoin_id=stablecoin_id)
 
         elif endpoint_type == 'coin/chart':
             coins = params.get('coins', '')

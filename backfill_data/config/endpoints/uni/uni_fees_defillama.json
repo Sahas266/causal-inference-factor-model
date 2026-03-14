@@ -1,6 +1,6 @@
 {
-  "endpoint_id": "coingecko_avax_coin_data",
-  "description": "Avalanche snapshot data from CoinGecko: fdv, supply, ath, atl",
+  "endpoint_id": "uni_fees_defillama",
+  "description": "Uniswap daily fees from DefiLlama",
   "table": "asset_metrics",
   "primary_keys": [
     "provider",
@@ -9,20 +9,21 @@
     "time"
   ],
   "date_range": {
-    "start": "2026-03-14",
-    "end": "2026-03-15"
+    "start": "2021-01-01",
+    "end": "2026-01-01"
   },
   "providers": [
     {
-      "name": "coingecko",
+      "name": "defillama",
       "enabled": true,
-      "priority": 3,
+      "priority": 2,
       "config": {
-        "endpoint_type": "coin_data",
+        "endpoint_type": "fees/summary",
         "params": {
-          "schema_type": "coin_data",
-          "coin_id": "avalanche-2",
-          "asset": "avax"
+          "schema_type": "fees",
+          "protocol": "uniswap",
+          "data_type": "dailyFees",
+          "asset": "uni"
         }
       }
     }

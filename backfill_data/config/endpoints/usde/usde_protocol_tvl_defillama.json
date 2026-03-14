@@ -1,6 +1,6 @@
 {
-  "endpoint_id": "shib_asset_metrics_coinmetrics",
-  "description": "Shiba Inu core market and on-chain metrics from CoinMetrics",
+  "endpoint_id": "usde_protocol_tvl_defillama",
+  "description": "USDe protocol TVL from DefiLlama",
   "table": "asset_metrics",
   "primary_keys": [
     "provider",
@@ -9,21 +9,20 @@
     "time"
   ],
   "date_range": {
-    "start": "2021-01-01",
+    "start": "2024-02-01",
     "end": "2026-01-01"
   },
   "providers": [
     {
-      "name": "coinmetrics",
+      "name": "defillama",
       "enabled": true,
       "priority": 1,
       "config": {
-        "endpoint_type": "timeseries/asset-metrics",
+        "endpoint_type": "protocol/tvl",
         "params": {
-          "assets": "shib",
-          "metrics": "PriceUSD,CapMrktCurUSD,SplyCur",
-          "frequency": "1d",
-          "page_size": 10000
+          "schema_type": "protocol_tvl",
+          "protocol": "ethena",
+          "asset": "usde"
         }
       }
     }

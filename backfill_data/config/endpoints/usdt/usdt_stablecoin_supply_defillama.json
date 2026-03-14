@@ -1,6 +1,6 @@
 {
-  "endpoint_id": "avax_asset_metrics_coinmetrics",
-  "description": "Avalanche core market and on-chain metrics from CoinMetrics",
+  "endpoint_id": "usdt_stablecoin_supply_defillama",
+  "description": "Tether stablecoin circulating supply from DefiLlama",
   "table": "asset_metrics",
   "primary_keys": [
     "provider",
@@ -14,16 +14,16 @@
   },
   "providers": [
     {
-      "name": "coinmetrics",
+      "name": "defillama",
       "enabled": true,
-      "priority": 1,
+      "priority": 2,
       "config": {
-        "endpoint_type": "timeseries/asset-metrics",
+        "endpoint_type": "stablecoin/charts",
         "params": {
-          "assets": "avax",
-          "metrics": "PriceUSD,CapMrktCurUSD,TxCnt,AdrActCnt,SplyCur",
-          "frequency": "1d",
-          "page_size": 10000
+          "schema_type": "stablecoin_flow",
+          "chain": "all",
+          "stablecoin_id": 1,
+          "asset": "usdt"
         }
       }
     }

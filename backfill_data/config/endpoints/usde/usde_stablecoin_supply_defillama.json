@@ -1,6 +1,6 @@
 {
-  "endpoint_id": "morpho_protocol_tvl_defillama",
-  "description": "Morpho protocol TVL from DefiLlama",
+  "endpoint_id": "usde_stablecoin_supply_defillama",
+  "description": "USDe stablecoin circulating supply from DefiLlama",
   "table": "asset_metrics",
   "primary_keys": [
     "provider",
@@ -9,20 +9,21 @@
     "time"
   ],
   "date_range": {
-    "start": "2024-01-01",
+    "start": "2024-02-01",
     "end": "2026-01-01"
   },
   "providers": [
     {
       "name": "defillama",
       "enabled": true,
-      "priority": 1,
+      "priority": 2,
       "config": {
-        "endpoint_type": "protocol/tvl",
+        "endpoint_type": "stablecoin/charts",
         "params": {
-          "schema_type": "protocol_tvl",
-          "protocol": "morpho-v1",
-          "asset": "morpho"
+          "schema_type": "stablecoin_flow",
+          "chain": "all",
+          "stablecoin_id": 146,
+          "asset": "usde"
         }
       }
     }

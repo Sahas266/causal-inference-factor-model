@@ -29,7 +29,6 @@
       "category": "l1",
       "date_range": {"start": "2021-01-01", "end": "2026-01-01"},
       "providers": {
-        "coinmetrics": {"asset": "sol", "metrics": "PriceUSD,CapMrktCurUSD,TxCnt,AdrActCnt,SplyCur,BlkCnt,FeeTotNtv,IssTotNtv,FlowInExNtv,FlowOutExNtv,TxTfrCnt"},
         "coingecko": {"coin_id": "solana"},
         "defillama_chain": {"chain": "Solana"}
       }
@@ -61,7 +60,6 @@
       "category": "l1",
       "date_range": {"start": "2021-01-01", "end": "2026-01-01"},
       "providers": {
-        "coinmetrics": {"asset": "avax", "metrics": "PriceUSD,CapMrktCurUSD,TxCnt,AdrActCnt,SplyCur"},
         "coingecko": {"coin_id": "avalanche-2"},
         "defillama_chain": {"chain": "Avalanche"}
       }
@@ -72,7 +70,6 @@
       "category": "l1",
       "date_range": {"start": "2021-01-01", "end": "2026-01-01"},
       "providers": {
-        "coinmetrics": {"asset": "matic", "metrics": "PriceUSD,CapMrktCurUSD,TxCnt,AdrActCnt,SplyCur"},
         "coingecko": {"coin_id": "matic-network"},
         "defillama_chain": {"chain": "Polygon"}
       }
@@ -105,7 +102,9 @@
       "providers": {
         "coinmetrics": {"asset": "uni", "metrics": "PriceUSD,CapMrktCurUSD,SplyCur,FlowInExNtv,FlowOutExNtv"},
         "coingecko": {"coin_id": "uniswap"},
-        "defillama_protocol": {"protocol": "uniswap"}
+        "defillama_protocol": {"protocol": "uniswap"},
+        "defillama_fees": {"protocol": "uniswap"},
+        "defillama_dex_volume": {"protocol": "uniswap-v3"}
       }
     },
     {
@@ -116,7 +115,8 @@
       "providers": {
         "coinmetrics": {"asset": "aave", "metrics": "PriceUSD,CapMrktCurUSD,SplyCur,FlowInExNtv,FlowOutExNtv"},
         "coingecko": {"coin_id": "aave"},
-        "defillama_protocol": {"protocol": "aave"}
+        "defillama_protocol": {"protocol": "aave"},
+        "defillama_fees": {"protocol": "aave"}
       }
     },
     {
@@ -126,7 +126,9 @@
       "date_range": {"start": "2021-01-01", "end": "2026-01-01"},
       "providers": {
         "coingecko": {"coin_id": "curve-dao-token"},
-        "defillama_protocol": {"protocol": "curve-dex"}
+        "defillama_protocol": {"protocol": "curve-dex"},
+        "defillama_fees": {"protocol": "curve-dex"},
+        "defillama_dex_volume": {"protocol": "curve-dex"}
       }
     },
     {
@@ -136,7 +138,8 @@
       "date_range": {"start": "2021-01-01", "end": "2026-01-01"},
       "providers": {
         "coingecko": {"coin_id": "pendle"},
-        "defillama_protocol": {"protocol": "pendle"}
+        "defillama_protocol": {"protocol": "pendle"},
+        "defillama_fees": {"protocol": "pendle"}
       }
     },
     {
@@ -146,7 +149,8 @@
       "date_range": {"start": "2024-01-01", "end": "2026-01-01"},
       "providers": {
         "coingecko": {"coin_id": "morpho"},
-        "defillama_protocol": {"protocol": "morpho"}
+        "defillama_protocol": {"protocol": "morpho-v1"},
+        "defillama_fees": {"protocol": "morpho-v1"}
       }
     },
     {
@@ -156,7 +160,9 @@
       "date_range": {"start": "2023-08-01", "end": "2026-01-01"},
       "providers": {
         "coingecko": {"coin_id": "aerodrome-finance"},
-        "defillama_protocol": {"protocol": "aerodrome-finance"}
+        "defillama_protocol": {"protocol": "aerodrome-slipstream"},
+        "defillama_fees": {"protocol": "aerodrome-slipstream"},
+        "defillama_dex_volume": {"protocol": "aerodrome-slipstream"}
       }
     },
     {
@@ -176,7 +182,8 @@
       "date_range": {"start": "2024-04-01", "end": "2026-01-01"},
       "providers": {
         "coingecko": {"coin_id": "ethena"},
-        "defillama_protocol": {"protocol": "ethena"}
+        "defillama_protocol": {"protocol": "ethena"},
+        "defillama_fees": {"protocol": "ethena"}
       }
     },
     {
@@ -186,7 +193,9 @@
       "date_range": {"start": "2024-01-01", "end": "2026-01-01"},
       "providers": {
         "coingecko": {"coin_id": "jupiter-exchange-solana"},
-        "defillama_protocol": {"protocol": "jupiter"}
+        "defillama_protocol": {"protocol": "jupiter"},
+        "defillama_fees": {"protocol": "jupiter"},
+        "defillama_dex_volume": {"protocol": "jupiter"}
       }
     },
     {
@@ -196,7 +205,8 @@
       "date_range": {"start": "2021-01-01", "end": "2026-01-01"},
       "providers": {
         "coinmetrics": {"asset": "usdc", "metrics": "PriceUSD,CapMrktCurUSD,SplyCur,TxCnt,TxTfrCnt,FlowInExNtv,FlowOutExNtv"},
-        "coingecko": {"coin_id": "usd-coin"}
+        "coingecko": {"coin_id": "usd-coin"},
+        "defillama_stablecoin": {"stablecoin_id": 2}
       }
     },
     {
@@ -206,7 +216,8 @@
       "date_range": {"start": "2021-01-01", "end": "2026-01-01"},
       "providers": {
         "coinmetrics": {"asset": "usdt", "metrics": "PriceUSD,CapMrktCurUSD,SplyCur,TxCnt,TxTfrCnt,FlowInExNtv,FlowOutExNtv"},
-        "coingecko": {"coin_id": "tether"}
+        "coingecko": {"coin_id": "tether"},
+        "defillama_stablecoin": {"stablecoin_id": 1}
       }
     },
     {
@@ -215,7 +226,9 @@
       "category": "stablecoin",
       "date_range": {"start": "2024-02-01", "end": "2026-01-01"},
       "providers": {
-        "coingecko": {"coin_id": "ethena-usde"}
+        "coingecko": {"coin_id": "ethena-usde"},
+        "defillama_stablecoin": {"stablecoin_id": 146},
+        "defillama_protocol": {"protocol": "ethena"}
       }
     },
     {
@@ -261,7 +274,6 @@
       "category": "alt",
       "date_range": {"start": "2021-01-01", "end": "2026-01-01"},
       "providers": {
-        "coinmetrics": {"asset": "shib", "metrics": "PriceUSD,CapMrktCurUSD,SplyCur"},
         "coingecko": {"coin_id": "shiba-inu"}
       }
     }

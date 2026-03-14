@@ -85,9 +85,17 @@ class DefiLlamaClient:
     # Stablecoins
     # ------------------------------------------------------------------
 
-    def get_stablecoin_charts(self, chain: str = "all") -> List[Dict]:
-        """GET /stablecoincharts/{chain} on stablecoins.llama.fi."""
-        return self._get(f"{self.stablecoins_base}/stablecoincharts/{chain}")
+    def get_stablecoin_charts(self, chain: str = "all", stablecoin_id: Optional[int] = None) -> List[Dict]:
+        """GET /stablecoincharts/{chain} on stablecoins.llama.fi.
+
+        Args:
+            chain: Chain name or "all" for aggregate.
+            stablecoin_id: Optional DefiLlama stablecoin ID to filter to a single stablecoin.
+        """
+        params = {}
+        if stablecoin_id is not None:
+            params["stablecoin"] = stablecoin_id
+        return self._get(f"{self.stablecoins_base}/stablecoincharts/{chain}", params=params or None)
 
     # ------------------------------------------------------------------
     # Coin prices

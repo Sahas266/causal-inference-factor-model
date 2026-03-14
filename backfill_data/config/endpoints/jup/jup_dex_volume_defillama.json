@@ -1,6 +1,6 @@
 {
-  "endpoint_id": "pol_asset_metrics_coinmetrics",
-  "description": "Polygon core market and on-chain metrics from CoinMetrics",
+  "endpoint_id": "jup_dex_volume_defillama",
+  "description": "Jupiter daily DEX volume from DefiLlama",
   "table": "asset_metrics",
   "primary_keys": [
     "provider",
@@ -9,21 +9,20 @@
     "time"
   ],
   "date_range": {
-    "start": "2021-01-01",
+    "start": "2024-01-01",
     "end": "2026-01-01"
   },
   "providers": [
     {
-      "name": "coinmetrics",
+      "name": "defillama",
       "enabled": true,
-      "priority": 1,
+      "priority": 2,
       "config": {
-        "endpoint_type": "timeseries/asset-metrics",
+        "endpoint_type": "dex/summary",
         "params": {
-          "assets": "matic",
-          "metrics": "PriceUSD,CapMrktCurUSD,TxCnt,AdrActCnt,SplyCur",
-          "frequency": "1d",
-          "page_size": 10000
+          "schema_type": "dex_volumes",
+          "protocol": "jupiter",
+          "asset": "jup"
         }
       }
     }

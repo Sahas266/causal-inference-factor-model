@@ -26,9 +26,7 @@ import os
 import sys
 import math
 import logging
-from datetime import datetime, timezone
-from decimal import Decimal, InvalidOperation
-from collections import defaultdict
+from collections import Counter, defaultdict
 
 from dotenv import load_dotenv
 
@@ -79,30 +77,22 @@ def upsert_batch(records, batch_size=500):
 
 def get_all_assets_with_price():
     """Get distinct assets that have price data in asset_metrics."""
-    # Check CoinMetrics PriceUSD
-    result = client.table('asset_metrics').select('asset').eq(
-        'metric', 'PriceUSD'
-    ).eq('provider', 'coinmetrics').limit(1000).execute()
-    cm_assets = set(r['asset'] for r in result.data)
-
-    # Check CoinGecko price_usd
-    result = client.table('asset_metrics').select('asset').eq(
-        'metric', 'price_usd'
-    ).eq('provider', 'coingecko').limit(1000).execute()
-    cg_assets = set(r['asset'] for r in result.data)
-
-    return sorted(cm_assets | cg_assets)
+    assets = set()
+    for provider, metric in [('coinmetrics', 'PriceUSD'), ('coingecko', 'price_usd')]:
+        rows = fetch_all('asset_metrics', {'provider': provider, 'metric': metric}, select='asset')
+        assets.update(r['asset'] for r in rows)
+    return sorted(assets)
 
 
 def fetch_price_data(asset):
     """Fetch price data for an asset, trying CoinMetrics first then CoinGecko."""
     # Try CoinMetrics PriceUSD first
-    rows = fetch_all('asset_metrics', {'provider': 'coinmetrics', 'asset': asset, 'metric': 'PriceUSD'})
+    rows = fetch_all('asset_metrics', {'provider': 'coinmetrics', 'asset': asset, 'metric': 'PriceUSD'}, select='time,value')
     source = 'coinmetrics:PriceUSD'
 
     if len(rows) < 31:
         # Fall back to CoinGecko price_usd
-        rows = fetch_all('asset_metrics', {'provider': 'coingecko', 'asset': asset, 'metric': 'price_usd'})
+        rows = fetch_all('asset_metrics', {'provider': 'coingecko', 'asset': asset, 'metric': 'price_usd'}, select='time,value')
         source = 'coingecko:price_usd'
 
     return rows, source
@@ -178,10 +168,10 @@ def compute_dex_cex_volume_ratio():
     Output: provider=derived, asset=eth, metric=dex_cex_volume_ratio
     """
     logger.info("Fetching DefiLlama DEX volumes...")
-    dex_rows = fetch_all('asset_metrics', {'provider': 'defillama', 'metric': 'volume_usd'})
+    dex_rows = fetch_all('asset_metrics', {'provider': 'defillama', 'metric': 'volume_usd'}, select='time,value')
 
     logger.info("Fetching Dune CEX netflow...")
-    cex_rows = fetch_all('asset_metrics', {'provider': 'dune', 'metric': 'cex_netflow_usd'})
+    cex_rows = fetch_all('asset_metrics', {'provider': 'dune', 'metric': 'cex_netflow_usd'}, select='time,value')
 
     if not dex_rows or not cex_rows:
         logger.warning("Missing DEX or CEX data. Skipping ratio calculation.")
@@ -268,7 +258,6 @@ def main():
     logger.info(f"Done. Upserted {total} records with provider='derived'.")
 
     # Summary
-    from collections import Counter
     metric_counts = Counter((r['asset'], r['metric']) for r in all_records)
     for (asset, metric), count in sorted(metric_counts.items()):
         logger.info(f"  {asset}/{metric}: {count} records")

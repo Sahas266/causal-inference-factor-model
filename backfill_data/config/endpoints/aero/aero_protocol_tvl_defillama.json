@@ -21,7 +21,7 @@
         "endpoint_type": "protocol/tvl",
         "params": {
           "schema_type": "protocol_tvl",
-          "protocol": "aerodrome-finance",
+          "protocol": "aerodrome-slipstream",
           "asset": "aero"
         }
       }

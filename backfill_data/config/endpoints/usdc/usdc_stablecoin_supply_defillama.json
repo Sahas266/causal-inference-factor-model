@@ -1,6 +1,6 @@
 {
-  "endpoint_id": "coingecko_usdc_coin_data",
-  "description": "USD Coin snapshot data from CoinGecko: fdv, supply, ath, atl",
+  "endpoint_id": "usdc_stablecoin_supply_defillama",
+  "description": "USD Coin stablecoin circulating supply from DefiLlama",
   "table": "asset_metrics",
   "primary_keys": [
     "provider",
@@ -9,19 +9,20 @@
     "time"
   ],
   "date_range": {
-    "start": "2026-03-14",
-    "end": "2026-03-15"
+    "start": "2021-01-01",
+    "end": "2026-01-01"
   },
   "providers": [
     {
-      "name": "coingecko",
+      "name": "defillama",
       "enabled": true,
-      "priority": 3,
+      "priority": 2,
       "config": {
-        "endpoint_type": "coin_data",
+        "endpoint_type": "stablecoin/charts",
         "params": {
-          "schema_type": "coin_data",
-          "coin_id": "usd-coin",
+          "schema_type": "stablecoin_flow",
+          "chain": "all",
+          "stablecoin_id": 2,
           "asset": "usdc"
         }
       }
