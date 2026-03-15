@@ -62,6 +62,7 @@ class CoinGeckoProvider(DataProviderInterface):
         self.rate_limiter: Optional[CoinGeckoRateLimiter] = None
         self.transformer = CoinGeckoTransformer()
         self._initialized = False
+        self._is_pro = False
 
     @property
     def provider_name(self) -> str:
@@ -106,6 +107,7 @@ class CoinGeckoProvider(DataProviderInterface):
             safety_margin=rate_limits.get('safety_margin', 0.9),
         )
 
+        self._is_pro = is_pro
         self._initialized = True
         logger.info(f"CoinGecko provider initialised (pro={is_pro})")
 
@@ -129,15 +131,24 @@ class CoinGeckoProvider(DataProviderInterface):
 
             if endpoint_type == 'market_chart':
                 vs_currency = params.get('vs_currency', 'usd')
-                # Probe with a recent 1-day range (Demo keys limited to last 365 days)
-                probe_from = int(datetime(2025, 12, 1, tzinfo=timezone.utc).timestamp())
-                probe_to = int(datetime(2025, 12, 2, tzinfo=timezone.utc).timestamp())
-                result = self.client.get_market_chart_range(
-                    coin_id=coin_id,
-                    vs_currency=vs_currency,
-                    from_ts=probe_from,
-                    to_ts=probe_to,
-                )
+                if not self._is_pro:
+                    # Demo tier: probe with /market_chart?days=1
+                    result = self.client.get_market_chart_days(
+                        coin_id=coin_id,
+                        vs_currency=vs_currency,
+                        days=1,
+                    )
+                else:
+                    # Pro tier: probe with yesterday's 1-day range
+                    now = datetime.now(timezone.utc)
+                    probe_from = int((now - timedelta(days=2)).timestamp())
+                    probe_to = int((now - timedelta(days=1)).timestamp())
+                    result = self.client.get_market_chart_range(
+                        coin_id=coin_id,
+                        vs_currency=vs_currency,
+                        from_ts=probe_from,
+                        to_ts=probe_to,
+                    )
                 n_prices = len(result.get('prices', []))
                 return ValidationResult(
                     valid=True,
@@ -182,15 +193,24 @@ class CoinGeckoProvider(DataProviderInterface):
 
         if endpoint_type == 'market_chart':
             vs_currency = params.get('vs_currency', 'usd')
-            from_ts = int(start_time.timestamp())
-            to_ts = int(end_time.timestamp())
 
-            raw = self.client.get_market_chart_range(
-                coin_id=coin_id,
-                vs_currency=vs_currency,
-                from_ts=from_ts,
-                to_ts=to_ts,
-            )
+            if not self._is_pro:
+                # Free/demo tier: use /market_chart?days=365 (last ~365 days)
+                raw = self.client.get_market_chart_days(
+                    coin_id=coin_id,
+                    vs_currency=vs_currency,
+                    days=365,
+                )
+            else:
+                from_ts = int(start_time.timestamp())
+                to_ts = int(end_time.timestamp())
+                raw = self.client.get_market_chart_range(
+                    coin_id=coin_id,
+                    vs_currency=vs_currency,
+                    from_ts=from_ts,
+                    to_ts=to_ts,
+                )
+
             return FetchResult(
                 data=[raw],
                 next_cursor=None,
@@ -224,79 +244,77 @@ class CoinGeckoProvider(DataProviderInterface):
         schema_type = params.get('schema_type', 'market_chart')
         asset_hint = params.get('asset', '')
 
-        if endpoint_type == 'coin_data':
-            # Single call, no chunking needed
-            self.rate_limiter.acquire()
-            try:
-                result = self.fetch_data_batch(endpoint_config, start_time, end_time)
-            except Exception as e:
-                error_info = self.handle_error(e, {'endpoint_config': endpoint_config})
-                if error_info.get('retry'):
-                    wait = error_info.get('wait_seconds', 10)
-                    logger.warning(f"Retrying after {wait}s...")
-                    time.sleep(wait)
-                    result = self.fetch_data_batch(endpoint_config, start_time, end_time)
-                else:
-                    raise
-
-            raw_payload = result.data[0] if result.data else {}
-            if raw_payload:
-                standard = self.transformer.transform(
-                    raw_payload,
-                    schema_type=schema_type,
-                    start_time=start_time,
-                    end_time=end_time,
-                    asset_hint=asset_hint,
-                )
-                if standard:
-                    logger.info(f"coin_data: {len(standard)} records")
-                    yield standard
+        if endpoint_type == 'coin_data' or not self._is_pro:
+            # Single call: coin_data snapshot or demo tier days=365
+            label = 'coin_data' if endpoint_type == 'coin_data' else 'demo tier'
+            records = self._fetch_chunk(
+                endpoint_config, start_time, end_time, schema_type, asset_hint, label,
+            )
+            if records:
+                yield records
             return
 
-        # market_chart: chunk into CHUNK_DAYS windows to avoid timeouts
+        # Pro tier: chunk into CHUNK_DAYS windows to avoid timeouts
         chunk_start = start_time
         chunk_num = 0
 
         while chunk_start < end_time:
             chunk_end = min(chunk_start + timedelta(days=CHUNK_DAYS), end_time)
             chunk_num += 1
+            label = f"chunk {chunk_num} ({chunk_start.date()} -> {chunk_end.date()})"
 
-            self.rate_limiter.acquire()
-
-            try:
-                result = self.fetch_data_batch(endpoint_config, chunk_start, chunk_end)
-            except Exception as e:
-                error_info = self.handle_error(e, {'endpoint_config': endpoint_config})
-                if error_info.get('retry'):
-                    wait = error_info.get('wait_seconds', 10)
-                    logger.warning(f"Retrying chunk {chunk_num} after {wait}s...")
-                    time.sleep(wait)
-                    try:
-                        result = self.fetch_data_batch(endpoint_config, chunk_start, chunk_end)
-                    except Exception:
-                        raise
-                else:
-                    raise
-
-            raw_payload = result.data[0] if result.data else {}
-            if raw_payload:
-                standard = self.transformer.transform(
-                    raw_payload,
-                    schema_type=schema_type,
-                    start_time=chunk_start,
-                    end_time=chunk_end,
-                    asset_hint=asset_hint,
-                )
-                if standard:
-                    logger.info(
-                        f"Chunk {chunk_num} ({chunk_start.date()} -> {chunk_end.date()}): "
-                        f"{len(standard)} records"
-                    )
-                    yield standard
+            records = self._fetch_chunk(
+                endpoint_config, chunk_start, chunk_end, schema_type, asset_hint, label,
+            )
+            if records:
+                yield records
 
             chunk_start = chunk_end
 
         logger.info(f"CoinGecko stream complete after {chunk_num} chunk(s)")
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
+    def _fetch_chunk(
+        self,
+        endpoint_config: Dict,
+        start_time: datetime,
+        end_time: datetime,
+        schema_type: str,
+        asset_hint: str,
+        label: str,
+    ) -> Optional[List[Dict]]:
+        """Fetch a single chunk with retry, transform, and return records."""
+        self.rate_limiter.acquire()
+        try:
+            result = self.fetch_data_batch(endpoint_config, start_time, end_time)
+        except Exception as e:
+            error_info = self.handle_error(e, {'endpoint_config': endpoint_config})
+            if error_info.get('retry'):
+                wait = error_info.get('wait_seconds', 10)
+                logger.warning(f"Retrying {label} after {wait}s...")
+                time.sleep(wait)
+                result = self.fetch_data_batch(endpoint_config, start_time, end_time)
+            else:
+                raise
+
+        raw_payload = result.data[0] if result.data else {}
+        if not raw_payload:
+            return None
+
+        standard = self.transformer.transform(
+            raw_payload,
+            schema_type=schema_type,
+            start_time=start_time,
+            end_time=end_time,
+            asset_hint=asset_hint,
+        )
+        if standard:
+            logger.info(f"CoinGecko {label}: {len(standard)} records")
+            return standard
+        return None
 
     # ------------------------------------------------------------------
     # Schema

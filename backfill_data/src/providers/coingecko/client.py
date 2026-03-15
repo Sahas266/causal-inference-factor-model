@@ -81,6 +81,26 @@ class CoinGeckoClient:
         }
         return self._get(url, params)
 
+    def get_market_chart_days(
+        self,
+        coin_id: str,
+        vs_currency: str = "usd",
+        days: int = 365,
+    ) -> Dict:
+        """
+        GET /coins/{id}/market_chart?days=N
+
+        Works on the free/demo tier (up to 365 days from now).
+        Returns the same shape as get_market_chart_range.
+        """
+        url = f"{self.base_url}/coins/{coin_id}/market_chart"
+        params = {
+            'vs_currency': vs_currency,
+            'days': days,
+            'interval': 'daily',
+        }
+        return self._get(url, params)
+
     # ------------------------------------------------------------------
     # Coin data (snapshot)
     # ------------------------------------------------------------------

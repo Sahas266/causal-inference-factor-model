@@ -21,7 +21,7 @@
         "endpoint_type": "chain/tvl",
         "params": {
           "schema_type": "chain_tvl",
-          "chain": "Hyperliquid",
+          "chain": "Hyperliquid L1",
           "asset": "hype"
         }
       }

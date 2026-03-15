@@ -50,7 +50,7 @@
       "category": "l1",
       "date_range": {"start": "2021-01-01", "end": "2026-01-01"},
       "providers": {
-        "coinmetrics": {"asset": "xrp", "metrics": "PriceUSD,CapMrktCurUSD,TxCnt,AdrActCnt,SplyCur,FeeTotNtv,IssTotNtv,FlowInExNtv,FlowOutExNtv,TxTfrCnt"},
+        "coinmetrics": {"asset": "xrp", "metrics": "PriceUSD,CapMrktCurUSD,TxCnt,AdrActCnt,SplyCur,FeeTotNtv,TxTfrCnt"},
         "coingecko": {"coin_id": "ripple"}
       }
     },
@@ -100,7 +100,7 @@
       "category": "defi",
       "date_range": {"start": "2021-01-01", "end": "2026-01-01"},
       "providers": {
-        "coinmetrics": {"asset": "uni", "metrics": "PriceUSD,CapMrktCurUSD,SplyCur,FlowInExNtv,FlowOutExNtv"},
+        "coinmetrics": {"asset": "uni", "metrics": "PriceUSD,CapMrktCurUSD,SplyCur"},
         "coingecko": {"coin_id": "uniswap"},
         "defillama_protocol": {"protocol": "uniswap"},
         "defillama_fees": {"protocol": "uniswap"},
@@ -113,7 +113,7 @@
       "category": "defi",
       "date_range": {"start": "2021-01-01", "end": "2026-01-01"},
       "providers": {
-        "coinmetrics": {"asset": "aave", "metrics": "PriceUSD,CapMrktCurUSD,SplyCur,FlowInExNtv,FlowOutExNtv"},
+        "coinmetrics": {"asset": "aave", "metrics": "PriceUSD,CapMrktCurUSD,SplyCur"},
         "coingecko": {"coin_id": "aave"},
         "defillama_protocol": {"protocol": "aave"},
         "defillama_fees": {"protocol": "aave"}
@@ -171,7 +171,7 @@
       "category": "defi",
       "date_range": {"start": "2021-01-01", "end": "2026-01-01"},
       "providers": {
-        "coinmetrics": {"asset": "link", "metrics": "PriceUSD,CapMrktCurUSD,SplyCur,FlowInExNtv,FlowOutExNtv"},
+        "coinmetrics": {"asset": "link", "metrics": "PriceUSD,CapMrktCurUSD,SplyCur"},
         "coingecko": {"coin_id": "chainlink"}
       }
     },
@@ -204,7 +204,7 @@
       "category": "stablecoin",
       "date_range": {"start": "2021-01-01", "end": "2026-01-01"},
       "providers": {
-        "coinmetrics": {"asset": "usdc", "metrics": "PriceUSD,CapMrktCurUSD,SplyCur,TxCnt,TxTfrCnt,FlowInExNtv,FlowOutExNtv"},
+        "coinmetrics": {"asset": "usdc", "metrics": "PriceUSD,CapMrktCurUSD,SplyCur,TxCnt,TxTfrCnt"},
         "coingecko": {"coin_id": "usd-coin"},
         "defillama_stablecoin": {"stablecoin_id": 2}
       }
@@ -215,7 +215,7 @@
       "category": "stablecoin",
       "date_range": {"start": "2021-01-01", "end": "2026-01-01"},
       "providers": {
-        "coinmetrics": {"asset": "usdt", "metrics": "PriceUSD,CapMrktCurUSD,SplyCur,TxCnt,TxTfrCnt,FlowInExNtv,FlowOutExNtv"},
+        "coinmetrics": {"asset": "usdt", "metrics": "PriceUSD,CapMrktCurUSD,SplyCur,TxCnt,TxTfrCnt"},
         "coingecko": {"coin_id": "tether"},
         "defillama_stablecoin": {"stablecoin_id": 1}
       }
@@ -238,7 +238,7 @@
       "date_range": {"start": "2024-11-01", "end": "2026-01-01"},
       "providers": {
         "coingecko": {"coin_id": "hyperliquid"},
-        "defillama_chain": {"chain": "Hyperliquid"}
+        "defillama_chain": {"chain": "Hyperliquid L1"}
       }
     },
     {

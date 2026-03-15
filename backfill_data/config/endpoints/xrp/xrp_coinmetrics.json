@@ -21,7 +21,7 @@
         "endpoint_type": "timeseries/asset-metrics",
         "params": {
           "assets": "xrp",
-          "metrics": "PriceUSD,CapMrktCurUSD,TxCnt,AdrActCnt,SplyCur,FeeTotNtv,IssTotNtv,FlowInExNtv,FlowOutExNtv,TxTfrCnt",
+          "metrics": "PriceUSD,CapMrktCurUSD,TxCnt,AdrActCnt,SplyCur,FeeTotNtv,TxTfrCnt",
           "frequency": "1d",
           "page_size": 10000
         }

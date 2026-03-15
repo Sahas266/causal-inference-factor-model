@@ -1,0 +1,31 @@
+{
+  "endpoint_id": "dune_bnb_block_congestion",
+  "description": "Daily BNB Chain block congestion and MEV proxy metrics: gas utilization, base fee stats",
+  "table": "asset_metrics",
+  "primary_keys": ["provider", "asset", "metric", "time"],
+  "date_range": {
+    "start": "2021-01-01",
+    "end": "2026-01-01"
+  },
+  "providers": [
+    {
+      "name": "dune",
+      "enabled": true,
+      "priority": 4,
+      "config": {
+        "endpoint_type": "query_results",
+        "params": {
+          "schema_type": "query_results",
+          "query_id": 6831685,
+          "asset": "bnb",
+          "limit": 10000
+        }
+      }
+    }
+  ],
+  "fallback_strategy": "use_all",
+  "deduplication": {
+    "strategy": "prefer_priority",
+    "conflict_resolution": "keep_highest_priority"
+  }
+}

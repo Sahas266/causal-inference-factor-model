@@ -1,0 +1,30 @@
+{
+  "endpoint_id": "fred_money_supply",
+  "description": "US money supply and Fed balance sheet from FRED: M2, Fed total assets, reverse repo",
+  "table": "asset_metrics",
+  "primary_keys": ["provider", "asset", "metric", "time"],
+  "date_range": {
+    "start": "2021-01-01",
+    "end": "2026-01-01"
+  },
+  "providers": [
+    {
+      "name": "fred",
+      "enabled": true,
+      "priority": 1,
+      "config": {
+        "endpoint_type": "series/observations",
+        "params": {
+          "schema_type": "series_observations",
+          "series_ids": "M2SL,WALCL,RRPONTSYD",
+          "asset": "macro"
+        }
+      }
+    }
+  ],
+  "fallback_strategy": "use_all",
+  "deduplication": {
+    "strategy": "prefer_priority",
+    "conflict_resolution": "keep_highest_priority"
+  }
+}

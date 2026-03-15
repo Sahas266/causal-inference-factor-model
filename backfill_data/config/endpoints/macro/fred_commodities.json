@@ -1,0 +1,30 @@
+{
+  "endpoint_id": "fred_commodities",
+  "description": "Commodity prices from FRED: WTI crude oil, all-commodities PPI",
+  "table": "asset_metrics",
+  "primary_keys": ["provider", "asset", "metric", "time"],
+  "date_range": {
+    "start": "2021-01-01",
+    "end": "2026-01-01"
+  },
+  "providers": [
+    {
+      "name": "fred",
+      "enabled": true,
+      "priority": 1,
+      "config": {
+        "endpoint_type": "series/observations",
+        "params": {
+          "schema_type": "series_observations",
+          "series_ids": "DCOILWTICO,PPIACO",
+          "asset": "macro"
+        }
+      }
+    }
+  ],
+  "fallback_strategy": "use_all",
+  "deduplication": {
+    "strategy": "prefer_priority",
+    "conflict_resolution": "keep_highest_priority"
+  }
+}

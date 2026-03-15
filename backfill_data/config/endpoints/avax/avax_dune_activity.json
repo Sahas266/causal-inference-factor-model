@@ -1,0 +1,31 @@
+{
+  "endpoint_id": "dune_avax_activity_fees",
+  "description": "Daily Avalanche C-Chain transaction count, fees, and burn from Dune",
+  "table": "asset_metrics",
+  "primary_keys": ["provider", "asset", "metric", "time"],
+  "date_range": {
+    "start": "2021-01-01",
+    "end": "2026-01-01"
+  },
+  "providers": [
+    {
+      "name": "dune",
+      "enabled": true,
+      "priority": 4,
+      "config": {
+        "endpoint_type": "query_results",
+        "params": {
+          "schema_type": "query_results",
+          "query_id": 6831000,
+          "asset": "avax",
+          "limit": 10000
+        }
+      }
+    }
+  ],
+  "fallback_strategy": "use_all",
+  "deduplication": {
+    "strategy": "prefer_priority",
+    "conflict_resolution": "keep_highest_priority"
+  }
+}

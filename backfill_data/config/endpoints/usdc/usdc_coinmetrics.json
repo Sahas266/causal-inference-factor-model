@@ -21,7 +21,7 @@
         "endpoint_type": "timeseries/asset-metrics",
         "params": {
           "assets": "usdc",
-          "metrics": "PriceUSD,CapMrktCurUSD,SplyCur,TxCnt,TxTfrCnt,FlowInExNtv,FlowOutExNtv",
+          "metrics": "PriceUSD,CapMrktCurUSD,SplyCur,TxCnt,TxTfrCnt",
           "frequency": "1d",
           "page_size": 10000
         }

@@ -1,0 +1,30 @@
+{
+  "endpoint_id": "fred_interest_rates",
+  "description": "US interest rates and yield curve from FRED: Fed Funds, 2Y/10Y/30Y Treasury, yield spreads",
+  "table": "asset_metrics",
+  "primary_keys": ["provider", "asset", "metric", "time"],
+  "date_range": {
+    "start": "2021-01-01",
+    "end": "2026-01-01"
+  },
+  "providers": [
+    {
+      "name": "fred",
+      "enabled": true,
+      "priority": 1,
+      "config": {
+        "endpoint_type": "series/observations",
+        "params": {
+          "schema_type": "series_observations",
+          "series_ids": "DFF,DGS2,DGS10,DGS30,DFEDTARU,T10Y2Y,T10Y3M",
+          "asset": "macro"
+        }
+      }
+    }
+  ],
+  "fallback_strategy": "use_all",
+  "deduplication": {
+    "strategy": "prefer_priority",
+    "conflict_resolution": "keep_highest_priority"
+  }
+}

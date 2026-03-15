@@ -17,7 +17,7 @@ This monorepo contains three interconnected systems for a **causal inference fac
 - **`uvloop` is Windows-incompatible** — always keep it conditional: `uvloop>=0.19.0; sys_platform != "win32"` in `requirements.txt`
 - **Supabase**: used as the database backend across all modules (project ID: `jnulpcqpftnwvknwuqpa`)
 - **Required env vars** (in `backfill_data/.env`): `SUPABASE_URL`, `SUPABASE_KEY`, `ALLIUM_API_KEY`
-- **Optional env vars**: `COINMETRICS_API_KEY` (community tier works without it), `DEFILLAMA_API_KEY` (Pro endpoints only), `DUNE_API_KEY`, `COINGECKO_API_KEY` (Pro tier for full history)
+- **Optional env vars**: `COINMETRICS_API_KEY` (community tier works without it), `DEFILLAMA_API_KEY` (Pro endpoints only), `DUNE_API_KEY`, `COINGECKO_API_KEY` (Pro tier for full history), `FRED_API_KEY` (FRED economic data)
 - **Supabase auth**: Use `service_role` key (not `sbp_...` management token) for data API writes
 
 ## Commands
@@ -34,16 +34,25 @@ cd backfill_data
 python backfill.py --list-providers
 
 # Validate an endpoint config (no data fetch)
-python backfill.py --config config/endpoints/btc_metrics.json --validate-only
+python backfill.py --config config/endpoints/btc/btc_coinmetrics.json --validate-only
 
-# Run a specific endpoint backfill
-python backfill.py --config config/endpoints/btc_metrics.json
+# Run a single coin's endpoints
+python backfill.py --config config/endpoints/sol/
 
-# Run all ETH endpoints (primary set)
-python backfill.py --config config/endpoints/eth/
+# Run all endpoints recursively (all 26 coins)
+python backfill.py --config config/endpoints/ --recursive
 
-# Run ETH fallback endpoints (Allium)
-python backfill.py --config config/endpoints/eth_fallback/
+# Run all coins via orchestration script
+python scripts/backfill_all_coins.py                        # all coins
+python scripts/backfill_all_coins.py --asset sol,btc        # specific coins
+python scripts/backfill_all_coins.py --dry-run              # list what would run
+
+# Generate endpoint configs from coin manifest
+python scripts/generate_coin_configs.py
+
+# Compute derived metrics (volatility, ratios)
+python scripts/compute_derived_metrics.py                   # all assets with price data
+python scripts/compute_derived_metrics.py --asset btc       # single asset
 
 # Run per-provider convenience scripts
 python scripts/run_provider_backfill.py
@@ -127,14 +136,20 @@ CLI (backfill.py)
 - `src/providers/defillama/` — TVL, DEX volumes, fees, stablecoin flow, coin prices (free + Pro)
 - `src/providers/coingecko/` — market chart (price/mcap/volume timeseries) and coin data (ath/atl/supply snapshots)
 - `src/providers/dune/` — pre-saved query results from Dune Analytics (`DUNE_API_KEY`)
+- `src/providers/fred/` — FRED economic data series (`FRED_API_KEY`)
 - `src/schemas/` — Pydantic models for each data type
 - `config/providers/{name}.json` — provider-level config (API URL, rate limits, retry policy)
-- `config/endpoints/{name}.json` — endpoint configs specifying table, primary keys, provider params
-- `config/endpoints/eth/` — ETH-specific endpoint pack (12 configs across CoinMetrics, DefiLlama, CoinGecko, Dune)
+- `config/coin_manifest.json` — master 26-coin definitions (tickers, provider IDs, date ranges)
+- `config/endpoints/{coin}/` — per-coin endpoint configs (25 directories, ~78 generated configs)
+- `config/endpoints/macro/` — FRED macro endpoint configs (8 configs, 30 series)
+- `config/endpoints/eth/` — ETH-specific endpoint pack (17 configs across CoinMetrics, DefiLlama, CoinGecko, Dune)
 - `config/endpoints/eth_disabled/` — CoinMetrics derivatives endpoints blocked on community tier (5 configs)
 - `config/endpoints/eth_fallback/` — Allium fallback endpoints for ETH price data
+- `scripts/generate_coin_configs.py` — reads manifest, generates per-coin endpoint configs
+- `scripts/backfill_all_coins.py` — orchestrates backfill across all coins (--asset, --dry-run)
+- `scripts/compute_derived_metrics.py` — computes realized volatility, DEX/CEX ratio (--asset)
 - `scripts/` — Per-provider convenience backfill scripts
-- `ETH_DATA_POINTS_CATALOG.md` — Prioritized ETH metrics catalog with provider mapping
+- `BACKFILL_STATUS.md` — comprehensive status of all 26 coins across all providers
 
 **Adding a new provider** (4 steps only):
 1. `mkdir src/providers/{name}` with `provider.py`, `client.py`, `rate_limiter.py`, `transformer.py`, `__init__.py`
@@ -176,8 +191,8 @@ CLI (backfill.py)
 *CoinGecko* (`config/providers/coingecko.json`) — Pro API via `COINGECKO_API_KEY`:
 - `market_chart` — `/coins/{id}/market_chart/range`: daily price, market cap, volume timeseries
 - `coin_data` — `/coins/{id}`: snapshot data (fdv, ath, atl, total_supply, max_supply)
-- Free tier: `api.coingecko.com/api/v3` (30 req/min, last 365 days only)
-- Pro tier: `pro-api.coingecko.com/api/v3` (500 req/min, full historical range)
+- Free tier: `api.coingecko.com/api/v3` (30 req/min, last 365 days via `/market_chart?days=365`)
+- Pro tier: `pro-api.coingecko.com/api/v3` (500 req/min, full historical range via `/market_chart/range`)
 - CoinGecko MCP also available via `.mcp.json` for interactive queries
 - Endpoint configs: `config/endpoints/eth/eth_coingecko.json`
 
@@ -187,8 +202,23 @@ CLI (backfill.py)
 - Each endpoint config specifies a `query_id`
 - Rate limit: 40 req/min on standard tier
 - Dune CLI installed at `~/.local/bin/dune.exe` for interactive query management
-- Active queries: 6811495 (staking), 6811496 (burn), 6811497 (whales), 6811498 (bridges), 6811499 (CEX flows)
-- Endpoint configs: `config/endpoints/eth/eth_dune_*.json` (5 configs)
+- Active queries: 6811495 (staking), 6811496 (burn), 6811497 (whales), 6811498 (bridges), 6811499 (CEX flows), 6815240 (staking APR), 6815241 (net issuance), 6815242 (L2 settlement), 6815244 (stablecoin netflow), 6830995 (SOL activity), 6830996 (SOL DEX), 6830997 (SOL staking), 6830998 (BNB activity), 6830999 (BNB DEX), 6831000 (AVAX activity), 6831001 (AVAX DEX)
+- Endpoint configs: `config/endpoints/eth/eth_dune_*.json` (12 configs), `config/endpoints/sol/sol_dune_*.json` (3), `config/endpoints/bnb/bnb_dune_*.json` (5), `config/endpoints/avax/avax_dune_*.json` (5)
+
+*FRED* (`config/providers/fred.json`) — requires `FRED_API_KEY`:
+- `series/observations` — `/fred/series/observations`: historical economic time series
+- Supports comma-separated `series_ids` per config — each series fetched independently
+- Rate limit: 120 req/min
+- 30 series across 8 endpoint configs in `config/endpoints/macro/`:
+  - `fred_interest_rates.json`: DFF, DGS2, DGS10, DGS30, DFEDTARU, T10Y2Y, T10Y3M
+  - `fred_inflation.json`: CPIAUCSL, CPILFESL, PCEPI, PCEPILFE, T5YIE, T10YIE, MICH
+  - `fred_money_supply.json`: M2SL, WALCL, RRPONTSYD
+  - `fred_risk_volatility.json`: VIXCLS, BAMLH0A0HYM2, TEDRATE
+  - `fred_labor_growth.json`: UNRATE, PAYEMS, ICSA, GDPC1, INDPRO
+  - `fred_commodities.json`: DCOILWTICO, PPIACO
+  - `fred_financial_conditions.json`: NFCI, STLFSI2
+  - `fred_dollar.json`: DTWEXBGS
+- All stored with `asset='macro'`, `metric=<series_id>`, date range 2021-01-01 to 2026-01-01
 
 ### causal_portfolio — SCM-Based Portfolio Model
 
@@ -211,27 +241,29 @@ FastAPI + Celery + PostgreSQL/TimescaleDB pipeline collecting 7 on-chain indicat
 - `app/core/` — DB, cache (Redis), config, exceptions
 - `docker/docker-compose.yml` — containerized deployment
 
-## ETH Backfill Status
+## Backfill Status (26 Coins)
 
-Current state (as of March 11, 2026): **110,654 rows** in `asset_metrics` across 6 providers, covering 2021-01-01 → 2026-01-01. See `ETH_BACKFILL_PLAN.md`, `ETH_BACKFILL_WORKLOG.md`, and `ETH_DATA_POINTS_CATALOG.md` for details.
+Current state (as of March 15, 2026): **~430,300 rows** in `asset_metrics` across 7 providers, covering 26 target coins + macro data. See `BACKFILL_STATUS.md` for the full per-coin breakdown.
 
-**Backfilled data (6 providers, 59 distinct metrics):**
-- *CoinMetrics* (23,751 rows, 13 metrics): PriceUSD, CapMrktCurUSD, TxCnt, AdrActCnt, SplyCur, BlkCnt, HashRate, ROI30d, FeeTotNtv, IssTotNtv, FlowInExNtv, FlowOutExNtv, TxTfrCnt
-- *DefiLlama* (21,201 rows, 4 metrics): tvl_usd, volume_usd, fees_usd, stablecoin_circulating_usd — across ethereum chain + 5 protocols
-- *Allium* (9,135 rows, 5 metrics): WETH OHLCV (price_usd, open/high/low/close_usd) as fallback
-- *CoinGecko* (1,372 rows, 7 metrics): price_usd, market_cap_usd, spot_volume_usd_24h (last 365 days), fdv_usd, total_supply, ath_usd, atl_usd (snapshots)
-- *Dune* (49,752 rows, 28 metrics): 9 queries — staking, burn, whales, bridges, CEX flows, staking APR, net issuance, L2 settlement, stablecoin netflow
-- *Derived* (5,443 rows, 3 metrics): realized_volatility_7d, realized_volatility_30d (from CoinMetrics PriceUSD), dex_cex_volume_ratio (from DefiLlama volume_usd / Dune cex_netflow_usd)
+**26 coins:** USDC, USDT, USDe, BTC, ETH, BNB, HYPE, XRP, PENDLE, UNI, JUP, TAO, LINK, ZEC, ENA, MORPHO, AERO, SOL, AVAX, POL, WLFI, CRV, AAVE, PEPE, SHIB, DOGE
 
-**Dune query IDs:** 6811495 (staking), 6811496 (burn), 6811497 (whales), 6811498 (bridges), 6811499 (CEX flows), 6815240 (staking APR), 6815241 (net issuance), 6815242 (L2 settlement), 6815244 (stablecoin netflow)
+**Rows by provider:**
+- *CoinMetrics* (140,679 rows): btc, eth, bnb, xrp, doge, zec, aave, uni, link, usdc, usdt — 3-13 metrics each
+- *Dune* (138,137 rows): ETH (42 metrics, 12 queries) + SOL/BNB/AVAX (activity, DEX volume, SOL staking, block congestion, liquidations, flashloans)
+- *Derived* (49,330 rows): all 26 coins — realized_volatility_7d/30d, dex_cex_volume_ratio (ETH only)
+- *DefiLlama* (40,667 rows): chain TVL (btc, bnb, sol, avax, pol, hype) + protocol TVL (aave, uni, crv, pendle, morpho, ena, jup) + ETH ecosystem
+- *CoinGecko* (22,772 rows): all 26 coins — snapshots + market_chart timeseries (last 365 days via free tier)
+- *FRED* (20,452 rows): 30 macro series (interest rates, inflation, money supply, risk, labor, commodities, dollar)
+- *Allium* (18,270 rows): BTC + ETH OHLCV fallback
 
-**Derived metrics script:** `scripts/compute_derived_metrics.py` — computes realized volatility and DEX/CEX volume ratio from existing Supabase data, inserts with `provider='derived'`
+**Known gaps:**
+- CoinGecko Pro key: unlocks full historical range for market_chart (currently limited to last 365 days)
+- CoinMetrics Pro key: derivatives (OI, funding, liquidations), Tier 2/3 assets (SOL, AVAX, POL, SHIB)
+- Funding Basis (perp funding rates): no free source — requires CoinMetrics Pro or Hyperliquid API
 
-**Remaining limitations (require paid keys):**
-- CoinMetrics derivatives endpoints: 403 on community tier — configs in `config/endpoints/eth_disabled/`
-- CoinGecko: Demo key (`CG-` prefix) limited to last 365 days; Pro key needed for full 2021-01-01 range
+**Dune query IDs:** 6811495 (staking), 6811496 (burn), 6811497 (whales), 6811498 (bridges), 6811499 (CEX flows), 6815240 (staking APR), 6815241 (net issuance), 6815242 (L2 settlement), 6815244 (stablecoin netflow), 6830995 (SOL activity), 6830996 (SOL DEX), 6830997 (SOL staking), 6830998 (BNB activity), 6830999 (BNB DEX), 6831000 (AVAX activity), 6831001 (AVAX DEX), 6831658 (ETH block congestion/MEV), 6831661 (ETH flashloans/LP flow), 6831664 (ETH liquidations), 6831685 (BNB block congestion), 6831686 (AVAX block congestion), 6831687 (BNB liquidations), 6831688 (AVAX liquidations), 6831689 (BNB flashloans), 6831690 (AVAX flashloans)
 
-**Provider priority**: CoinMetrics > DefiLlama > CoinGecko > Allium (fallback only).
+**Provider priority**: CoinMetrics (1) > FRED (1) > DefiLlama (2) > CoinGecko (3) > Allium (4) > Derived (99).
 
 ## Supabase Schema
 

@@ -1,0 +1,23 @@
+{
+  "provider_name": "fred",
+  "display_name": "FRED (Federal Reserve Economic Data)",
+  "enabled": true,
+  "api_config": {
+    "base_url": "https://api.stlouisfed.org/fred",
+    "api_key_env": "FRED_API_KEY"
+  },
+  "rate_limits": {
+    "requests_per_window": 120,
+    "window_seconds": 60,
+    "safety_margin": 0.9
+  },
+  "retry_config": {
+    "max_attempts": 3,
+    "backoff_multiplier": 2,
+    "max_wait_seconds": 60
+  },
+  "capabilities": [
+    "series/observations"
+  ],
+  "description": "Federal Reserve Economic Data (FRED) provides US macro indicators: interest rates, inflation, employment, financial conditions, commodities. Free API key required."
+}
