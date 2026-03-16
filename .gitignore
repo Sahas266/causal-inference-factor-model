@@ -37,5 +37,15 @@ Thumbs.db
 # Type checking
 .mypy_cache/
 
+# Rust
+target/
+**/*.rs.bk
+
+# Parquet cache and pipeline outputs
+causal_model/cache/
+*.parquet
+causal_model/results.json
+causal_model/results.csv
+
 # MCP secrets
 .claude/mcp.json

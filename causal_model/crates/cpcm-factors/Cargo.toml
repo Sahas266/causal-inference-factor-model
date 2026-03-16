@@ -1,0 +1,12 @@
+[package]
+name = "cpcm-factors"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+cpcm-data = { workspace = true }
+polars = { workspace = true }
+chrono = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+anyhow = { workspace = true }

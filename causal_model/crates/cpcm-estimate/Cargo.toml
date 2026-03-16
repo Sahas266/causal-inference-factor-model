@@ -1,0 +1,12 @@
+[package]
+name = "cpcm-estimate"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+nalgebra = { workspace = true }
+statrs = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+serde = { workspace = true }
+tracing = { workspace = true }

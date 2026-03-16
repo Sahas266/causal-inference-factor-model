@@ -1,0 +1,239 @@
+use crate::dag::CausalDag;
+use crate::types::{EdgeKind, NodeKind};
+
+/// The 7 global DeFi causal factors from the CPCM paper.
+pub const GLOBAL_FACTORS: &[&str] = &[
+    "liq_flow",
+    "stable_flow",
+    "funding_basis",
+    "chain_congestion",
+    "staking_yield",
+    "mev_pressure",
+    "cex_dex_flow",
+];
+
+/// Macro factors from FRED that affect all asset returns with a 1-day lag.
+pub const MACRO_FACTORS: &[&str] = &[
+    "dff",      // Fed funds rate
+    "dgs10",    // 10-year treasury
+    "vixcls",   // VIX
+    "t10y2y",   // Yield curve slope
+    "cpiaucsl", // CPI
+    "m2sl",     // M2 money supply
+    "dtwexbgs", // Trade-weighted dollar index
+];
+
+/// Per-asset covariate suffixes. Each asset gets `{asset}_{cov}`.
+pub const ASSET_COVARIATES: &[&str] = &[
+    "whale_conc",
+    "protocol_rev",
+    "emissions",
+    "chain_activity",
+];
+
+/// Instrument definitions: (iv_name, instruments_for_factor, lag).
+pub const INSTRUMENTS: &[(&str, &str, i32)] = &[
+    ("gas_spike", "liq_flow", 1),
+    ("liquidation_level", "funding_basis", 1),
+    ("stablecoin_mint", "stable_flow", 1),
+    ("protocol_event", "chain_congestion", 1),
+];
+
+/// Build the full CPCM causal DAG for a set of assets.
+///
+/// Structure:
+/// - 7 global factors → each asset return (lag=0)
+/// - 7 macro factors → each asset return (lag=1)
+/// - 4 per-asset covariates → own asset return
+/// - F→Xi interactions (stable_flow→whale_conc, etc.)
+/// - Unobserved shocks → each asset return
+/// - Instruments → their respective treatment factors
+pub fn build_cpcm_dag(assets: &[&str]) -> CausalDag {
+    let mut dag = CausalDag::new();
+
+    // ── Global factors ───────────────────────────────────────────────
+    for &f in GLOBAL_FACTORS {
+        dag.add_node(f, NodeKind::GlobalFactor, None);
+    }
+
+    // ── Macro factors ────────────────────────────────────────────────
+    for &m in MACRO_FACTORS {
+        dag.add_node(m, NodeKind::MacroFactor, None);
+    }
+
+    // ── Instruments ──────────────────────────────────────────────────
+    for &(iv_name, treatment, lag) in INSTRUMENTS {
+        dag.add_node(iv_name, NodeKind::Instrument, None);
+        dag.add_edge(iv_name, treatment, EdgeKind::Instrumental, lag);
+    }
+
+    // ── Per-asset nodes ──────────────────────────────────────────────
+    for &asset in assets {
+        let ret = format!("{asset}_return");
+        dag.add_node(&ret, NodeKind::AssetReturn, Some(asset));
+
+        // Asset covariates → own return
+        for &cov in ASSET_COVARIATES {
+            let cov_name = format!("{asset}_{cov}");
+            dag.add_node(&cov_name, NodeKind::AssetCovariate, Some(asset));
+            dag.add_edge(&cov_name, &ret, EdgeKind::Causal, 0);
+        }
+
+        // Global factors → asset return
+        for &f in GLOBAL_FACTORS {
+            dag.add_edge(f, &ret, EdgeKind::Causal, 0);
+        }
+
+        // Macro factors → asset return (lagged 1 day)
+        for &m in MACRO_FACTORS {
+            dag.add_edge(m, &ret, EdgeKind::Causal, 1);
+        }
+
+        // ── F → Xi interactions ──────────────────────────────────────
+        // StableFlow → whale behaviour
+        dag.add_edge("stable_flow", &format!("{asset}_whale_conc"), EdgeKind::Causal, 0);
+        // Chain congestion → protocol volume/revenue
+        dag.add_edge("chain_congestion", &format!("{asset}_protocol_rev"), EdgeKind::Causal, 0);
+        // Staking yield → emissions dynamics
+        dag.add_edge("staking_yield", &format!("{asset}_emissions"), EdgeKind::Causal, 0);
+
+        // ── Unobserved shock ─────────────────────────────────────────
+        let shock = format!("{asset}_shock");
+        dag.add_node(&shock, NodeKind::UnobservedShock, Some(asset));
+        dag.add_edge(&shock, &ret, EdgeKind::Causal, 0);
+    }
+
+    debug_assert!(dag.is_dag(), "CPCM DAG has a cycle!");
+    dag
+}
+
+/// Summary of the DAG structure.
+#[derive(Debug)]
+pub struct DagSummary {
+    pub total_nodes: usize,
+    pub total_edges: usize,
+    pub global_factors: usize,
+    pub macro_factors: usize,
+    pub asset_returns: usize,
+    pub asset_covariates: usize,
+    pub instruments: usize,
+    pub unobserved_shocks: usize,
+}
+
+pub fn summarize_dag(dag: &CausalDag) -> DagSummary {
+    DagSummary {
+        total_nodes: dag.node_count(),
+        total_edges: dag.edge_count(),
+        global_factors: dag.nodes_of_kind(NodeKind::GlobalFactor).len(),
+        macro_factors: dag.nodes_of_kind(NodeKind::MacroFactor).len(),
+        asset_returns: dag.nodes_of_kind(NodeKind::AssetReturn).len(),
+        asset_covariates: dag.nodes_of_kind(NodeKind::AssetCovariate).len(),
+        instruments: dag.nodes_of_kind(NodeKind::Instrument).len(),
+        unobserved_shocks: dag.nodes_of_kind(NodeKind::UnobservedShock).len(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::dsep::d_separated;
+    use crate::identify::{check_iv_validity, backdoor_adjustment_set};
+
+    #[test]
+    fn test_build_single_asset() {
+        let dag = build_cpcm_dag(&["eth"]);
+        assert!(dag.is_dag());
+
+        let summary = summarize_dag(&dag);
+        assert_eq!(summary.global_factors, 7);
+        assert_eq!(summary.macro_factors, 7);
+        assert_eq!(summary.asset_returns, 1);
+        assert_eq!(summary.asset_covariates, 4);
+        assert_eq!(summary.instruments, 4);
+        assert_eq!(summary.unobserved_shocks, 1);
+    }
+
+    #[test]
+    fn test_build_multi_asset() {
+        let assets = ["btc", "eth", "sol"];
+        let dag = build_cpcm_dag(&assets);
+        assert!(dag.is_dag());
+
+        let summary = summarize_dag(&dag);
+        // 7 global + 7 macro + 4 instruments + 3*(1 return + 4 covariates + 1 shock)
+        assert_eq!(summary.asset_returns, 3);
+        assert_eq!(summary.asset_covariates, 12); // 4 per asset
+        assert_eq!(summary.unobserved_shocks, 3);
+    }
+
+    #[test]
+    fn test_factor_causes_return() {
+        let dag = build_cpcm_dag(&["eth"]);
+        // liq_flow should NOT be d-separated from eth_return (direct causal edge)
+        assert!(!d_separated(&dag, "liq_flow", "eth_return", &[]));
+    }
+
+    #[test]
+    fn test_macro_causes_return() {
+        let dag = build_cpcm_dag(&["eth"]);
+        assert!(!d_separated(&dag, "dff", "eth_return", &[]));
+    }
+
+    #[test]
+    fn test_asset_returns_correlated_via_common_factors() {
+        let dag = build_cpcm_dag(&["btc", "eth"]);
+        // btc_return and eth_return share all global + macro factors
+        assert!(!d_separated(&dag, "btc_return", "eth_return", &[]));
+    }
+
+    #[test]
+    fn test_asset_returns_separated_by_conditioning_on_factors() {
+        let dag = build_cpcm_dag(&["btc", "eth"]);
+        // If we condition on ALL shared causes, returns should be d-separated
+        // (ignoring unobserved shocks, which are per-asset).
+        let mut cond: Vec<&str> = GLOBAL_FACTORS.to_vec();
+        cond.extend_from_slice(MACRO_FACTORS);
+        assert!(d_separated(&dag, "btc_return", "eth_return", &cond));
+    }
+
+    #[test]
+    fn test_iv_gas_spike_valid_for_liq_flow() {
+        let dag = build_cpcm_dag(&["eth"]);
+        let result = check_iv_validity(&dag, "gas_spike", "liq_flow", "eth_return");
+        assert!(result.relevant, "gas_spike should be relevant for liq_flow");
+        // Exclusion: gas_spike → liq_flow → eth_return, but gas_spike has no direct
+        // edge to eth_return. Conditioning on liq_flow should block the path.
+        assert!(
+            result.excludable,
+            "gas_spike should be excludable given liq_flow"
+        );
+        assert!(result.valid);
+    }
+
+    #[test]
+    fn test_factor_identified_via_backdoor() {
+        let dag = build_cpcm_dag(&["eth"]);
+        // liq_flow → eth_return: no confounders (liq_flow has no parents except
+        // the instrument). Should be identifiable with empty or small adjustment set.
+        let adj = backdoor_adjustment_set(&dag, "liq_flow", "eth_return");
+        assert!(adj.is_some(), "liq_flow → eth_return should be identified");
+    }
+
+    #[test]
+    fn test_full_26_coin_dag() {
+        let assets: Vec<&str> = vec![
+            "usdc", "usdt", "usde", "btc", "eth", "bnb", "hype", "xrp", "pendle",
+            "uni", "jup", "tao", "link", "zec", "ena", "morpho", "aero", "sol",
+            "avax", "pol", "wlfi", "crv", "aave", "pepe", "shib", "doge",
+        ];
+        let dag = build_cpcm_dag(&assets);
+        assert!(dag.is_dag());
+
+        let summary = summarize_dag(&dag);
+        assert_eq!(summary.asset_returns, 26);
+        assert_eq!(summary.asset_covariates, 26 * 4);
+        assert_eq!(summary.unobserved_shocks, 26);
+        // Total nodes: 7 + 7 + 4 + 26*(1+4+1) = 174
+        assert_eq!(summary.total_nodes, 7 + 7 + 4 + 26 * 6);
+    }
+}

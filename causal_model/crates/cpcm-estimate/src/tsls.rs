@@ -1,0 +1,328 @@
+use nalgebra::{DMatrix, DVector};
+use statrs::distribution::{ContinuousCDF, ChiSquared, StudentsT};
+
+use crate::ols::{ols, project_onto};
+use crate::types::TslsResult;
+
+/// Two-Stage Least Squares estimation.
+///
+/// Estimates the causal effect of endogenous regressors on the outcome using
+/// instrumental variables.
+///
+/// # Arguments
+/// * `y` - Outcome vector (n × 1)
+/// * `x_endog` - Endogenous regressors (n × k1)
+/// * `x_exog` - Exogenous controls (n × k2), should already include intercept
+/// * `z` - Instruments (n × m), must have m >= k1
+/// * `endog_names` - Names for endogenous regressors
+/// * `exog_names` - Names for exogenous controls
+/// * `instrument_names` - Names for instruments
+pub fn tsls(
+    y: &DVector<f64>,
+    x_endog: &DMatrix<f64>,
+    x_exog: &DMatrix<f64>,
+    z: &DMatrix<f64>,
+    endog_names: &[String],
+    exog_names: &[String],
+    instrument_names: &[String],
+) -> anyhow::Result<TslsResult> {
+    let n = y.len();
+    let k1 = x_endog.ncols(); // endogenous count
+    let k2 = x_exog.ncols(); // exogenous count (includes intercept)
+    let m = z.ncols(); // instrument count
+
+    anyhow::ensure!(n == x_endog.nrows(), "x_endog row mismatch");
+    anyhow::ensure!(n == x_exog.nrows(), "x_exog row mismatch");
+    anyhow::ensure!(n == z.nrows(), "z row mismatch");
+    anyhow::ensure!(m >= k1, "Need at least as many instruments ({m}) as endogenous vars ({k1})");
+
+    // ── Stage 1: Regress each endogenous var on [Z, X_exog] ──────────
+    let z_full = hstack(&[z, x_exog]);
+    let z_full_names: Vec<String> = instrument_names
+        .iter()
+        .chain(exog_names.iter())
+        .cloned()
+        .collect();
+
+    let x_hat = project_onto(x_endog, &z_full)?;
+
+    // First-stage F-statistics (one per endogenous variable)
+    let first_stage_f = compute_first_stage_f(x_endog, &z_full, &z_full_names)?;
+
+    // ── Stage 2: Regress y on [X̂, X_exog] ───────────────────────────
+    let x_second = hstack(&[&x_hat, x_exog]);
+    let all_names: Vec<String> = endog_names
+        .iter()
+        .chain(exog_names.iter())
+        .cloned()
+        .collect();
+
+    // Get beta from Stage 2
+    let stage2_result = ols(y, &x_second, &all_names)?;
+    let beta = DVector::from_column_slice(&stage2_result.coefficients);
+
+    // ── Correct standard errors using original X (not X̂) ────────────
+    // Residuals from the TRUE model: e = y - X_original * β
+    let x_original = hstack(&[x_endog, x_exog]);
+    let residuals = y - &x_original * &beta;
+
+    let k_total = k1 + k2;
+    let df_resid = (n - k_total) as f64;
+    let sigma2 = residuals.dot(&residuals) / df_resid;
+
+    // Var(β) = σ² * (X̂'X̂)⁻¹ X̂'X X̂(X̂'X̂)⁻¹
+    // Simplified: σ² * (X̂'X̂)⁻¹ (corrected for 2SLS)
+    let xtx_hat = x_second.transpose() * &x_second;
+    let svd = xtx_hat.clone().svd(true, true);
+    let u = svd.u.as_ref().unwrap();
+    let vt = svd.v_t.as_ref().unwrap();
+    let threshold = 1e-10 * svd.singular_values.max();
+    let s_inv_diag = DMatrix::from_diagonal(&DVector::from_iterator(
+        svd.singular_values.len(),
+        svd.singular_values.iter().map(|&s| {
+            if s > threshold { 1.0 / s } else { 0.0 }
+        }),
+    ));
+    let xtx_hat_inv = vt.transpose() * s_inv_diag * u.transpose();
+
+    let var_beta = sigma2 * &xtx_hat_inv;
+    let std_errors: Vec<f64> = (0..k_total)
+        .map(|j| var_beta[(j, j)].max(0.0).sqrt())
+        .collect();
+
+    let t_dist = StudentsT::new(0.0, 1.0, df_resid).unwrap();
+    let t_stats: Vec<f64> = beta
+        .iter()
+        .zip(&std_errors)
+        .map(|(&b, &se)| if se > 1e-15 { b / se } else { 0.0 })
+        .collect();
+    let p_values: Vec<f64> = t_stats
+        .iter()
+        .map(|&t| 2.0 * (1.0 - t_dist.cdf(t.abs())))
+        .collect();
+
+    // R² (using original X, not X̂)
+    let y_mean = y.mean();
+    let sst = y.iter().map(|&yi| (yi - y_mean).powi(2)).sum::<f64>();
+    let sse = residuals.dot(&residuals);
+    let r_squared = if sst > 0.0 { 1.0 - sse / sst } else { 0.0 };
+
+    // ── Sargan test (overidentification) ─────────────────────────────
+    let (sargan_stat, sargan_p) = if m > k1 {
+        compute_sargan(y, &x_original, z, &beta)?
+    } else {
+        (None, None)
+    };
+
+    // ── Hausman test ─────────────────────────────────────────────────
+    let ols_result = ols(y, &x_original, &all_names)?;
+    let (hausman_stat, hausman_p) = compute_hausman(&ols_result, &stage2_result, k1)?;
+
+    Ok(TslsResult {
+        coefficients: beta.as_slice().to_vec(),
+        std_errors,
+        t_stats,
+        p_values,
+        r_squared,
+        residuals: residuals.as_slice().to_vec(),
+        n_obs: n,
+        feature_names: all_names,
+        first_stage_f,
+        sargan_stat,
+        sargan_p,
+        hausman_stat,
+        hausman_p,
+    })
+}
+
+/// Compute first-stage F-statistic for each endogenous variable.
+fn compute_first_stage_f(
+    x_endog: &DMatrix<f64>,
+    z_full: &DMatrix<f64>,
+    z_full_names: &[String],
+) -> anyhow::Result<Vec<f64>> {
+    let n = x_endog.nrows();
+    let k1 = x_endog.ncols();
+    let mut f_stats = Vec::with_capacity(k1);
+
+    for j in 0..k1 {
+        let y_j = x_endog.column(j).into_owned();
+        let result = ols(&y_j, z_full, z_full_names)?;
+
+        let k = z_full.ncols() as f64;
+        let df1 = k - 1.0; // instruments only (excluding exogenous which are always included)
+        let df2 = (n as f64) - k;
+
+        // F = (R² / df1) / ((1 - R²) / df2)
+        let f = if result.r_squared < 1.0 && df1 > 0.0 {
+            (result.r_squared / df1) / ((1.0 - result.r_squared) / df2)
+        } else {
+            0.0
+        };
+
+        f_stats.push(f);
+    }
+
+    Ok(f_stats)
+}
+
+/// Sargan overidentification test.
+/// H0: all instruments are valid (uncorrelated with the error term).
+fn compute_sargan(
+    y: &DVector<f64>,
+    x: &DMatrix<f64>,
+    z: &DMatrix<f64>,
+    beta: &DVector<f64>,
+) -> anyhow::Result<(Option<f64>, Option<f64>)> {
+    let residuals = y - x * beta;
+    let n = residuals.len() as f64;
+    let m = z.ncols();
+    let k = x.ncols();
+
+    // Regress residuals on Z
+    let z_names: Vec<String> = (0..m).map(|i| format!("z{i}")).collect();
+    let aux = ols(&residuals, z, &z_names)?;
+
+    let stat = n * aux.r_squared;
+    let df = (m - k) as f64;
+
+    if df > 0.0 {
+        let chi2 = ChiSquared::new(df).unwrap();
+        let p = 1.0 - chi2.cdf(stat);
+        Ok((Some(stat), Some(p)))
+    } else {
+        Ok((None, None))
+    }
+}
+
+/// Hausman test comparing OLS and 2SLS estimates.
+/// H0: OLS is consistent (no endogeneity).
+fn compute_hausman(
+    ols_result: &crate::types::OlsResult,
+    tsls_stage2: &crate::types::OlsResult,
+    k_endog: usize,
+) -> anyhow::Result<(f64, f64)> {
+    let diff: Vec<f64> = ols_result
+        .coefficients
+        .iter()
+        .zip(&tsls_stage2.coefficients)
+        .take(k_endog) // compare only endogenous variable coefficients
+        .map(|(&a, &b)| a - b)
+        .collect();
+
+    // H = (β_ols - β_2sls)' * (V_2sls - V_ols)⁻¹ * (β_ols - β_2sls)
+    // Simplified: use the difference in variance (diagonals only for tractability)
+    let var_diff: Vec<f64> = ols_result
+        .std_errors
+        .iter()
+        .zip(&tsls_stage2.std_errors)
+        .take(k_endog)
+        .map(|(&se_ols, &se_tsls)| (se_tsls * se_tsls - se_ols * se_ols).max(1e-15))
+        .collect();
+
+    let stat: f64 = diff
+        .iter()
+        .zip(&var_diff)
+        .map(|(&d, &v)| d * d / v)
+        .sum();
+
+    let df = k_endog as f64;
+    let chi2 = ChiSquared::new(df).map_err(|e| anyhow::anyhow!("Chi2 error: {e}"))?;
+    let p = 1.0 - chi2.cdf(stat.max(0.0));
+
+    Ok((stat, p))
+}
+
+/// Horizontally stack matrices.
+fn hstack(matrices: &[&DMatrix<f64>]) -> DMatrix<f64> {
+    let n = matrices[0].nrows();
+    let total_cols: usize = matrices.iter().map(|m| m.ncols()).sum();
+    let mut result = DMatrix::zeros(n, total_cols);
+    let mut col_offset = 0;
+    for &mat in matrices {
+        for j in 0..mat.ncols() {
+            result.set_column(col_offset + j, &mat.column(j));
+        }
+        col_offset += mat.ncols();
+    }
+    result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use nalgebra::{DMatrix, DVector};
+
+    /// Classic 2SLS test: endogenous X correlated with error term.
+    /// True model: y = 1.0 + 0.5*x + e, but x = 0.3*z + v where Cov(v, e) != 0.
+    /// OLS is biased, 2SLS should recover β ≈ 0.5.
+    #[test]
+    fn test_tsls_recovers_causal_effect() {
+        let n = 1000;
+        // Use a deterministic pseudo-random sequence for reproducibility.
+        let mut rng_state: u64 = 42;
+        let mut next_f64 = || -> f64 {
+            rng_state = rng_state.wrapping_mul(6364136223846793005).wrapping_add(1);
+            ((rng_state >> 33) as f64) / (u32::MAX as f64) - 0.5
+        };
+
+        let mut z_data = vec![0.0; n];
+        let mut x_data = vec![0.0; n];
+        let mut y_data = vec![0.0; n];
+
+        for i in 0..n {
+            let z_i = next_f64() * 4.0; // instrument
+            let v_i = next_f64(); // endogenous part of x
+            let e_i = next_f64() + 0.8 * v_i; // error correlated with v (endogeneity!)
+
+            let x_i = 0.3 * z_i + v_i; // x depends on z and v
+            let y_i = 1.0 + 0.5 * x_i + e_i; // true causal effect = 0.5
+
+            z_data[i] = z_i;
+            x_data[i] = x_i;
+            y_data[i] = y_i;
+        }
+
+        let y = DVector::from_column_slice(&y_data);
+        let x_endog = DMatrix::from_column_slice(n, 1, &x_data);
+        let intercept = DMatrix::from_element(n, 1, 1.0);
+        let z = DMatrix::from_column_slice(n, 1, &z_data);
+
+        let result = tsls(
+            &y,
+            &x_endog,
+            &intercept,
+            &z,
+            &["x".into()],
+            &["intercept".into()],
+            &["z".into()],
+        )
+        .unwrap();
+
+        // 2SLS should get closer to 0.5 than OLS
+        let tsls_beta = result.coefficients[0]; // coefficient on x
+        assert!(
+            (tsls_beta - 0.5).abs() < 0.3,
+            "2SLS β={tsls_beta}, expected ≈ 0.5"
+        );
+
+        // First-stage F should be reasonably large
+        assert!(
+            result.first_stage_f[0] > 5.0,
+            "First-stage F={} too low",
+            result.first_stage_f[0]
+        );
+    }
+
+    #[test]
+    fn test_hstack() {
+        let a = DMatrix::from_column_slice(3, 1, &[1.0, 2.0, 3.0]);
+        let b = DMatrix::from_column_slice(3, 2, &[4.0, 5.0, 6.0, 7.0, 8.0, 9.0]);
+        let c = hstack(&[&a, &b]);
+        assert_eq!(c.nrows(), 3);
+        assert_eq!(c.ncols(), 3);
+        assert!((c[(0, 0)] - 1.0).abs() < 1e-10);
+        assert!((c[(0, 1)] - 4.0).abs() < 1e-10);
+        assert!((c[(0, 2)] - 7.0).abs() < 1e-10);
+    }
+}

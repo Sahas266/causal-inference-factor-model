@@ -1,0 +1,9 @@
+[package]
+name = "cpcm-core"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+petgraph = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }

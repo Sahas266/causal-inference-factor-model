@@ -1,0 +1,24 @@
+[supabase]
+url = "https://jnulpcqpftnwvknwuqpa.supabase.co"
+key_env = "SUPABASE_KEY"
+
+[data]
+start_date = "2021-01-01"
+end_date = "2026-01-01"
+cache_path = "cache/panel.parquet"
+cache_ttl_hours = 24
+use_best_view = true
+
+[assets]
+include = [
+    "btc", "eth", "bnb", "sol", "avax", "xrp", "pol",
+    "hype", "tao", "wlfi",
+    "uni", "aave", "crv", "pendle", "morpho", "aero", "link", "ena", "jup",
+    "zec", "pepe", "shib", "doge",
+]
+
+[estimation]
+mode = "per_asset"
+run_ols = true
+run_2sls = true
+confidence_level = 0.95
