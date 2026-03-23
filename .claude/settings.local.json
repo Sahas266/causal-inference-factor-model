@@ -64,7 +64,18 @@
       "Bash(cd \"C:/Users/sahas/Github Repos/causal-inference-factor-model/backfill_data\" && ../venv/Scripts/python.exe backfill.py --config config/endpoints/ --recursive --validate-only 2>&1 | head -30)",
       "Bash(cd \"C:/Users/sahas/Github Repos/causal-inference-factor-model/backfill_data\" && ../venv/Scripts/python.exe backfill.py --config config/endpoints/btc/ --validate-only 2>&1 | tail -20)",
       "Bash(cd \"C:/Users/sahas/Github Repos/causal-inference-factor-model/backfill_data\" && ../venv/Scripts/python.exe scripts/backfill_all_coins.py --dry-run 2>&1)",
-      "Bash(cd \"C:/Users/sahas/Github Repos/causal-inference-factor-model/backfill_data\" && ../venv/Scripts/python.exe scripts/backfill_all_coins.py 2>&1)"
+      "Bash(cd \"C:/Users/sahas/Github Repos/causal-inference-factor-model/backfill_data\" && ../venv/Scripts/python.exe scripts/backfill_all_coins.py 2>&1)",
+      "Bash(wc -l /Users/ale/Documents/Cornell/causal-inference-factor-model/causal_portfolio/data/*.csv)",
+      "Bash(find /Users/ale/Documents/Cornell/causal-inference-factor-model -type f -name *.ipynb)",
+      "mcp__Claude_Preview__preview_start",
+      "Bash(rustc --version)",
+      "Bash(cargo --version)",
+      "Bash(find /Users/ale/Documents/Cornell/causal-inference-factor-model -name docker-compose* -o -name Dockerfile* -o -name Makefile)",
+      "Bash(docker compose:*)",
+      "Bash(make --dry-run start)",
+      "Bash(make start:*)",
+      "Bash(docker ps:*)",
+      "Bash(xargs kill:*)"
     ]
   },
   "enableAllProjectMcpServers": true,
