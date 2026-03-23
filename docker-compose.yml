@@ -1,0 +1,54 @@
+name: cpcm
+
+services:
+
+  # ── Rust: CPCM causal factor model (DAG + OLS/2SLS estimation) ──────────
+  rust:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.rust
+    image: cpcm-rust
+    container_name: cpcm-rust
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      - SUPABASE_KEY=${SUPABASE_KEY:-}
+      - RUST_LOG=${RUST_LOG:-info}
+    volumes:
+      - rust-results:/app/output
+    restart: "no"
+
+  # ── Python dashboard: Streamlit CPCM quant interface ────────────────────
+  dashboard:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.python
+    image: cpcm-python
+    container_name: cpcm-dashboard
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      - SUPABASE_URL=${SUPABASE_URL:-}
+      - SUPABASE_KEY=${SUPABASE_KEY:-}
+      - FRED_API_KEY=${FRED_API_KEY:-}
+      - ALLIUM_API_KEY=${ALLIUM_API_KEY:-}
+      - COINMETRICS_API_KEY=${COINMETRICS_API_KEY:-}
+    ports:
+      - "8501:8501"
+    volumes:
+      - dashboard-cache:/app/causal_portfolio/data/cache
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8501/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+volumes:
+  rust-results:
+    name: cpcm-rust-results
+  dashboard-cache:
+    name: cpcm-dashboard-cache

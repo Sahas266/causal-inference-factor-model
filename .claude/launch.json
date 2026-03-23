@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "CPCM Dashboard",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": ["-c", "cd /Users/ale/Documents/Cornell/causal-inference-factor-model && streamlit run causal_portfolio/dashboard.py --server.port 8501"],
+      "port": 8501
+    }
+  ]
+}
