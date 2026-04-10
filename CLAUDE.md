@@ -1,290 +1,313 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to Claude Code when working in this repository.
 
 ## Repository Overview
 
-This monorepo contains three interconnected systems for a **causal inference factor model** applied to crypto markets:
+This monorepo has four meaningful areas:
 
-1. **`backfill_data/`** — Multi-provider crypto data backfill system (primary active module)
-2. **`causal_portfolio/`** — Structural Causal Model (SCM) for portfolio optimization using DoWhy/EconML
-3. **`defi_pipeline/`** — FastAPI-based real-time DeFi metrics pipeline (planned/in-progress)
+1. `backfill_data/`
+   - operational multi-provider historical data backfill system
+   - writes normalized records into Supabase
+2. `causal_model/`
+   - Rust CPCM causal graph and estimation engine
+   - builds factors, identifies effects, and runs OLS / 2SLS
+3. `causal_portfolio/`
+   - Python CPCM data, factor, backtest, and dashboard layer
+   - consumes the Supabase warehouse
+4. `defi_pipeline/`
+   - FastAPI real-time DeFi metrics API
+   - still scaffold / partial compared with the other three modules
 
 ## Environment
 
-- **Python**: 3.12.6 on Windows
-- **Virtual environment**: `./venv/` — use `./venv/Scripts/python.exe` for commands
-- **`uvloop` is Windows-incompatible** — always keep it conditional: `uvloop>=0.19.0; sys_platform != "win32"` in `requirements.txt`
-- **Supabase**: used as the database backend across all modules (project ID: `jnulpcqpftnwvknwuqpa`)
-- **Required env vars** (in `backfill_data/.env`): `SUPABASE_URL`, `SUPABASE_KEY`, `ALLIUM_API_KEY`
-- **Optional env vars**: `COINMETRICS_API_KEY` (community tier works without it), `DEFILLAMA_API_KEY` (Pro endpoints only), `DUNE_API_KEY`, `COINGECKO_API_KEY` (Pro tier for full history), `FRED_API_KEY` (FRED economic data)
-- **Supabase auth**: Use `service_role` key (not `sbp_...` management token) for data API writes
+- Python: `3.12.6` on Windows
+- Virtual environment: `./venv/` and use `./venv/Scripts/python.exe`
+- `uvloop` must stay conditional on Windows:
+  - `uvloop>=0.19.0; sys_platform != "win32"`
+- Supabase project: `jnulpcqpftnwvknwuqpa`
+- Required env vars for warehouse-backed work:
+  - `SUPABASE_URL`
+  - `SUPABASE_KEY`
+- Optional provider env vars still relevant to the committed provider tree:
+  - `ALLIUM_API_KEY`
+  - `COINMETRICS_API_KEY`
+  - `DEFILLAMA_API_KEY`
+  - `DUNE_API_KEY`
+  - `COINGECKO_API_KEY`
+  - `FRED_API_KEY`
 
-## Commands
+Important:
 
-All commands should be run from the `backfill_data/` directory unless noted.
+- The live warehouse includes Artemis and Hyperliquid data at scale.
+- The current committed worktree does not include Artemis or Hyperliquid provider source/config files.
+- Treat Supabase as the source of truth for live data coverage.
+- Treat the repo as the source of truth for what can be re-run from the current committed tree.
 
-### Running the backfill system
+## Core Commands
+
+### `backfill_data/`
+
+Run from `backfill_data/` unless noted.
 
 ```bash
-# From repo root
 cd backfill_data
 
-# List available providers
+# List committed providers
 python backfill.py --list-providers
 
-# Validate an endpoint config (no data fetch)
+# Validate a config
 python backfill.py --config config/endpoints/btc/btc_coinmetrics.json --validate-only
 
-# Run a single coin's endpoints
+# Run a single coin directory
 python backfill.py --config config/endpoints/sol/
 
-# Run all endpoints recursively (all 26 coins)
+# Run all committed endpoint configs recursively
 python backfill.py --config config/endpoints/ --recursive
 
-# Run all coins via orchestration script
-python scripts/backfill_all_coins.py                        # all coins
-python scripts/backfill_all_coins.py --asset sol,btc        # specific coins
-python scripts/backfill_all_coins.py --dry-run              # list what would run
+# Orchestrate all coins
+python scripts/backfill_all_coins.py
+python scripts/backfill_all_coins.py --asset sol,btc
+python scripts/backfill_all_coins.py --dry-run
 
-# Generate endpoint configs from coin manifest
-python scripts/generate_coin_configs.py
+# Derived metrics
+python scripts/compute_derived_metrics.py
+python scripts/compute_derived_metrics.py --asset btc
 
-# Compute derived metrics (volatility, ratios)
-python scripts/compute_derived_metrics.py                   # all assets with price data
-python scripts/compute_derived_metrics.py --asset btc       # single asset
-
-# Run per-provider convenience scripts
-python scripts/run_provider_backfill.py
-python scripts/backfill_defillama.py
-python scripts/backfill_coinmetrics.py
-python scripts/backfill_dune.py
-python scripts/backfill_coingecko.py
-
-# Resume failed backfills
+# Resume failed committed backfills
 python backfill.py --resume-failed
 ```
 
-### Tests
+Tests:
 
 ```bash
-# From backfill_data/
 cd backfill_data
-
-# Run all tests
 python -m pytest
-
-# Run provider-specific tests
 python -m pytest tests/providers/test_coinmetrics.py -v
 python -m pytest tests/providers/test_allium.py -v
 python -m pytest tests/providers/test_defillama.py -v
-
-# Run by marker (unit/integration/slow)
 python -m pytest -m unit
 python -m pytest -m integration
-
-# Run with coverage
-python -m pytest --cov=src --cov-report=html
 ```
 
-`pytest.ini` is in `backfill_data/` and sets `testpaths = tests`.
-
-### Code quality
+### `causal_model/`
 
 ```bash
-# From backfill_data/
-black src/ tests/
-isort src/ tests/
-mypy src/
-flake8 src/ tests/
+cd causal_model
+cargo test -q
 ```
 
-### DeFi pipeline (defi_pipeline/)
+### `causal_portfolio/`
+
+```bash
+# From repo root
+python -m causal_portfolio.main --assets btc,eth,sol --m 3 --start 2022-01-01 --end 2025-12-31
+python -m causal_portfolio.run_backtest --solver v1 --m 3 --assets btc,eth,sol
+python -m causal_portfolio.run_backtest --solver v4 --use-ekf --rebalance-freq 5
+streamlit run causal_portfolio/dashboard.py
+```
+
+### `defi_pipeline/`
 
 ```bash
 cd defi_pipeline
 uvicorn app.main:app --reload
-alembic revision --autogenerate -m "migration message"
 alembic upgrade head
 ```
 
 ## Architecture
 
-### backfill_data — Plugin-Based Provider System
+### `backfill_data/`
 
-The core design principle: **the orchestrator never knows about provider-specific details**. Providers implement a standard interface and are auto-discovered. Each provider has its own separate pipeline — endpoint configs explicitly name which provider to use.
+Key files:
 
-**Data flow:**
-```
-CLI (backfill.py)
-  → BackfillOrchestrator (src/core/orchestrator.py)
-    → ProviderRegistry.auto_discover() — scans src/providers/ subdirs
-    → validate_endpoint() per provider
-    → fetch_data_stream() — generator, memory-efficient pagination
-    → DatabaseWriter.upsert_batch() → Supabase
-    → ProgressTracker — checkpoint/resume in backfill_progress table
-```
+- `backfill_data/backfill.py`
+- `backfill_data/src/core/orchestrator.py`
+- `backfill_data/src/providers/registry.py`
+- `backfill_data/src/core/storage/progress_tracker.py`
+- `backfill_data/config/coin_manifest.json`
+- `backfill_data/config/database_schema.sql`
+- `backfill_data/config/endpoints/`
 
-**Key files:**
-- `src/core/interfaces.py` — `DataProviderInterface` and `RateLimiterInterface` ABCs. Every provider implements these exactly.
-- `src/core/orchestrator.py` — `BackfillOrchestrator`: validates, threads, streams, writes. Supports `provider_instance_id` for multi-entry dedup.
-- `src/core/utils/config_loader.py` — Config loading with relative path resolution (checks path exists before prefixing)
-- `src/core/storage/progress_tracker.py` — Checkpoint/resume with JSON-safe datetime serialization
-- `src/providers/registry.py` — `ProviderRegistry`: auto-discovery via `pkgutil.iter_modules`
-- `src/providers/coinmetrics/` — market data: asset metrics, trades, candles, orderbooks, derivatives
-- `src/providers/allium/` — token prices and DEX trades via Developer REST API (`ALLIUM_API_KEY`)
-- `src/providers/defillama/` — TVL, DEX volumes, fees, stablecoin flow, coin prices (free + Pro)
-- `src/providers/coingecko/` — market chart (price/mcap/volume timeseries) and coin data (ath/atl/supply snapshots)
-- `src/providers/dune/` — pre-saved query results from Dune Analytics (`DUNE_API_KEY`)
-- `src/providers/fred/` — FRED economic data series (`FRED_API_KEY`)
-- `src/schemas/` — Pydantic models for each data type
-- `config/providers/{name}.json` — provider-level config (API URL, rate limits, retry policy)
-- `config/coin_manifest.json` — master 26-coin definitions (tickers, provider IDs, date ranges)
-- `config/endpoints/{coin}/` — per-coin endpoint configs (25 directories, ~78 generated configs)
-- `config/endpoints/macro/` — FRED macro endpoint configs (8 configs, 30 series)
-- `config/endpoints/eth/` — ETH-specific endpoint pack (17 configs across CoinMetrics, DefiLlama, CoinGecko, Dune)
-- `config/endpoints/eth_disabled/` — CoinMetrics derivatives endpoints blocked on community tier (5 configs)
-- `config/endpoints/eth_fallback/` — Allium fallback endpoints for ETH price data
-- `scripts/generate_coin_configs.py` — reads manifest, generates per-coin endpoint configs
-- `scripts/backfill_all_coins.py` — orchestrates backfill across all coins (--asset, --dry-run)
-- `scripts/compute_derived_metrics.py` — computes realized volatility, DEX/CEX ratio (--asset)
-- `scripts/` — Per-provider convenience backfill scripts
-- `BACKFILL_STATUS.md` — comprehensive status of all 26 coins across all providers
+Design:
 
-**Adding a new provider** (4 steps only):
-1. `mkdir src/providers/{name}` with `provider.py`, `client.py`, `rate_limiter.py`, `transformer.py`, `__init__.py`
-2. Implement `DataProviderInterface` in `provider.py`
-3. In `__init__.py`: `ProviderRegistry.register(MyProvider)`
-4. Add `config/providers/{name}.json`
+- provider auto-discovery through `ProviderRegistry.auto_discover()`
+- provider-agnostic orchestration
+- streaming fetch + batch upsert
+- checkpointing in `backfill_progress`
+- shared Supabase warehouse tables and best-provider views
 
-**Database (Supabase):** Progress tracked in `backfill_progress` table. Data tables use `(provider, asset/metric/market, time)` composite primary keys for multi-provider redundancy. `asset_metrics_best` view selects one provider per data point. The `asset_metrics` table has a `provider_priority` column and uses `created_at` (not `inserted_at`).
+Committed providers clearly present in the current tree:
 
-**Implemented providers & endpoint types:**
+- `allium`
+- `coingecko`
+- `coinmetrics`
+- `defillama`
+- `dune`
+- `fred`
 
-*CoinMetrics* (`config/providers/coinmetrics.json`) — community tier at `community-api.coinmetrics.io/v4` (no key required):
-- `timeseries/asset-metrics`, `timeseries/exchange-metrics`, `timeseries/market-trades`
-- `timeseries/market-orderbooks`, `timeseries/pair-candles`, `timeseries/market-candles`
-- `timeseries/market-open-interest`, `timeseries/market-liquidations`, `timeseries/market-funding-rates`
-- `timeseries/market-implied-volatility`, `timeseries/market-greeks`
-- **Community restrictions**: derivatives/market endpoints (candles, open interest, funding rates, liquidations) return 403. Asset metrics and pair candles work.
-- Endpoint configs: `btc_metrics.json`, `market_candles.json`, `market_funding_rates.json`, ETH configs in `config/endpoints/eth/`
+Warehouse-only historical providers right now:
 
-*Allium* (`config/providers/allium.json`) — requires `ALLIUM_API_KEY`:
-- Uses **Developer REST API** (subscription-based), NOT Explorer SQL (which requires separate compute credits and is exhausted)
-- `developer/prices/history` — POST, OHLCV token prices by contract address. Granularity: `15s | 1m | 5m | 1h | 1d`
-- `developer/{chain}/dex/trades` — GET, DEX trade events (paginated)
-- `developer/{chain}/raw/blocks` — GET, raw block data for EVM chains
-- `developer/bitcoin/raw/blocks`, `developer/bitcoin/raw/transactions` — GET, Bitcoin-specific data
-- Auth: `X-API-KEY` header against `https://api.allium.so/api/v1`
-- OpenAPI spec: `https://api.allium.so/openapi.json` — useful for discovering new endpoints
-- Note: Allium MCP server (mcp.allium.so) uses Explorer credits (exhausted) — use REST API directly
-- Endpoint configs: `allium_eth_on_chain.json`, `allium_btc_on_chain.json`, `allium_dex_volumes.json` (migrated to Developer API)
+- `artemis`
+- `hyperliquid`
 
-*DefiLlama* (`config/providers/defillama.json`) — no key needed for free endpoints:
-- `protocol/tvl`, `chain/tvl`, `dex/summary`, `fees/summary`, `stablecoin/charts`, `coin/chart`
-- `yields/pool-chart` (Pro only — requires `DEFILLAMA_API_KEY` in URL path)
-- Multi-domain URLs: `api.llama.fi` (TVL/DEX/fees), `stablecoins.llama.fi` (stablecoin charts), `coins.llama.fi` (coin prices)
-- Pro API: `pro-api.llama.fi/{api_key}/...`
-- Most endpoints return full history in one call; transformer handles date filtering
-- Endpoint configs: `defillama_chain_tvl.json`, `defillama_protocol_tvl.json`, `defillama_stablecoin_flow.json`, `defillama_dex_volumes.json`, ETH configs in `config/endpoints/eth/`
+Current state of those warehouse-only providers in the repo:
 
-*CoinGecko* (`config/providers/coingecko.json`) — Pro API via `COINGECKO_API_KEY`:
-- `market_chart` — `/coins/{id}/market_chart/range`: daily price, market cap, volume timeseries
-- `coin_data` — `/coins/{id}`: snapshot data (fdv, ath, atl, total_supply, max_supply)
-- Free tier: `api.coingecko.com/api/v3` (30 req/min, last 365 days via `/market_chart?days=365`)
-- Pro tier: `pro-api.coingecko.com/api/v3` (500 req/min, full historical range via `/market_chart/range`)
-- CoinGecko MCP also available via `.mcp.json` for interactive queries
-- Endpoint configs: `config/endpoints/eth/eth_coingecko.json`
+- `backfill_data/src/providers/artemis/` contains only `__pycache__`
+- `backfill_data/src/providers/hyperliquid/` contains only `__pycache__`
+- no committed `config/providers/artemis.json`
+- no committed `config/providers/hyperliquid.json`
+- no committed Artemis / Hyperliquid endpoint JSON files under `config/endpoints/`
 
-*Dune Analytics* (`config/providers/dune.json`) — requires `DUNE_API_KEY`:
-- `query_results` — `/query/{id}/results`: fetches pre-saved query results
-- Queries must be created in the Dune UI first; the API only reads results
-- Each endpoint config specifies a `query_id`
-- Rate limit: 40 req/min on standard tier
-- Dune CLI installed at `~/.local/bin/dune.exe` for interactive query management
-- Active queries: 6811495 (staking), 6811496 (burn), 6811497 (whales), 6811498 (bridges), 6811499 (CEX flows), 6815240 (staking APR), 6815241 (net issuance), 6815242 (L2 settlement), 6815244 (stablecoin netflow), 6830995 (SOL activity), 6830996 (SOL DEX), 6830997 (SOL staking), 6830998 (BNB activity), 6830999 (BNB DEX), 6831000 (AVAX activity), 6831001 (AVAX DEX)
-- Endpoint configs: `config/endpoints/eth/eth_dune_*.json` (12 configs), `config/endpoints/sol/sol_dune_*.json` (3), `config/endpoints/bnb/bnb_dune_*.json` (5), `config/endpoints/avax/avax_dune_*.json` (5)
+### `causal_model/`
 
-*FRED* (`config/providers/fred.json`) — requires `FRED_API_KEY`:
-- `series/observations` — `/fred/series/observations`: historical economic time series
-- Supports comma-separated `series_ids` per config — each series fetched independently
-- Rate limit: 120 req/min
-- 30 series across 8 endpoint configs in `config/endpoints/macro/`:
-  - `fred_interest_rates.json`: DFF, DGS2, DGS10, DGS30, DFEDTARU, T10Y2Y, T10Y3M
-  - `fred_inflation.json`: CPIAUCSL, CPILFESL, PCEPI, PCEPILFE, T5YIE, T10YIE, MICH
-  - `fred_money_supply.json`: M2SL, WALCL, RRPONTSYD
-  - `fred_risk_volatility.json`: VIXCLS, BAMLH0A0HYM2, TEDRATE
-  - `fred_labor_growth.json`: UNRATE, PAYEMS, ICSA, GDPC1, INDPRO
-  - `fred_commodities.json`: DCOILWTICO, PPIACO
-  - `fred_financial_conditions.json`: NFCI, STLFSI2
-  - `fred_dollar.json`: DTWEXBGS
-- All stored with `asset='macro'`, `metric=<series_id>`, date range 2021-01-01 to 2026-01-01
+Key files:
 
-### causal_portfolio — SCM-Based Portfolio Model
+- `causal_model/crates/cpcm-cli/src/main.rs`
+- `causal_model/crates/cpcm-cli/src/pipeline.rs`
+- `causal_model/crates/cpcm-core/src/cpcm_dag.rs`
+- `causal_model/crates/cpcm-data/src/client.rs`
 
-Uses **DoWhy** for causal identification and **EconML** for estimation. The SCM graph defines causal relationships between crypto factors (macro, on-chain, market microstructure) and asset returns.
+This is a real, tested Rust pipeline. It can read from `asset_metrics_best` or `asset_metrics`.
 
-- `scm/loaders.py` — data loading (currently CSV mocks; planned Supabase integration)
-- `scm/shocks.py` — instrumental variable (IV) / exogenous shock construction (one instrument per factor)
-- `scm/graph.py` — causal DAG definition
-- `scm/model.py` — DoWhy SCM instantiation
-- `scm/estimation.py` — causal effect identification and estimation
-- `main.py` — wires all components together
+### `causal_portfolio/`
 
-### defi_pipeline — Real-Time DeFi Metrics API
+Key files:
 
-FastAPI + Celery + PostgreSQL/TimescaleDB pipeline collecting 7 on-chain indicators: Liq Flow, Stableflow, Funding Basis, Chain Congestion, Staking Yield, MEV Pressure, CEX/DEX Flow.
+- `causal_portfolio/main.py`
+- `causal_portfolio/run_backtest.py`
+- `causal_portfolio/data/supabase_loader.py`
+- `causal_portfolio/factors/builder.py`
+- `causal_portfolio/solvers/v4_pinn.py`
+- `causal_portfolio/dashboard.py`
 
-- `app/collectors/` — data collection logic (implements `base.py` interface)
-- `app/providers/` — external API integrations
-- `app/api/v1/` — REST endpoints
-- `app/core/` — DB, cache (Redis), config, exceptions
-- `docker/docker-compose.yml` — containerized deployment
+This layer implements the CPCM pipeline described in `Causal PDE-Control Models for Portfolio Optimization.md`.
 
-## Backfill Status (26 Coins)
+Important runtime behavior:
 
-Current state (as of March 15, 2026): **~430,300 rows** in `asset_metrics` across 7 providers, covering 26 target coins + macro data. See `BACKFILL_STATUS.md` for the full per-coin breakdown.
+- `CPCMDataLoader` reads from `asset_metrics_best`
+- panel data is pivoted wide as `{asset}_{metric}`
+- macro data is loaded from `asset='macro'`
 
-**26 coins:** USDC, USDT, USDe, BTC, ETH, BNB, HYPE, XRP, PENDLE, UNI, JUP, TAO, LINK, ZEC, ENA, MORPHO, AERO, SOL, AVAX, POL, WLFI, CRV, AAVE, PEPE, SHIB, DOGE
+### `defi_pipeline/`
 
-**Rows by provider:**
-- *CoinMetrics* (140,679 rows): btc, eth, bnb, xrp, doge, zec, aave, uni, link, usdc, usdt — 3-13 metrics each
-- *Dune* (138,137 rows): ETH (42 metrics, 12 queries) + SOL/BNB/AVAX (activity, DEX volume, SOL staking, block congestion, liquidations, flashloans)
-- *Derived* (49,330 rows): all 26 coins — realized_volatility_7d/30d, dex_cex_volume_ratio (ETH only)
-- *DefiLlama* (40,667 rows): chain TVL (btc, bnb, sol, avax, pol, hype) + protocol TVL (aave, uni, crv, pendle, morpho, ena, jup) + ETH ecosystem
-- *CoinGecko* (22,772 rows): all 26 coins — snapshots + market_chart timeseries (last 365 days via free tier)
-- *FRED* (20,452 rows): 30 macro series (interest rates, inflation, money supply, risk, labor, commodities, dollar)
-- *Allium* (18,270 rows): BTC + ETH OHLCV fallback
+Treat this as planned / partial. It is useful context, but it is not yet at the maturity of `backfill_data/`, `causal_model/`, or `causal_portfolio/`.
 
-**Known gaps:**
-- CoinGecko Pro key: unlocks full historical range for market_chart (currently limited to last 365 days)
-- CoinMetrics Pro key: derivatives (OI, funding, liquidations), Tier 2/3 assets (SOL, AVAX, POL, SHIB)
-- Funding Basis (perp funding rates): no free source — requires CoinMetrics Pro or Hyperliquid API
+## Live Warehouse Snapshot
 
-**Dune query IDs:** 6811495 (staking), 6811496 (burn), 6811497 (whales), 6811498 (bridges), 6811499 (CEX flows), 6815240 (staking APR), 6815241 (net issuance), 6815242 (L2 settlement), 6815244 (stablecoin netflow), 6830995 (SOL activity), 6830996 (SOL DEX), 6830997 (SOL staking), 6830998 (BNB activity), 6830999 (BNB DEX), 6831000 (AVAX activity), 6831001 (AVAX DEX), 6831658 (ETH block congestion/MEV), 6831661 (ETH flashloans/LP flow), 6831664 (ETH liquidations), 6831685 (BNB block congestion), 6831686 (AVAX block congestion), 6831687 (BNB liquidations), 6831688 (AVAX liquidations), 6831689 (BNB flashloans), 6831690 (AVAX flashloans)
+Verified on `2026-04-10`:
 
-**Provider priority**: CoinMetrics (1) > FRED (1) > DefiLlama (2) > CoinGecko (3) > Allium (4) > Derived (99).
+- `asset_metrics`: `2,848,307` rows
+- `asset_metrics_best`: `2,817,204` rows
+- providers: `9`
+- assets: `29`
+- metrics: `338`
+- date range: `2021-01-01` -> `2026-01-01`
+
+Provider row counts in `asset_metrics`:
+
+- `artemis`: `1,556,065`
+- `hyperliquid`: `620,890`
+- `derived`: `282,597`
+- `dune`: `143,246`
+- `coinmetrics`: `132,166`
+- `defillama`: `52,557`
+- `coingecko`: `22,064`
+- `fred`: `20,452`
+- `allium`: `18,270`
+
+Asset scope:
+
+- target 26-coin universe is present
+- additional live assets are `macro`, `matic`, and legacy `lido`
+
+Important mismatch:
+
+- `backfill_progress`, `provider_health`, and `recent_backfill_activity` do not reflect Artemis or Hyperliquid
+- those views currently only reflect the committed-provider operational metadata
+- for live coverage questions, trust the fact tables first
+
+## CPCM Roadmap Alignment
+
+The roadmap lives in `Causal PDE-Control Models for Portfolio Optimization.md`.
+
+Current warehouse coverage against the roadmap:
+
+- StableFlow: strong
+  - Dune stablecoin mint / burn / netflow metrics
+  - Artemis stablecoin supply and transfer metrics
+  - derived `stablecoin_net_flow_usd`
+- Funding Basis: strong
+  - Hyperliquid `funding_rate_8h`
+  - Hyperliquid `funding_premium`
+- Chain Congestion: partial
+  - Dune gas utilization and chain activity metrics
+- LiqFlow / LP Flow: partial
+  - derived `tvl_net_flow_usd`
+  - DefiLlama TVL / volume metrics
+  - Dune UNI V3 LP-flow-style data
+- Staking Yield: partial
+  - Artemis staking-related metrics
+  - Dune staking queries
+- MEV Pressure: proxy-only right now
+  - no direct confirmed `mev_*` warehouse series
+- CEX / DEX Flow: partial to strong
+  - Dune bridge / flow queries
+  - derived `dex_cex_volume_ratio`
+
+## Storage Notes
+
+Current database size is about `1,088 MB` after dropping the unused `idx_asset_metrics_metric_time` index on `2026-04-10`.
+
+Almost all of that is `public.asset_metrics`:
+
+- total relation size: `1,190,313,984` bytes
+- heap/table: `405,659,648` bytes
+- indexes: `784,506,880` bytes
+
+Storage change applied:
+
+- dropped `public.idx_asset_metrics_metric_time`
+- database size moved from about `1,147 MB` to `1,088 MB`
+- `public.asset_metrics` index footprint moved from `784,506,880` bytes to `721,747,968` bytes
+
+Remaining guidance:
+
+- keep `idx_asset_metrics_priority` because it supports the best-provider view pattern
+- do not remove additional indexes unless they are validated against real workloads
 
 ## Supabase Schema
 
-Project ID: `jnulpcqpftnwvknwuqpa` (may be INACTIVE — call `restore_project` if connection times out).
+Public tables:
 
-**Tables:** `asset_metrics`, `exchange_metrics`, `market_trades`, `market_candles`, `pair_candles`, `market_orderbooks`, `market_open_interest`, `market_funding_rates`, `market_liquidations`, `market_implied_volatility`, `market_greeks`, `backfill_progress`
+- `asset_metrics`
+- `exchange_metrics`
+- `market_trades`
+- `market_candles`
+- `pair_candles`
+- `market_orderbooks`
+- `market_open_interest`
+- `market_funding_rates`
+- `market_liquidations`
+- `market_implied_volatility`
+- `market_greeks`
+- `backfill_progress`
 
-**Views:** `asset_metrics_best`, `exchange_metrics_best`, `market_orderbooks_best_quotes`, `data_coverage_by_provider`, `provider_health`, `recent_backfill_activity`
+Public views:
 
-## MCP Servers
+- `asset_metrics_best`
+- `exchange_metrics_best`
+- `market_orderbooks_best_quotes`
+- `data_coverage_by_provider`
+- `provider_health`
+- `recent_backfill_activity`
 
-- **Atlassian**: enabled via plugin, domain `whitestarcapital.atlassian.net`
-- **Supabase**: enabled via plugin
-- **Allium**: configured at user scope (`mcp.allium.so`) — MCP server credits are separate from the REST API key
-- **CoinGecko**: active via project `.mcp.json` (`mcp-remote` → `https://mcp.pro-api.coingecko.com/mcp`) — Pro API with full historical range
+## Practical Guidance
 
-## Test Markers
-
-Tests use pytest markers defined in `backfill_data/pytest.ini`:
-- `unit` — no external dependencies
-- `integration` — requires live API or database
-- `slow` — long-running tests
-- `requires_api_key` — needs `COINMETRICS_API_KEY`
-- `requires_database` — needs Supabase connection
+- If you need the current truth about Artemis or Hyperliquid, query Supabase, not the local provider tree.
+- If you need to restore local Artemis or Hyperliquid execution, use session history / backups rather than assuming the code is still committed.
+- If you need storage relief, investigate index removal before deleting CPCM-relevant data.
+- If docs and code disagree, prefer:
+  1. live Supabase fact tables for coverage
+  2. committed code for runnable local behavior
+  3. session notes for historical context

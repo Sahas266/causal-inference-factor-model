@@ -79,8 +79,6 @@ CREATE TABLE IF NOT EXISTS asset_metrics (
 );
 
 -- Indexes for efficient querying
-CREATE INDEX IF NOT EXISTS idx_asset_metrics_composite 
-    ON asset_metrics(asset, metric, time DESC);
 CREATE INDEX IF NOT EXISTS idx_asset_metrics_priority 
     ON asset_metrics(asset, metric, time DESC, provider_priority ASC);
 CREATE INDEX IF NOT EXISTS idx_asset_metrics_provider 
