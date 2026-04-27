@@ -29,12 +29,8 @@ services:
     env_file:
       - path: .env
         required: false
-    environment:
-      - SUPABASE_URL=${SUPABASE_URL:-}
-      - SUPABASE_KEY=${SUPABASE_KEY:-}
-      - FRED_API_KEY=${FRED_API_KEY:-}
-      - ALLIUM_API_KEY=${ALLIUM_API_KEY:-}
-      - COINMETRICS_API_KEY=${COINMETRICS_API_KEY:-}
+      - path: backfill_data/.env
+        required: false
     ports:
       - "8501:8501"
     volumes:

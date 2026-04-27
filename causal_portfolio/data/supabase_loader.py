@@ -21,11 +21,23 @@ class CPCMDataLoader:
     """Loads asset metrics from Supabase and pivots into wide-format DataFrames."""
 
     def __init__(self, env_path: Optional[str] = None):
-        load_dotenv(env_path or os.path.join(
-            os.path.dirname(__file__), "..", "..", "backfill_data", ".env"
-        ))
-        url = os.environ["SUPABASE_URL"]
-        key = os.environ["SUPABASE_KEY"]
+        if env_path:
+            load_dotenv(env_path)
+        else:
+            root = Path(__file__).resolve().parents[2]
+            load_dotenv(root / ".env")
+            load_dotenv(root / "backfill_data" / ".env", override=True)
+
+        url = os.environ.get("SUPABASE_URL", "").strip()
+        key = os.environ.get("SUPABASE_KEY", "").strip()
+        if not url or not key:
+            raise ValueError(
+                "SUPABASE_URL and SUPABASE_KEY must be set (non-empty). "
+                "Add them to the process environment, or to `.env` at the repo root or "
+                "`backfill_data/.env`. For `docker compose`, list those files under "
+                "`env_file` for the dashboard service (do not override them with empty "
+                "`environment` entries)."
+            )
         self._client: Client = create_client(url, key)
         CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
