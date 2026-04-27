@@ -14,7 +14,7 @@ import sys
 import numpy as np
 import pandas as pd
 
-from causal_portfolio.data.supabase_loader import CPCMDataLoader
+from causal_portfolio.data import get_loader
 from causal_portfolio.factors.builder import build_all_factors
 from causal_portfolio.factors.combo_selector import ComboDriverSelector
 from causal_portfolio.scm.graph import build_cpcm_dag, summarize_dag
@@ -45,7 +45,7 @@ def run_pipeline(
 
     # ── 1. Load data ────────────────────────────────────────────
     logger.info(f"Loading data for {len(assets)} assets: {assets}")
-    loader = CPCMDataLoader()
+    loader = get_loader()
     panel = loader.load_panel(assets, _all_metrics(), start, end)
     returns = loader.load_returns(assets, start, end)
     macro = loader.load_macro(

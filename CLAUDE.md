@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code when working in this repository.
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Repository Overview
 
@@ -45,6 +45,18 @@ Important:
 - Treat the repo as the source of truth for what can be re-run from the current committed tree.
 
 ## Core Commands
+
+### Docker Compose (full stack)
+
+The root `Makefile` orchestrates the Rust pipeline and Streamlit dashboard together:
+
+```bash
+make start   # docker compose up --build -d (Rust pipeline + dashboard at :8501)
+make logs    # stream logs from all services
+make stop    # tear down cpcm-* containers/images/volumes and clear local caches
+```
+
+`make stop` also clears `causal_portfolio/data/cache/*.parquet` and `causal_model/cache/`.
 
 ### `backfill_data/`
 

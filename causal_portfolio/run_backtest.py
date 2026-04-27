@@ -12,7 +12,7 @@ import sys
 import numpy as np
 
 from causal_portfolio.backtest.engine import CPCMBacktester
-from causal_portfolio.data.supabase_loader import CPCMDataLoader
+from causal_portfolio.data import get_loader
 from causal_portfolio.factors.builder import build_all_factors
 from causal_portfolio.factors.combo_selector import ComboDriverSelector
 from causal_portfolio.optimizer.manifold import ManifoldOptimizer
