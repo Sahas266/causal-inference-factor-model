@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import logging
 import os
+from pathlib import Path
 from typing import Any
 
 from causal_portfolio.execution.config import ExecutionConfig
@@ -34,6 +35,29 @@ logger = logging.getLogger("cpcm.execution.hl")
 MAINNET_URL = "https://api.hyperliquid.xyz"
 TESTNET_URL = "https://api.hyperliquid-testnet.xyz"
 
+# Accept either short HL_* names or the more descriptive HYPERLIQUID_* names
+ADDRESS_ENV_VARS = ("HL_ADDRESS", "HYPERLIQUID_WALLET_ADDRESS")
+KEY_ENV_VARS = ("HL_PRIVATE_KEY", "HYPERLIQUID_PRIVATE_KEY")
+
+
+def _read_env_chain(names: tuple[str, ...]) -> str | None:
+    """Return the first non-empty env var from `names`, or None."""
+    for n in names:
+        v = os.environ.get(n)
+        if v:
+            return v.strip()
+    return None
+
+
+def _load_dotenv_once() -> None:
+    """Load .env from repo root if dotenv is available. Idempotent enough."""
+    try:
+        from dotenv import load_dotenv
+    except ImportError:
+        return
+    repo_root = Path(__file__).resolve().parents[2]
+    load_dotenv(repo_root / ".env")
+
 
 class HLAdapter:
     """Stateful network client. One instance per (address, network) pair."""
@@ -48,14 +72,18 @@ class HLAdapter:
         except ImportError as e:
             raise ImportError(
                 "hyperliquid-python-sdk not installed. Run: "
-                "pip install hyperliquid-python-sdk"
+                "pip install hyperliquid-python-sdk eth-account"
             ) from e
 
+        _load_dotenv_once()
         self.config = config
-        self.address = address or os.environ.get("HL_ADDRESS")
-        self.secret_key = secret_key or os.environ.get("HL_PRIVATE_KEY")
+        self.address = address or _read_env_chain(ADDRESS_ENV_VARS)
+        self.secret_key = secret_key or _read_env_chain(KEY_ENV_VARS)
         if not self.address:
-            raise ValueError("HL_ADDRESS env var or address argument required")
+            raise ValueError(
+                "Wallet address required: set HL_ADDRESS or "
+                "HYPERLIQUID_WALLET_ADDRESS env var, or pass address= directly"
+            )
 
         self.base_url = TESTNET_URL if config.testnet else MAINNET_URL
         logger.info("HLAdapter on %s for %s", self.base_url, self.address[:8] + "...")
@@ -73,7 +101,8 @@ class HLAdapter:
         if self._exchange is None:
             if not self.secret_key:
                 raise ValueError(
-                    "HL_PRIVATE_KEY env var required for write operations"
+                    "Private key required for write operations: set "
+                    "HL_PRIVATE_KEY or HYPERLIQUID_PRIVATE_KEY env var"
                 )
             wallet = self._Account.from_key(self.secret_key)
             self._exchange = self._Exchange(wallet, self.base_url, account_address=self.address)

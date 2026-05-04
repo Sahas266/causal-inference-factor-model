@@ -32,8 +32,8 @@ DEFAULT_ASSET_MAP: dict[str, str] = {
     "link": "LINK",
     "crv": "CRV",
     "pendle": "PENDLE",
-    "pepe": "PEPE",
-    "shib": "kSHIB",   # HL lists shiba as kSHIB (1k shares)
+    "pepe": "kPEPE",   # HL uses 1k-share units for very low-price coins
+    "shib": "kSHIB",
     "ena": "ENA",
     "jup": "JUP",
     "tao": "TAO",
