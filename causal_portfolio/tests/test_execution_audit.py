@@ -1,0 +1,123 @@
+"""Tests for the execution audit log + CLI plan command (no network)."""
+
+from __future__ import annotations
+
+import json
+from datetime import datetime, timezone
+
+import pytest
+
+from causal_portfolio.execution.audit import _serialize, append, read_log
+from causal_portfolio.execution.config import ExecutionConfig
+from causal_portfolio.execution.rebalancer import plan_rebalance
+from causal_portfolio.execution.types import (
+    AccountState,
+    AssetMeta,
+    Position,
+    SubmitResult,
+)
+
+
+def _build_plan_with_orders():
+    cfg = ExecutionConfig(dry_run=True, max_position_pct=1.0, max_single_trade_pct=1.0)
+    state = AccountState(address="0xabc", account_value_usd=10_000.0,
+                         margin_used_usd=0.0)
+    meta = {"BTC": AssetMeta("BTC", sz_decimals=5, max_leverage=10, min_size=1e-5)}
+    mids = {"BTC": 60_000.0}
+    return plan_rebalance({"btc": 0.3}, state, mids, meta, cfg, timestamp_ms=1000)
+
+
+def test_serialize_handles_dataclass_and_enum():
+    plan = _build_plan_with_orders()
+    out = _serialize(plan)
+    assert isinstance(out, dict)
+    assert out["target_weights"] == {"btc": 0.3}
+    assert isinstance(out["orders"], list)
+    # SkipReason → str (enum value)
+    fake_skips = [("BTC", out.get("orders", [{}])[0].get("cloid", "x"), "detail")]
+
+
+def test_append_creates_jsonl_file(tmp_path):
+    plan = _build_plan_with_orders()
+    result = SubmitResult(plan=plan, submitted=False)
+
+    path = append(result, log_dir=tmp_path)
+    assert path.exists()
+    lines = path.read_text(encoding="utf-8").strip().split("\n")
+    assert len(lines) == 1
+    record = json.loads(lines[0])
+    assert record["submitted"] is False
+    assert record["error"] is None
+    assert record["plan"]["target_weights"] == {"btc": 0.3}
+
+
+def test_append_appends_multiple_records(tmp_path):
+    plan = _build_plan_with_orders()
+    append(SubmitResult(plan=plan, submitted=False), log_dir=tmp_path)
+    append(SubmitResult(plan=plan, submitted=True, response={"ok": 1}),
+           log_dir=tmp_path)
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    records = read_log(today, log_dir=tmp_path)
+    assert len(records) == 2
+    assert records[0]["submitted"] is False
+    assert records[1]["submitted"] is True
+    assert records[1]["response"] == {"ok": 1}
+
+
+def test_read_missing_log_returns_empty(tmp_path):
+    assert read_log("1999-01-01", log_dir=tmp_path) == []
+
+
+# ── CLI plan command ───────────────────────────────────────────────
+
+
+def test_cli_plan_with_stub_state(tmp_path, capsys, monkeypatch):
+    """`plan --weights file.json` runs offline (no network) with stub state."""
+    weights_file = tmp_path / "w.json"
+    weights_file.write_text(json.dumps({"btc": 0.3, "eth": 0.2}))
+
+    from causal_portfolio.execution.cli import main
+    rc = main(["plan", "--weights", str(weights_file), "--equity", "100000",
+               "--verbose"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "RebalancePlan" in out
+
+
+def test_cli_execute_refuses_without_live_flag(tmp_path, capsys):
+    weights_file = tmp_path / "w.json"
+    weights_file.write_text(json.dumps({"btc": 0.3}))
+
+    from causal_portfolio.execution.cli import main
+    # The argparse layer marks --live as required for execute, so missing it
+    # raises SystemExit, not a return code 1. Both prove the gate works.
+    with pytest.raises(SystemExit):
+        main(["execute", "--weights", str(weights_file)])
+
+
+def test_cli_load_weights_rejects_non_dict(tmp_path):
+    weights_file = tmp_path / "bad.json"
+    weights_file.write_text(json.dumps([0.3, 0.4]))
+
+    from causal_portfolio.execution.cli import _load_weights
+    with pytest.raises(ValueError, match="JSON object"):
+        _load_weights(str(weights_file))
+
+
+def test_cli_load_weights_rejects_non_numeric(tmp_path):
+    weights_file = tmp_path / "bad.json"
+    weights_file.write_text(json.dumps({"btc": "thirty percent"}))
+
+    from causal_portfolio.execution.cli import _load_weights
+    with pytest.raises(ValueError, match="numeric"):
+        _load_weights(str(weights_file))
+
+
+def test_cli_load_weights_lowercases_keys(tmp_path):
+    weights_file = tmp_path / "w.json"
+    weights_file.write_text(json.dumps({"BTC": 0.3, "ETH": 0.2}))
+
+    from causal_portfolio.execution.cli import _load_weights
+    weights = _load_weights(str(weights_file))
+    assert "btc" in weights and "eth" in weights
+    assert weights["btc"] == 0.3

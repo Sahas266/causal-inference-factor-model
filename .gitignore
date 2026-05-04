@@ -56,3 +56,6 @@ causal_model/results.csv
 
 # Crash dumps
 *.stackdump
+
+# Execution audit logs (real account activity, never commit)
+causal_portfolio/execution/logs/
