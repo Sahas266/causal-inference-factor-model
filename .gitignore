@@ -49,3 +49,10 @@ causal_model/results.csv
 
 # MCP secrets
 .claude/mcp.json
+
+# Local DuckDB snapshots (regenerable via causal_portfolio.data.snapshot)
+*.duckdb
+*.duckdb.wal
+
+# Crash dumps
+*.stackdump

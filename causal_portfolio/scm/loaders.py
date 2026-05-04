@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from causal_portfolio.data.supabase_loader import CPCMDataLoader
+from causal_portfolio.data import get_loader
 from causal_portfolio.factors.builder import MACRO_FACTORS
 
 DATA_DIR = Path(__file__).parent.parent / "data"
@@ -45,7 +45,7 @@ def load_from_supabase(
         (panel, returns, macro) DataFrames.
     """
     assets = assets or DEFAULT_ASSETS
-    loader = CPCMDataLoader()
+    loader = get_loader()
     panel = loader.load_panel(assets, PANEL_METRICS, start, end)
     returns = loader.load_returns(assets, start, end)
     macro = loader.load_macro(MACRO_SERIES, start, end)

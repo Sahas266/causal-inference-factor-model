@@ -12,6 +12,10 @@ COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt && \
     pip install --no-cache-dir streamlit plotly
 
+# CPU-only torch for the V4 PINN solver. The default torch wheel pulls ~2GB of
+# CUDA libs we can't use in a CPU container; the +cpu wheel is ~250MB.
+RUN pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu torch
+
 # Copy project source
 COPY causal_portfolio/ ./causal_portfolio/
 COPY backfill_data/ ./backfill_data/

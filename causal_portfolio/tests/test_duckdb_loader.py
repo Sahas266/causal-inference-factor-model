@@ -270,16 +270,34 @@ def test_get_loader_routes_to_duckdb(tmp_path, monkeypatch):
     loader.close()
 
 
-def test_get_loader_routes_to_supabase_when_unset(monkeypatch):
-    """Without CPCM_LOCAL_DB, factory must instantiate the Supabase loader, not DuckDB."""
-    monkeypatch.delenv("CPCM_LOCAL_DB", raising=False)
+def test_get_loader_force_remote_skips_local(tmp_path, monkeypatch):
+    """CPCM_FORCE_REMOTE=1 must bypass DuckDB even if a snapshot exists."""
+    db = tmp_path / "factory.duckdb"
+    DuckDBCPCMDataLoader(db_path=str(db), read_only=False).close()
+    monkeypatch.setenv("CPCM_LOCAL_DB", str(db))
+    monkeypatch.setenv("CPCM_FORCE_REMOTE", "1")
+
     from causal_portfolio.data import get_loader
-    from causal_portfolio.data.supabase_loader import CPCMDataLoader
     try:
         loader = get_loader()
-    except (KeyError, FileNotFoundError):
-        # No Supabase creds in test env — that's fine, it confirms we routed
-        # to the Supabase branch rather than DuckDB.
+    except (KeyError, ValueError, FileNotFoundError):
+        # No Supabase creds → confirmed we tried the remote branch, not DuckDB.
         return
-    assert isinstance(loader, CPCMDataLoader)
     assert not isinstance(loader, DuckDBCPCMDataLoader)
+
+
+def test_default_local_db_path_used_when_present(tmp_path, monkeypatch):
+    """If the default-location snapshot exists, factory picks it without env var."""
+    import causal_portfolio.data as data_init
+
+    fake_default = tmp_path / "cpcm_local.duckdb"
+    DuckDBCPCMDataLoader(db_path=str(fake_default), read_only=False).close()
+
+    monkeypatch.delenv("CPCM_LOCAL_DB", raising=False)
+    monkeypatch.delenv("CPCM_FORCE_REMOTE", raising=False)
+    monkeypatch.setattr(data_init, "DEFAULT_LOCAL_DB", fake_default)
+
+    from causal_portfolio.data import get_loader
+    loader = get_loader()
+    assert isinstance(loader, DuckDBCPCMDataLoader)
+    loader.close()

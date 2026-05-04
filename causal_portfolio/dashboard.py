@@ -198,8 +198,8 @@ def _metric(label: str, value: str, delta: str | None = None, good_positive: boo
 # ── Run pipeline ──────────────────────────────────────────────────────
 @st.cache_data(show_spinner=False, ttl=3600)
 def _load_data(assets, start, end, use_cache_flag):
-    from causal_portfolio.data.supabase_loader import CPCMDataLoader
-    loader = CPCMDataLoader()
+    from causal_portfolio.data import get_loader
+    loader = get_loader()
     all_metrics = [
         "PriceUSD", "price", "tvl_usd", "SplyCur",
         "stablecoin_circulating_usd", "FeeTotNtv",
@@ -307,6 +307,7 @@ def run_pipeline():
             innov_diag = ekf.innovation_diagnostics(D)
             ekf_data = {
                 "filtered": filtered,
+                "covs": covs,  # (T, m, m) state covariance — needed for trace(P_t) plot
                 "raw": D,
                 "driver_names": selected_drivers,
                 "diagnostics": innov_diag,
@@ -1008,5 +1009,22 @@ with t_ekf:
 
         # State prediction uncertainty
         st.markdown("### State Prediction Uncertainty (Trace of P_t)")
-        ekf_obj = data.get("_ekf_obj")  # pre-built in run, may not be stored
-        st.info("Re-run with EKF enabled to see time-varying state covariance (P_t) evolution.")
+        covs = ekf_data.get("covs")
+        if covs is None:
+            st.info("Re-run with EKF enabled to see time-varying state covariance (P_t) evolution.")
+        else:
+            # trace(P_t) = sum of diagonal — total state uncertainty at each time step
+            trace_pt = np.einsum("tii->t", covs)
+            dates = data.get("dates")
+            pt_df = pd.DataFrame({"trace(P_t)": trace_pt}, index=dates if dates is not None else None)
+            fig_pt = px.line(
+                pt_df, y="trace(P_t)",
+                title="Total state uncertainty over time (lower = filter more confident)",
+            )
+            fig_pt.update_layout(showlegend=False, height=350)
+            st.plotly_chart(fig_pt, use_container_width=True)
+            st.caption(
+                "Trace of the posterior covariance matrix P_{t|t}. "
+                "Should drop quickly from the initial value and stabilize. "
+                "Spikes indicate periods where observations were noisy or missing."
+            )

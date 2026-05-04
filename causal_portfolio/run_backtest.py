@@ -40,7 +40,7 @@ def run(
 
     # ── 1. Load data ────────────────────────────────────────────
     logger.info(f"Loading data for {len(assets)} assets...")
-    loader = CPCMDataLoader()
+    loader = get_loader()
 
     all_metrics = [
         "PriceUSD", "price", "tvl_usd", "SplyCur",
