@@ -196,11 +196,61 @@ class HLAdapter:
         return ex.bulk_orders(order_args)
 
 
-def execute_plan(adapter: HLAdapter, plan: RebalancePlan) -> SubmitResult:
-    """Execute a RebalancePlan. Honors dry_run flag in adapter.config."""
+def execute_plan(
+    adapter: HLAdapter,
+    plan: RebalancePlan,
+    *,
+    acknowledge_mainnet: bool = False,
+    write_audit: bool = True,
+) -> SubmitResult:
+    """Execute a RebalancePlan. Honors dry_run flag in adapter.config.
+
+    Safety gates (in addition to ExecutionConfig.dry_run):
+
+    1. Address match: plan.current_state.address MUST equal adapter.address.
+       Refuses to execute otherwise. Prevents cross-account misfires when
+       multiple adapters/plans coexist in one process.
+
+    2. Mainnet acknowledgement: live mainnet writes require an explicit
+       `acknowledge_mainnet=True` kwarg. The CLI sets it after a confirmation
+       prompt; programmatic callers must opt in deliberately.
+
+    3. Audit write: every result is appended to the rotating JSONL log unless
+       `write_audit=False`. Test code disables this; production never should.
+    """
+    result = _execute_plan_inner(adapter, plan, acknowledge_mainnet=acknowledge_mainnet)
+    if write_audit:
+        try:
+            from causal_portfolio.execution.audit import append as audit_append
+            audit_append(result)
+        except Exception:
+            logger.exception("audit append failed (continuing)")
+    return result
+
+
+def _execute_plan_inner(
+    adapter: HLAdapter, plan: RebalancePlan, *, acknowledge_mainnet: bool,
+) -> SubmitResult:
+    # Gate 1: address-of-plan must match adapter address
+    if plan.current_state.address != adapter.address:
+        return SubmitResult(
+            plan=plan, submitted=False,
+            error=(f"address mismatch: plan built for {plan.current_state.address!r} "
+                   f"but adapter writes from {adapter.address!r}"),
+        )
+
     if adapter.config.dry_run:
         logger.info("DRY RUN — not submitting %d orders", len(plan.orders))
         return SubmitResult(plan=plan, submitted=False)
+
+    # Gate 2: mainnet writes need explicit acknowledgement
+    if adapter.config.is_live_mainnet() and not acknowledge_mainnet:
+        return SubmitResult(
+            plan=plan, submitted=False,
+            error=("LIVE MAINNET write blocked: pass acknowledge_mainnet=True to "
+                   "execute_plan() to opt in. The CLI does this after a "
+                   "confirmation prompt."),
+        )
 
     if adapter.config.is_live_mainnet():
         logger.warning("LIVE MAINNET write: %d orders, $%.0f gross",
@@ -209,10 +259,46 @@ def execute_plan(adapter: HLAdapter, plan: RebalancePlan) -> SubmitResult:
 
     try:
         adapter.cancel_all_open()
+
+        # Cancel-vs-submit race guard: a stale order could fill between the
+        # cancel call and our submit. Re-fetch state and compare to the state
+        # the plan was built from. If positions moved materially, bail out
+        # so the caller can re-plan against fresh state.
+        mid_state = adapter.fetch_state()
+        if _detect_cancel_race(plan, mid_state):
+            return SubmitResult(
+                plan=plan, submitted=False, post_state=mid_state,
+                error="cancel-race detected: positions moved between cancel and submit",
+            )
+
         response = adapter.submit_orders(plan.orders)
         post = adapter.fetch_state()
+        from causal_portfolio.execution.reconcile import format_drift_summary, reconcile
+        drifts = reconcile(plan, post)
+        logger.info(format_drift_summary(drifts))
         return SubmitResult(plan=plan, submitted=True,
-                            response=response, post_state=post)
+                            response=response, post_state=post, drifts=drifts)
     except Exception as e:
         logger.exception("submit_orders failed")
         return SubmitResult(plan=plan, submitted=False, error=str(e))
+
+
+def _detect_cancel_race(plan, mid_state, tolerance_usd: float = 25.0) -> bool:
+    """Return True if positions moved materially between plan and mid_state.
+
+    Compares plan.current_state.positions to mid_state.positions for every coin
+    the plan touches. Trips on any coin whose notional changed by more than
+    tolerance_usd — that's our signal a stale order filled.
+    """
+    pre = plan.current_state.positions
+    coins_touched = set(plan.target_usd.keys())
+    for coin in coins_touched:
+        pre_notional = pre[coin].notional_usd if coin in pre else 0.0
+        mid_notional = mid_state.positions[coin].notional_usd if coin in mid_state.positions else 0.0
+        if abs(mid_notional - pre_notional) > tolerance_usd:
+            logger.warning(
+                "cancel-race on %s: pre=$%.2f mid=$%.2f (drift $%.2f)",
+                coin, pre_notional, mid_notional, mid_notional - pre_notional,
+            )
+            return True
+    return False

@@ -195,6 +195,18 @@ def plan_rebalance(
             ))
             continue
 
+        # Precision-loss warning: if rounding shrank the trade noticeably
+        # (>10% off the intended notional), surface it. Trade still goes out,
+        # but the operator should know precision is tight on this asset.
+        target_notional = abs(delta)
+        shrink_pct = (target_notional - rounded_notional) / target_notional
+        if shrink_pct > 0.10:
+            notes.append(
+                f"precision warning {coin}: rounded ${rounded_notional:.2f} "
+                f"is {shrink_pct:.1%} below target ${target_notional:.2f} "
+                f"(sz_decimals={m.sz_decimals})"
+            )
+
         limit_px = mid * config.slippage_factor(is_buy)
         cloid = _make_cloid(ts, coin, is_buy, size)
         orders.append(Order(

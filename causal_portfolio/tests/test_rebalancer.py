@@ -269,6 +269,45 @@ def test_single_trade_cap_blocks_oversize_trade(basic_meta, basic_mids):
     assert ("BTC", SkipReason.EXCEEDS_TRADE_CAP) in skip_reasons
 
 
+def test_precision_warning_when_rounding_shrinks_trade(basic_mids):
+    """Coarse sz_decimals → trade shrinks >10% from target → warning in notes."""
+    # Whole-BTC granularity. Target $80k → 1.3333 BTC → rounded to 1.0 BTC ($60k).
+    # That's a 25% shrink — over the 10% threshold.
+    meta = {"BTC": AssetMeta("BTC", sz_decimals=0, max_leverage=10, min_size=1.0)}
+    cfg = ExecutionConfig(
+        dry_run=True, max_position_pct=1.0, max_single_trade_pct=1.0,
+        min_trade_usd=100.0,
+    )
+    plan = plan_rebalance(
+        target_weights={"btc": 0.8},
+        state=_state(100_000),
+        mids=basic_mids,
+        meta=meta,
+        config=cfg,
+        timestamp_ms=1000,
+    )
+    assert any("precision warning" in n and "BTC" in n for n in plan.notes), (
+        f"expected precision warning, got notes: {plan.notes}"
+    )
+    # Trade still goes out at the rounded size, not skipped
+    btc_order = next(o for o in plan.orders if o.coin == "BTC")
+    assert btc_order.size == 1.0
+
+
+def test_no_precision_warning_when_rounding_is_minor(basic_meta, basic_mids):
+    """Normal sz_decimals → tiny rounding shouldn't trigger the warning."""
+    cfg = ExecutionConfig(dry_run=True, max_position_pct=1.0, max_single_trade_pct=1.0)
+    plan = plan_rebalance(
+        target_weights={"btc": 0.5},
+        state=_state(10_000),
+        mids=basic_mids,
+        meta=basic_meta,  # BTC sz_decimals=5
+        config=cfg,
+        timestamp_ms=1000,
+    )
+    assert not any("precision warning" in n for n in plan.notes)
+
+
 def test_size_rounded_to_zero_skipped(basic_mids):
     """If sz_decimals is too coarse, tiny notional rounds to 0."""
     meta = {"BTC": _meta("BTC", sz_decimals=0)}  # whole BTC only
@@ -395,6 +434,13 @@ def test_config_validation():
         ExecutionConfig(max_position_pct=1.5)
     with pytest.raises(ValueError, match="slippage_bps"):
         ExecutionConfig(slippage_bps=-1)
+
+
+def test_twap_minutes_not_implemented():
+    with pytest.raises(NotImplementedError, match="TWAP"):
+        ExecutionConfig(twap_minutes=5.0)
+    # 0.0 (default) must not raise
+    ExecutionConfig(twap_minutes=0.0)
 
 
 def test_is_live_mainnet_gate():

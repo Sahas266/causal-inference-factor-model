@@ -74,6 +74,14 @@ class ExecutionConfig:
     # ── Safety ──────────────────────────────────────────────────────────
     dry_run: bool = True           # default OFF — must opt-in to live trading
 
+    # ── TWAP (placeholder — not implemented) ────────────────────────────
+    # When set, would split orders into batches over `twap_minutes`. Not yet
+    # supported because the installed hyperliquid SDK has no native TWAP write
+    # helper, and the client-side alternative (time-spaced batches) needs a
+    # design call on whether to refresh mids between batches. Setting this to
+    # any non-zero value raises NotImplementedError at config-validate time.
+    twap_minutes: float = 0.0
+
     def __post_init__(self):
         # Light validation. Don't catch every bad combination — just the obvious
         # foot-guns that would silently corrupt a rebalance plan.
@@ -87,6 +95,11 @@ class ExecutionConfig:
             raise ValueError(f"min_trade_usd must be >= 0, got {self.min_trade_usd}")
         if self.slippage_bps < 0:
             raise ValueError(f"slippage_bps must be >= 0, got {self.slippage_bps}")
+        if self.twap_minutes != 0.0:
+            raise NotImplementedError(
+                "TWAP execution is not yet implemented — set twap_minutes=0. "
+                "Tracked in issue: HL SDK lacks a native TWAP write helper."
+            )
 
     def slippage_factor(self, is_buy: bool) -> float:
         """Multiplier on mid for the IOC limit price."""

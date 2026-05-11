@@ -14,13 +14,16 @@ Public entry points:
 
 from causal_portfolio.execution.config import ExecutionConfig
 from causal_portfolio.execution.rebalancer import plan_rebalance
+from causal_portfolio.execution.reconcile import reconcile
 from causal_portfolio.execution.types import (
     AccountState,
     AssetMeta,
     Order,
     Position,
     RebalancePlan,
+    ReconcileDrift,
     SkipReason,
+    SubmitResult,
 )
 
 __all__ = [
@@ -30,6 +33,9 @@ __all__ = [
     "Order",
     "Position",
     "RebalancePlan",
+    "ReconcileDrift",
     "SkipReason",
+    "SubmitResult",
     "plan_rebalance",
+    "reconcile",
 ]

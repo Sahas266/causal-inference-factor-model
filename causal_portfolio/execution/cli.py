@@ -30,7 +30,9 @@ import logging
 import sys
 from pathlib import Path
 
-from causal_portfolio.execution.audit import append as audit_append
+from datetime import datetime, timezone
+
+from causal_portfolio.execution.audit import LOG_DIR, append as audit_append, read_log
 from causal_portfolio.execution.config import ExecutionConfig
 from causal_portfolio.execution.rebalancer import plan_rebalance
 from causal_portfolio.execution.types import (
@@ -147,13 +149,52 @@ def cmd_execute(args) -> int:
         print("Mainnet execution canceled.")
         return 1
 
-    result = execute_plan(adapter, plan)
-    audit_append(result)
+    # execute_plan handles audit appending internally now.
+    result = execute_plan(adapter, plan, acknowledge_mainnet=args.mainnet)
 
     if result.error:
         print(f"\nERROR: {result.error}", file=sys.stderr)
         return 2
     print(f"\nSubmitted. Response: {result.response}")
+    return 0
+
+
+def cmd_logs(args) -> int:
+    date = args.date or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    records = read_log(date)
+    if not records:
+        print(f"No audit records for {date} (looked in {LOG_DIR}/rebalance-{date}.jsonl).")
+        return 0
+
+    print(f"Audit log for {date} — {len(records)} record(s)")
+    print("=" * 78)
+    for i, rec in enumerate(records, 1):
+        plan = rec.get("plan") or {}
+        n_orders = len(plan.get("orders") or [])
+        n_skipped = len(plan.get("skipped") or [])
+        gross = sum(abs(v) for v in (plan.get("deltas_usd") or {}).values())
+        equity = (plan.get("current_state") or {}).get("account_value_usd", 0)
+        drifts = rec.get("plan", {}).get("drifts") or []  # legacy slot
+        actual_drifts = []
+        # drifts may live on the submit result, not the plan. Try both shapes.
+        if "drifts" in rec:
+            actual_drifts = rec["drifts"] or []
+        status = "SUBMITTED" if rec.get("submitted") else "DRY-RUN" if rec.get("error") is None else "ERROR"
+        if rec.get("error"):
+            status = "ERROR"
+        print(f"\n[{i}] {rec.get('ts_utc', '?')}  status={status}")
+        print(f"     equity=${equity:,.2f}  orders={n_orders}  skipped={n_skipped}  gross=${gross:,.2f}")
+        if rec.get("error"):
+            print(f"     error: {rec['error']}")
+        if args.verbose:
+            for o in plan.get("orders") or []:
+                side = "BUY " if o.get("is_buy") else "SELL"
+                notional = (o.get("size") or 0) * (o.get("limit_px") or 0)
+                print(f"     - {o.get('coin'):<8} {side} sz={o.get('size'):<12} px={o.get('limit_px'):<12} ${notional:,.2f}")
+            for s in plan.get("skipped") or []:
+                # skipped is serialized as a list of [coin, reason, detail]
+                if isinstance(s, list) and len(s) >= 3:
+                    print(f"     skip {s[0]:<8} {s[1]:<28} {s[2]}")
     return 0
 
 
@@ -171,6 +212,12 @@ def main(argv: list[str] | None = None) -> int:
                         help="Stub equity for offline planning (default: 10000)")
     p_plan.add_argument("--verbose", "-v", action="store_true")
     p_plan.set_defaults(func=cmd_plan)
+
+    p_logs = sub.add_parser("logs", help="Pretty-print the audit log for a date")
+    p_logs.add_argument("--date", help="UTC date YYYY-MM-DD (default: today)")
+    p_logs.add_argument("--verbose", "-v", action="store_true",
+                        help="Print every order and skip reason per record")
+    p_logs.set_defaults(func=cmd_logs)
 
     p_exec = sub.add_parser("execute", help="Submit a rebalance plan to Hyperliquid")
     p_exec.add_argument("--weights", required=True)

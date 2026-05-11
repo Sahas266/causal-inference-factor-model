@@ -121,3 +121,41 @@ def test_cli_load_weights_lowercases_keys(tmp_path):
     weights = _load_weights(str(weights_file))
     assert "btc" in weights and "eth" in weights
     assert weights["btc"] == 0.3
+
+
+def test_cli_logs_command_empty_day(tmp_path, capsys, monkeypatch):
+    """`logs` on a date with no audit records prints a 'no records' message."""
+    from causal_portfolio.execution import audit as audit_mod
+    monkeypatch.setattr(audit_mod, "LOG_DIR", tmp_path)
+    from causal_portfolio.execution import cli as cli_mod
+    monkeypatch.setattr(cli_mod, "LOG_DIR", tmp_path)
+
+    rc = cli_mod.main(["logs", "--date", "1999-01-01"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "No audit records" in out
+
+
+def test_cli_logs_command_renders_records(tmp_path, capsys, monkeypatch):
+    """Write a fake record, then verify `logs` renders it."""
+    from causal_portfolio.execution import audit as audit_mod
+    monkeypatch.setattr(audit_mod, "LOG_DIR", tmp_path)
+    from causal_portfolio.execution import cli as cli_mod
+    monkeypatch.setattr(cli_mod, "LOG_DIR", tmp_path)
+
+    # Build + append a real record so we exercise the same code path
+    plan = _build_plan_with_orders()
+    from causal_portfolio.execution.audit import append
+    from causal_portfolio.execution.types import SubmitResult
+    append(SubmitResult(plan=plan, submitted=False), log_dir=tmp_path)
+
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    rc = cli_mod.main(["logs", "--date", today, "--verbose"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "DRY-RUN" in out
+    assert "BTC" in out  # verbose mode shows the order
+
+
+# Imports for the new tests
+from datetime import datetime, timezone

@@ -96,6 +96,21 @@ Each rebalance appends one JSON record to `logs/rebalance-YYYY-MM-DD.jsonl`:
 
 Never auto-rotated. Debugging old fills requires the raw record.
 
+## Known limitations / future work
+
+- **Plans don't record their origin network.** A plan built against testnet
+  mids could in principle be re-executed against a mainnet adapter (the
+  prices would be stale but mainnet would still try to fill them). Currently
+  the operator's responsibility to use one adapter per plan; could be made
+  type-safe by tagging plans with `network` and refusing mismatches.
+- **No TWAP execution.** `ExecutionConfig.twap_minutes` is reserved but
+  unimplemented; setting it to a non-zero value raises NotImplementedError.
+- **No reduce-only orders.** All orders are placed as flat IOC limits; can't
+  currently constrain "only close, never open."
+- **No per-asset leverage check.** If `config.leverage` exceeds a coin's
+  HL `max_leverage`, the order will be rejected by the exchange rather than
+  pre-filtered locally.
+
 ## What this layer does NOT do
 
 - TWAP / iceberg execution (single batch, all-or-nothing)

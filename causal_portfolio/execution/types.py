@@ -98,6 +98,16 @@ class RebalancePlan:
 
 
 @dataclass(frozen=True)
+class ReconcileDrift:
+    """A coin whose post-execution notional differs materially from target."""
+    coin: str
+    target_usd: float       # what plan.target_usd[coin] said
+    actual_usd: float       # signed actual notional from post_state
+    drift_usd: float        # actual - target (signed)
+    drift_pct: float        # drift_usd / abs(target_usd) if target nonzero, else inf
+
+
+@dataclass(frozen=True)
 class SubmitResult:
     """Outcome of submitting a RebalancePlan to Hyperliquid."""
     plan: RebalancePlan
@@ -105,3 +115,4 @@ class SubmitResult:
     response: dict | None = None        # raw HL response, if submitted
     post_state: AccountState | None = None
     error: str | None = None
+    drifts: list[ReconcileDrift] = field(default_factory=list)  # post-trade reconciliation
