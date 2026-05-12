@@ -136,6 +136,33 @@ def test_cli_logs_command_empty_day(tmp_path, capsys, monkeypatch):
     assert "No audit records" in out
 
 
+def test_cli_state_command_routes_to_correct_network(monkeypatch, capsys):
+    """`state` builds an adapter on the requested network and prints summary."""
+    from unittest.mock import MagicMock
+    from causal_portfolio.execution.types import AccountState
+
+    # Stub HLAdapter so we don't hit the network
+    fake = MagicMock()
+    fake.address = "0xstub"
+    fake.fetch_state.return_value = AccountState(
+        address="0xstub", account_value_usd=12_345.67,
+        margin_used_usd=100.0, positions={},
+    )
+    fake.fetch_mids.return_value = {}
+    fake.fetch_open_order_ids.return_value = []
+
+    import causal_portfolio.execution.hyperliquid as hl_mod
+    monkeypatch.setattr(hl_mod, "HLAdapter", lambda cfg: fake)
+
+    from causal_portfolio.execution.cli import main
+    rc = main(["state"])  # default = testnet
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "testnet" in out
+    assert "12,345.67" in out  # the equity value, ignoring alignment whitespace
+    fake.fetch_state.assert_called_once()
+
+
 def test_cli_logs_command_renders_records(tmp_path, capsys, monkeypatch):
     """Write a fake record, then verify `logs` renders it."""
     from causal_portfolio.execution import audit as audit_mod

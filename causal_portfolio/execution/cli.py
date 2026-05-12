@@ -45,14 +45,21 @@ logger = logging.getLogger("cpcm.execution.cli")
 
 
 def _load_weights(path: str) -> dict[str, float]:
-    """Load and validate a weights JSON file."""
+    """Load and validate a weights JSON file.
+
+    Keys prefixed with `_` are treated as metadata and ignored. The CPCM
+    pipeline writes a `_meta` field with provenance info (solver, date,
+    selected drivers, etc.) that the executor doesn't need.
+    """
     raw = json.loads(Path(path).read_text())
     if not isinstance(raw, dict):
         raise ValueError(f"Weights file must be a JSON object, got {type(raw).__name__}")
     for k, v in raw.items():
+        if k.startswith("_"):
+            continue  # metadata, skip
         if not isinstance(v, (int, float)):
             raise ValueError(f"Weight for {k!r} must be numeric, got {type(v).__name__}")
-    return {k.lower(): float(v) for k, v in raw.items()}
+    return {k.lower(): float(v) for k, v in raw.items() if not k.startswith("_")}
 
 
 def _stub_state_and_market(equity: float = 10_000.0) -> tuple[AccountState, dict, dict]:
@@ -159,6 +166,48 @@ def cmd_execute(args) -> int:
     return 0
 
 
+def cmd_state(args) -> int:
+    """Pretty-print the current HL account state (read-only, no orders)."""
+    from causal_portfolio.execution.hyperliquid import HLAdapter
+
+    cfg = ExecutionConfig(testnet=not args.mainnet, dry_run=True)
+    adapter = HLAdapter(cfg)
+
+    state = adapter.fetch_state()
+    network = "mainnet" if args.mainnet else "testnet"
+    print(f"Hyperliquid {network} state — {state.address}")
+    print("=" * 70)
+    print(f"  equity:        ${state.account_value_usd:>12,.2f}")
+    print(f"  margin used:   ${state.margin_used_usd:>12,.2f}")
+    print(f"  free margin:   ${state.free_margin_usd:>12,.2f}")
+    print(f"  positions:     {len(state.positions)}")
+
+    if state.positions:
+        try:
+            mids = adapter.fetch_mids()
+        except Exception:
+            mids = {}
+        print()
+        print(f"  {'Coin':<10} {'Size':>14} {'Entry':>12} {'Mark':>12} {'Notional':>14}  Side")
+        for coin, p in sorted(state.positions.items()):
+            mark = mids.get(coin, p.entry_px)
+            side = "LONG " if p.is_long else "SHORT"
+            print(
+                f"  {coin:<10} {p.size:>+14.6f} {p.entry_px:>12.4f} "
+                f"{mark:>12.4f} ${p.notional_usd:>+13,.2f}  {side}"
+            )
+
+    if args.verbose:
+        try:
+            open_oids = adapter.fetch_open_order_ids()
+            print()
+            print(f"  open orders: {len(open_oids)}")
+        except Exception as e:
+            print(f"  (couldn't fetch open orders: {e})")
+
+    return 0
+
+
 def cmd_logs(args) -> int:
     date = args.date or datetime.now(timezone.utc).strftime("%Y-%m-%d")
     records = read_log(date)
@@ -212,6 +261,12 @@ def main(argv: list[str] | None = None) -> int:
                         help="Stub equity for offline planning (default: 10000)")
     p_plan.add_argument("--verbose", "-v", action="store_true")
     p_plan.set_defaults(func=cmd_plan)
+
+    p_state = sub.add_parser("state", help="Pretty-print the current HL account state")
+    p_state.add_argument("--mainnet", action="store_true", help="Read from mainnet (default: testnet)")
+    p_state.add_argument("--verbose", "-v", action="store_true",
+                         help="Also fetch open order count")
+    p_state.set_defaults(func=cmd_state)
 
     p_logs = sub.add_parser("logs", help="Pretty-print the audit log for a date")
     p_logs.add_argument("--date", help="UTC date YYYY-MM-DD (default: today)")
