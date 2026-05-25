@@ -1010,3 +1010,121 @@ a real downside-protection mechanism, the global driver selector is the
 weak link in the current pipeline, and the look-ahead-aware methodology
 (rolling HMM fit + forward filter + multi-start) is built and ready for
 use on top of a future base strategy that actually works.
+
+## Strategy search: beating buy-and-hold BTC with costs
+
+### Run parameters
+
+- Date range: `2022-01-01` to `2025-12-31`
+- Assets: `btc, eth, sol`
+- Fee: `5.0` bps, slippage: `5.0` bps (round-trip on |Δw|_L1 * equity)
+- HMM window: `504` days, refit every `63` days
+- No-trade threshold (for regime configs that use one): `0.5` L1 distance
+- Run UTC: `2026-05-25T07:31:17+00:00`
+
+### Results
+
+```
+Strategy               Total   Sharpe   Sortino     MaxDD   Calmar  Turnover  Rebals
+------------------------------------------------------------------------------------
+BH_BTC                 +8.5%    0.247     0.249    -72.9%    0.145     0.000    1460
+EW_BASKET             -60.2%    0.001     0.001    -87.8%    0.000     0.000      70
+REGIME_BTC            +81.7%    0.704     0.628    -34.7%    0.580     0.021     936
+REGIME_EW            +166.6%    0.885     0.773    -44.4%    0.756     0.021     936
+REGIME_BTC_T50        +81.7%    0.704     0.628    -34.7%    0.580     0.021      21
+REGIME_BTC_50        +123.4%    0.849     0.900    -33.9%    0.781     0.011     936
+```
+
+### Verdict
+
+- Winner 'REGIME_EW' beat BH_BTC by 158.1pp total return and +0.637 Sharpe.
+- Highest-Sharpe winner: **REGIME_EW** (Sharpe `0.885`, total `+166.6%`, max DD `-44.4%`).
+
+### Threshold sensitivity (winner)
+
+The threshold-l1 sweep on REGIME_EW shows the no-trade band cleanly
+suppresses noise rebalances without changing the strategy outcome:
+
+| threshold_l1 | Total | Sharpe | Max DD | Rebalances |
+|---:|---:|---:|---:|---:|
+| 0.00 | +166.6% | 0.885 | -44.4% | 936 |
+| 0.10 | +166.6% | 0.885 | -44.4% | **21** |
+| 0.25 | +166.6% | 0.885 | -44.4% | 21 |
+| 0.50 | +166.6% | 0.885 | -44.4% | 21 |
+| 0.75 | +166.6% | 0.885 | -44.4% | 21 |
+| 1.00 | +166.6% | 0.885 | -44.4% | 21 |
+| 1.50 | +0.0% | 0.000 | +0.0% | 0 |
+
+Between thresholds 0.10 and 1.0, returns are **identical** — only 21 actual
+regime-switch trades happen in the whole 4-year backtest. Reason: this
+regime allocator produces binary weights (all-in during calm, all-out
+during stress); micro-rebalances at threshold=0 are mostly zero-delta hold
+passes that fire the rebalance path without trading anything. The
+threshold filter cuts the noise cleanly.
+
+At threshold=1.5 the strategy never fires (a 75%+ portfolio swing isn't
+crossed because we cap at L1=2.0 for a full reallocation, and intermediate
+states never reach that). 1.0 is the natural max useful threshold.
+
+**Production recommendation: threshold_l1 = 0.10**, the smallest value
+that filters all noise. Robust to any future strategy that produces
+continuous weights (where the noise filter actually matters).
+
+### Why this works (and why the CPCM driver pipeline didn't)
+
+The CPCM driver pipeline is trying to do two hard things simultaneously:
+identify which factors drive returns, and time the market based on those
+factors. The driver-attribution step is where it falls down — the global
+selector's `(cex_dex_flow, vixcls, dtwexbgs)` pick is rank 100 of 220 in
+every sub-window we tested.
+
+REGIME_EW sidesteps the hard problem entirely. It doesn't try to attribute
+returns to drivers; it just uses the regime classifier as a switch between
+"long crypto" and "cash" and rides BTC + ETH + SOL beta during the good
+times. The HMM is the only intelligent component; everything else is
+buy-and-hold.
+
+The 158pp lift over BH_BTC comes from one place: **avoiding the 2022
+crypto winter**. The HMM correctly classified the 2022 selloff as
+stress-regime; the strategy held cash; while BH_BTC and EW_BASKET took
+the full -70% to -88% drawdown.
+
+### Deploying the winner
+
+The winning config maps directly to a Hyperliquid execution call. The
+strategy emits a weight vector at every rebalance:
+
+- **Calm regime** → `{"btc": 0.333, "eth": 0.333, "sol": 0.333}`
+- **Stress regime** → `{"btc": 0.0, "eth": 0.0, "sol": 0.0}` (all cash)
+
+Daily operational flow:
+1. Run the HMM forward filter on the latest (VIX, BTC realized vol).
+2. If today's regime label differs from yesterday's: emit a new weights
+   JSON and pass it to `causal_portfolio.execution.cli execute --live --testnet`.
+3. If unchanged: skip — the no-trade band (threshold=0.10) ensures we
+   only trade on actual regime switches.
+
+Expected real-world frequency: ~21 trades over 4 years ≈ **one trade
+every 2 months**. Per-trade cost at full reallocation is ~10 bps notional
+(5 bps fee + 5 bps slippage on each leg of the swap), already baked into
+the backtest results above. The CPCM execution layer's safety rails
+(max_position_pct, max_single_trade_pct) should be widened from the
+defaults since this strategy goes 100% into the basket at once — set
+`max_position_pct=1.0`, `max_single_trade_pct=1.0`, and accept the
+single-shot rebalance.
+
+### What we didn't try (potential further wins)
+
+- **Larger universe** (add more L1s, blue-chip alts) — could improve the
+  basket beta in calm regimes.
+- **3-state HMM with partial allocations per state** — calm full-long,
+  moderate stress 50% long, full stress cash. Earlier we found 3-state
+  is plausible with the right seed and gives finer regime structure.
+- **Asymmetric thresholds** — easier to enter cash than to leave cash
+  (be defensive on the way in, conservative on the way out).
+- **Stop-loss overlay** — even with regime gating, the -44% max DD is
+  uncomfortable; a hard stop at -25% would cap that explicitly.
+
+All of these are research extensions to consider once the simple version
+is running in testnet and we've validated the cost model against real
+fills.
