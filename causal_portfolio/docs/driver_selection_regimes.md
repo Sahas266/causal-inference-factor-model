@@ -1,5 +1,65 @@
 # Driver Selection: Stability Analysis and Regime-Conditional Extensions
 
+## TL;DR
+
+A multi-step research arc, end-to-end, on whether the CPCM strategy should
+move from one global driver pick to regime-conditional selection.
+
+**Findings, in order of confidence:**
+
+1. **The global driver pick is a deep compromise.** Across 19 sub-windows
+   spanning 2022-2025, the current pick `(cex_dex_flow, vixcls, dtwexbgs)`
+   wins **0% of the time** and averages **rank 100 of 220** possible
+   3-subsets. *(Option 2)*
+
+2. **There are real regimes in the data, partially identifiable in real
+   time.** A 2-state Gaussian HMM on `(VIX, BTC realized vol)` finds two
+   persistent regimes with sticky transitions (>0.97 stay-probability).
+   The causal pipeline (rolling-window fit + forward filter) recovers
+   these regimes with **77% label agreement** vs the in-sample Viterbi
+   baseline. *(Phase A + Phase B step 1)*
+
+3. **Phase A's specific per-regime winners were partially a look-ahead
+   artifact.** Across 11 different causal-pipeline configurations, the
+   per-regime winning driver subsets **never matched** the non-causal
+   Phase A picks. The regime *structure* is real; the regime-specific
+   *winners* shift when you can't see the future. *(Phase B step 1)*
+
+4. **Regime-conditional selection works as a downside protector, not as
+   an alpha source.** The A/B/C backtest (2022-2025, 9 assets, m=3)
+   produced the ranking MoE > Hard-switch > Global by Sharpe, exactly as
+   theory predicts. MoE cuts max drawdown by 19pp vs Global. But all
+   three strategies lose substantial money — the lift is relative to a
+   broken baseline. *(Phase B step 2)*
+
+| Strategy | Sharpe | Total return | Max drawdown |
+|---|---:|---:|---:|
+| Global | -0.78 | -66.1% | -70.4% |
+| Hard-switch | -0.34 | -41.9% | -59.1% |
+| MoE | -0.17 | -30.9% | -51.4% |
+
+**Recommendation:** do not ship regime conditioning as alpha. The
+methodology is built and tested; layer it on top of any *future* base
+strategy that actually produces positive returns. The immediate next
+research move is fixing the base strategy (the global pick is the weak
+link), not more regime work.
+
+**What's in the repo as a result:**
+
+- `causal_portfolio/regimes/hmm.py` — multi-start fit, causal forward
+  filter, rolling-window decode
+- `causal_portfolio/backtest/regime_engine.py` — walk-forward backtester
+  with `hard` and `moe` modes
+- `causal_portfolio/diagnostics/{driver_stability,regime_stability,causal_validation}.py`
+  — three diagnostic scripts that produced the findings above
+- `causal_portfolio/run_regime_ab.py` — A/B/C runner
+- 36 new tests, all passing
+
+The rest of this doc is the full research arc with every intermediate
+finding, in chronological order, for posterity and reproducibility.
+
+---
+
 ## Background
 
 The CPCM pipeline currently selects its top `m` causal drivers **once, over the
@@ -366,7 +426,13 @@ The instability is real, not a window-size artifact.
 
 ---
 
-## Final verdict
+## Final verdict (Option 2 only — superseded by Phase B step 2 below)
+
+> ⚠️ **Note for the reader:** this "Final verdict" was written after Option 2
+> and recommended proceeding with regime conditioning. Phase B step 2 ran
+> the actual A/B/C backtest and found the methodology works but the base
+> strategy is broken; see the TL;DR at the top of this doc and the
+> "Honest analysis" section near the bottom for the actual final position.
 
 The current strategy is using **`(cex_dex_flow, vixcls, dtwexbgs)`** — a
 subset that **never wins in any of the 62 sub-windows tested across two
@@ -584,7 +650,12 @@ winners.** If the causal labels track the non-causal labels well (target:
 >85% agreement, no per-regime winner flips), Phase A's results carry over.
 If they diverge much, we'd need to revisit features or accept a haircut.
 
-### Recommended Phase B plan
+### Recommended Phase B plan (original — see "Revised Phase B v2 plan" below)
+
+> ⚠️ **Note:** this plan was written after Phase A under the assumption
+> that causal validation would broadly confirm Phase A. It didn't. The
+> revised plan is in section "Revised Phase B v2 plan" below, and the
+> executed result is in "Phase B step 2".
 
 Given Phase A's strong signal, the full Option 3 build is justified. Concrete
 sequencing:
@@ -716,11 +787,16 @@ strategies: looks great with hindsight, much weaker in real time.
 The "Phase B JUSTIFIED" conclusion from Phase A needs to be downgraded. We
 should now treat Phase B as a **research bet**, not a confident upgrade:
 
-| Scenario | Probability | What it means |
+| Scenario | Pre-test probability | What it means |
 |---|---|---|
 | Causal regime-conditional beats global pick | ~30% | Real lift; ship it |
 | Causal regime-conditional ≈ global pick (within noise) | ~50% | Added complexity without payoff; don't ship; keep as research finding |
 | Causal regime-conditional underperforms global pick | ~20% | Per-regime fragmentation hurts more than regime conditioning helps |
+
+**Resolved by Phase B step 2 below:** scenario 1 by Sharpe ranking
+(MoE > Hard-switch > Global, all three configurations distinct), but
+with the qualifier that all three lose money in absolute terms. So
+"beats global" is technically true but doesn't justify shipping.
 
 The only way to settle this is to actually run the A/B test. The
 infrastructure (HMM + forward filter + rolling fit) is built and tested —
