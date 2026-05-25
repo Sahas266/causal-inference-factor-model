@@ -171,3 +171,106 @@ def test_regime_gated_respects_stress_allocation():
     # All weights should be BTC=1.0, no turnover
     final_btc = result.weights_history[-1][0]
     assert final_btc == pytest.approx(1.0)
+
+
+# ── posterior-confidence gating ────────────────────────────────────
+
+
+def test_regime_gated_posterior_gate_reduces_label_changes():
+    """High min_posterior_to_switch should produce fewer regime label changes."""
+    pytest.importorskip("hmmlearn", reason="hmmlearn not installed")
+    from causal_portfolio.backtest.strategies import regime_gated_long_only
+
+    R = _synthetic_returns(T=800)
+    M = _synthetic_macro(R.index)
+
+    no_gate = regime_gated_long_only(
+        R, M, universe_weights={"btc": 1.0},
+        hmm_window=200, hmm_refit_every=50, n_restarts=2,
+        min_posterior_to_switch=0.0,
+    )
+    strict_gate = regime_gated_long_only(
+        R, M, universe_weights={"btc": 1.0},
+        hmm_window=200, hmm_refit_every=50, n_restarts=2,
+        min_posterior_to_switch=0.95,
+    )
+
+    def n_label_changes(labels):
+        valid = labels[labels >= 0]
+        return int((np.diff(valid) != 0).sum())
+
+    # The strict gate should produce <= the number of label changes as no gate
+    assert n_label_changes(strict_gate.regime_labels) <= n_label_changes(no_gate.regime_labels)
+
+
+def test_regime_gated_posterior_gate_zero_is_identity():
+    """min_posterior_to_switch=0 should match default argmax behavior."""
+    pytest.importorskip("hmmlearn", reason="hmmlearn not installed")
+    from causal_portfolio.backtest.strategies import regime_gated_long_only
+
+    R = _synthetic_returns(T=800)
+    M = _synthetic_macro(R.index)
+    a = regime_gated_long_only(
+        R, M, universe_weights={"btc": 1.0},
+        hmm_window=200, hmm_refit_every=50, n_restarts=2,
+        min_posterior_to_switch=0.0,
+    )
+    b = regime_gated_long_only(
+        R, M, universe_weights={"btc": 1.0},
+        hmm_window=200, hmm_refit_every=50, n_restarts=2,
+    )
+    # Same regime label sequence
+    np.testing.assert_array_equal(a.regime_labels, b.regime_labels)
+
+
+# ── stop-loss overlay ──────────────────────────────────────────────
+
+
+def test_regime_gated_stop_loss_forces_cash_after_drawdown():
+    """Synthetic returns trending strongly down should trigger stop and go to cash."""
+    pytest.importorskip("hmmlearn", reason="hmmlearn not installed")
+    from causal_portfolio.backtest.strategies import regime_gated_long_only
+
+    # 800 days, asset that loses ~0.5%/day → 80% drawdown in 320 days
+    T = 800
+    idx = pd.date_range("2022-01-01", periods=T)
+    rng = np.random.default_rng(0)
+    returns = pd.DataFrame({
+        "btc_return": np.full(T, -0.005) + rng.normal(0, 0.002, T),
+        "eth_return": np.full(T, -0.005) + rng.normal(0, 0.002, T),
+        "sol_return": np.full(T, -0.005) + rng.normal(0, 0.002, T),
+    }, index=idx)
+    macro = pd.DataFrame({"vixcls": rng.normal(20, 3, T)}, index=idx)
+
+    # Stop-loss at 10% drawdown should kick in early and keep us in cash
+    result = regime_gated_long_only(
+        returns, macro, universe_weights={"btc": 1.0},
+        hmm_window=200, hmm_refit_every=50, n_restarts=2,
+        stop_loss_pct=0.10, stop_reset_pct=0.05,
+    )
+    # After enough time, weights should be 0 (cash) due to stop-loss
+    # Check that there's at least one day where weights are all zero
+    days_in_cash = (np.abs(result.weights_history).sum(axis=1) < 1e-9).sum()
+    assert days_in_cash > 100, (
+        f"stop-loss never fired? days_in_cash={days_in_cash}"
+    )
+
+
+def test_regime_gated_stop_loss_disabled_by_default():
+    """stop_loss_pct=None (default) should be identical to a run without it."""
+    pytest.importorskip("hmmlearn", reason="hmmlearn not installed")
+    from causal_portfolio.backtest.strategies import regime_gated_long_only
+
+    R = _synthetic_returns(T=800)
+    M = _synthetic_macro(R.index)
+    a = regime_gated_long_only(
+        R, M, universe_weights={"btc": 1.0},
+        hmm_window=200, hmm_refit_every=50, n_restarts=2,
+    )
+    b = regime_gated_long_only(
+        R, M, universe_weights={"btc": 1.0},
+        hmm_window=200, hmm_refit_every=50, n_restarts=2,
+        stop_loss_pct=None,
+    )
+    # Same returns
+    np.testing.assert_array_equal(a.returns_series, b.returns_series)

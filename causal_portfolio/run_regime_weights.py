@@ -41,6 +41,29 @@ from causal_portfolio.regimes.hmm import (
 logger = logging.getLogger("cpcm.regime_weights")
 
 
+STATE_FILE_DEFAULT = Path(__file__).parent / "data" / "regime_last_state.json"
+
+
+def _read_last_state(path: Path) -> dict | None:
+    """Read the last successful regime decision from disk, if any."""
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text())
+    except Exception as e:
+        logger.warning("could not read last regime state from %s: %s", path, e)
+        return None
+
+
+def _write_last_state(path: Path, info: dict) -> None:
+    """Persist the latest regime decision so we have a fallback next time."""
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(info, indent=2, default=str))
+    except Exception as e:
+        logger.warning("could not write regime state to %s: %s", path, e)
+
+
 def compute_current_regime(
     assets: list[str],
     end_date: str | None = None,
@@ -48,8 +71,28 @@ def compute_current_regime(
     n_states: int = 2,
     n_restarts: int = 5,
     lookback_buffer_days: int = 60,
+    fallback_state_file: Path | None = None,
+    on_failure: str = "fallback",
 ) -> dict:
     """Compute today's regime label using the trailing window.
+
+    Production-safety: if the HMM fit or data load fails, fall back to the
+    last successfully-decoded regime (read from `fallback_state_file`). If
+    no fallback exists, default to the stress state (cash) — the
+    conservative choice when we can't tell the regime.
+
+    Args:
+        assets: asset universe for return loading.
+        end_date: ISO date for the regime decision (default: today).
+        hmm_window: rolling HMM window in days.
+        n_states: HMM components.
+        n_restarts: HMM multi-start seed count.
+        lookback_buffer_days: padding above hmm_window when fetching data.
+        fallback_state_file: where last-known regime is persisted. None
+            uses the default `causal_portfolio/data/regime_last_state.json`.
+        on_failure: "fallback" (default — use last-known, else stress),
+            "raise" (propagate the exception, useful for debugging),
+            or "stress" (always fall back to stress regime on failure).
 
     Returns:
         {
@@ -58,8 +101,61 @@ def compute_current_regime(
             "as_of": str (ISO date),
             "feature_columns": list[str],
             "hmm_window": int,
+            "source": "live" | "fallback_last_known" | "fallback_stress",
         }
     """
+    state_file = fallback_state_file or STATE_FILE_DEFAULT
+    try:
+        info = _compute_regime_live(
+            assets=assets, end_date=end_date, hmm_window=hmm_window,
+            n_states=n_states, n_restarts=n_restarts,
+            lookback_buffer_days=lookback_buffer_days,
+        )
+        info["source"] = "live"
+        _write_last_state(state_file, info)
+        return info
+    except Exception as e:
+        logger.error("regime computation failed: %s", e)
+        if on_failure == "raise":
+            raise
+        if on_failure == "stress":
+            return _stress_fallback(n_states, str(e))
+        # default "fallback": try last-known, else stress
+        last = _read_last_state(state_file)
+        if last is not None:
+            logger.warning(
+                "using last-known regime from %s (as_of %s)",
+                state_file, last.get("as_of", "?"),
+            )
+            return {**last, "source": "fallback_last_known",
+                    "fallback_reason": str(e)}
+        logger.warning("no fallback state available — defaulting to stress")
+        return _stress_fallback(n_states, str(e))
+
+
+def _stress_fallback(n_states: int, reason: str) -> dict:
+    """Conservative default when we can't tell the regime: go to stress (cash)."""
+    return {
+        "regime": 1,  # stress
+        "posterior": [0.0, 1.0] if n_states == 2 else [0.0, 0.0, 1.0][:n_states],
+        "as_of": datetime.now(timezone.utc).date().isoformat(),
+        "feature_columns": [],
+        "hmm_window": 0,
+        "n_states": n_states,
+        "source": "fallback_stress",
+        "fallback_reason": reason,
+    }
+
+
+def _compute_regime_live(
+    assets: list[str],
+    end_date: str | None,
+    hmm_window: int,
+    n_states: int,
+    n_restarts: int,
+    lookback_buffer_days: int,
+) -> dict:
+    """The original (HMM-fit) path, factored out for try/except wrapping."""
     loader = get_loader()
 
     # Pull enough history for the HMM window plus the feature warmup
