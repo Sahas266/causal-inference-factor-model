@@ -37,6 +37,7 @@ def _mock_adapter(address: str, config: ExecutionConfig):
     a.config = config
     a.cancel_all_open.return_value = None
     a.submit_orders.return_value = {"status": "ok"}
+    a.submit_orders_book_aware.return_value = {"status": "ok"}
     # Post-state matches plan to avoid race detection
     a.fetch_state.return_value = AccountState(
         address=address, account_value_usd=10_000.0, margin_used_usd=0.0,
@@ -61,13 +62,26 @@ def test_address_mismatch_blocks_execution():
 
 
 def test_matching_address_proceeds():
+    """Default config uses the book-aware execution path."""
     plan = _make_plan(address="0xAAA")
     adapter = _mock_adapter(address="0xAAA", config=ExecutionConfig(
         testnet=True, dry_run=False,
     ))
     result = execute_plan(adapter, plan, write_audit=False)
     assert result.submitted
+    adapter.submit_orders_book_aware.assert_called_once()
+
+
+def test_matching_address_batch_path_when_smart_disabled():
+    """With smart_execution=False, execute_plan uses the batch submit_orders."""
+    plan = _make_plan(address="0xAAA")
+    adapter = _mock_adapter(address="0xAAA", config=ExecutionConfig(
+        testnet=True, dry_run=False, smart_execution=False,
+    ))
+    result = execute_plan(adapter, plan, write_audit=False)
+    assert result.submitted
     adapter.submit_orders.assert_called_once()
+    adapter.submit_orders_book_aware.assert_not_called()
 
 
 # ── Gate 2: mainnet acknowledgement ──────────────────────────────────

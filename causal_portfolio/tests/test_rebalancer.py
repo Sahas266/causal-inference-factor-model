@@ -158,20 +158,21 @@ def test_unlisted_coin_skipped(basic_meta, basic_mids):
     assert SkipReason.NOT_LISTED in reasons
 
 
-def test_dust_filtered_pre_rounding(basic_meta, basic_mids):
-    """Tiny weight that produces a sub-dust delta should be skipped."""
-    cfg = ExecutionConfig(dry_run=True, min_trade_usd=25.0)
+def test_tiny_weight_fires_order_no_dust_filter(basic_meta, basic_mids):
+    """Without a dust filter, even a tiny weight should fire an order
+    (subject only to single-trade cap and minimum tick size)."""
+    cfg = ExecutionConfig(dry_run=True)
     plan = plan_rebalance(
-        target_weights={"btc": 0.001},  # $10 on 10k equity → below $25 dust
+        target_weights={"btc": 0.001},  # $10 on 10k equity — would have been dust
         state=_state(10_000),
         mids=basic_mids,
         meta=basic_meta,
         config=cfg,
         timestamp_ms=1000,
     )
-    assert plan.orders == []
-    skipped_coins = {coin for coin, _, _ in plan.skipped}
-    assert "BTC" in skipped_coins
+    # No dust filter → the trade goes out (well within single-trade cap of 10%)
+    assert len(plan.orders) == 1
+    assert plan.orders[0].coin == "BTC"
 
 
 def test_long_only_zeros_negative_weights(basic_meta, basic_mids):
@@ -276,7 +277,6 @@ def test_precision_warning_when_rounding_shrinks_trade(basic_mids):
     meta = {"BTC": AssetMeta("BTC", sz_decimals=0, max_leverage=10, min_size=1.0)}
     cfg = ExecutionConfig(
         dry_run=True, max_position_pct=1.0, max_single_trade_pct=1.0,
-        min_trade_usd=100.0,
     )
     plan = plan_rebalance(
         target_weights={"btc": 0.8},
@@ -311,7 +311,7 @@ def test_no_precision_warning_when_rounding_is_minor(basic_meta, basic_mids):
 def test_size_rounded_to_zero_skipped(basic_mids):
     """If sz_decimals is too coarse, tiny notional rounds to 0."""
     meta = {"BTC": _meta("BTC", sz_decimals=0)}  # whole BTC only
-    cfg = ExecutionConfig(dry_run=True, min_trade_usd=10.0)
+    cfg = ExecutionConfig(dry_run=True)
     plan = plan_rebalance(
         target_weights={"btc": 0.005},  # $50 → 0.000833 BTC → rounds to 0
         state=_state(10_000),

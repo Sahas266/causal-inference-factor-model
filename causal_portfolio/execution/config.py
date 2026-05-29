@@ -59,14 +59,21 @@ class ExecutionConfig:
     max_single_trade_pct: float = 0.10    # cap any single trade as % of equity
     max_single_trade_usd: float | None = None  # absolute cap, None = use pct only
 
-    # ── Filters ─────────────────────────────────────────────────────────
-    min_trade_usd: float = 25.0    # below this → skipped (dust)
-
     # ── Slippage ────────────────────────────────────────────────────────
     slippage_bps: int = 30         # IOC limit at mid ± slippage_bps/10000
 
     # ── Asset universe ──────────────────────────────────────────────────
     asset_map: dict[str, str] = field(default_factory=lambda: dict(DEFAULT_ASSET_MAP))
+
+    # ── Order-book-aware execution ──────────────────────────────────────
+    # When True, execute_plan chases the live L2 book with IOC slices instead
+    # of a single batch order at a fixed mid±slippage price. Handles thin
+    # books, partial fills, and transient oracle-band divergence by retrying
+    # on fresh book data.
+    smart_execution: bool = True
+    smart_max_attempts: int = 8        # IOC slices per order before giving up
+    smart_poll_seconds: float = 1.5    # wait between attempts
+    smart_max_band_bps: float = 200.0  # don't price further than this from mid
 
     # ── Network ─────────────────────────────────────────────────────────
     testnet: bool = True
@@ -91,10 +98,14 @@ class ExecutionConfig:
             raise ValueError(f"max_position_pct must be in (0, 1], got {self.max_position_pct}")
         if not (0 < self.max_single_trade_pct <= 1.0):
             raise ValueError(f"max_single_trade_pct must be in (0, 1], got {self.max_single_trade_pct}")
-        if self.min_trade_usd < 0:
-            raise ValueError(f"min_trade_usd must be >= 0, got {self.min_trade_usd}")
         if self.slippage_bps < 0:
             raise ValueError(f"slippage_bps must be >= 0, got {self.slippage_bps}")
+        if self.smart_max_attempts < 1:
+            raise ValueError(f"smart_max_attempts must be >= 1, got {self.smart_max_attempts}")
+        if self.smart_poll_seconds < 0:
+            raise ValueError(f"smart_poll_seconds must be >= 0, got {self.smart_poll_seconds}")
+        if self.smart_max_band_bps <= 0:
+            raise ValueError(f"smart_max_band_bps must be > 0, got {self.smart_max_band_bps}")
         if self.twap_minutes != 0.0:
             raise NotImplementedError(
                 "TWAP execution is not yet implemented — set twap_minutes=0. "

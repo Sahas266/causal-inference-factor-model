@@ -137,7 +137,10 @@ def cmd_execute(args) -> int:
         return 1
 
     weights = _load_weights(args.weights)
-    cfg = ExecutionConfig(testnet=not args.mainnet, dry_run=False)
+    cfg_kwargs = dict(testnet=not args.mainnet, dry_run=False)
+    if args.slippage_bps is not None:
+        cfg_kwargs["slippage_bps"] = args.slippage_bps
+    cfg = ExecutionConfig(**cfg_kwargs)
 
     from causal_portfolio.execution.hyperliquid import HLAdapter, execute_plan
     adapter = HLAdapter(cfg)
@@ -280,6 +283,10 @@ def main(argv: list[str] | None = None) -> int:
                         help="Required to actually submit (safety gate)")
     p_exec.add_argument("--mainnet", action="store_true",
                         help="Hit mainnet instead of testnet (requires confirmation)")
+    p_exec.add_argument("--slippage-bps", type=int, default=None,
+                        help="Override ExecutionConfig.slippage_bps for this run. "
+                             "HL may reject orders priced too far from oracle; "
+                             "10 bps is a safe default for liquid perps.")
     p_exec.set_defaults(func=cmd_execute)
 
     args = p.parse_args(argv)

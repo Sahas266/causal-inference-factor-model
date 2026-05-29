@@ -13,8 +13,6 @@ from enum import Enum
 class SkipReason(str, Enum):
     """Why a coin was excluded from the order list."""
     NOT_LISTED = "not_listed_on_hl"
-    DUST = "delta_below_min_trade_usd"
-    BELOW_MIN_NOTIONAL = "delta_below_hl_min_notional"
     BELOW_MIN_SIZE = "size_rounded_to_zero"
     EXCEEDS_TRADE_CAP = "single_trade_cap_exceeded"
     LONG_ONLY_VIOLATION = "negative_weight_with_long_only"

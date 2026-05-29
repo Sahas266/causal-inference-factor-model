@@ -17,10 +17,18 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from pathlib import Path
 from typing import Any
 
 from causal_portfolio.execution.config import ExecutionConfig
+from causal_portfolio.execution.orderbook import (
+    L2Book,
+    L2Level,
+    marketable_price,
+    parse_fill_response,
+)
+from causal_portfolio.execution.rebalancer import _round_price
 from causal_portfolio.execution.types import (
     AccountState,
     AssetMeta,
@@ -161,6 +169,19 @@ class HLAdapter:
         raw = self.info.open_orders(self.address)
         return [int(o["oid"]) for o in raw if "oid" in o]
 
+    def fetch_l2_book(self, coin: str, depth: int = 10) -> L2Book:
+        """Fetch the L2 order book for a coin into our plain L2Book type.
+
+        HL `l2_snapshot` returns {'levels': [[bids], [asks]]} where each level
+        is {'px','sz','n'}; bids are best-first (descending), asks best-first
+        (ascending).
+        """
+        raw = self.info.l2_snapshot(coin)
+        levels = raw.get("levels", [[], []])
+        bids = [L2Level(float(l["px"]), float(l["sz"])) for l in levels[0][:depth]]
+        asks = [L2Level(float(l["px"]), float(l["sz"])) for l in levels[1][:depth]]
+        return L2Book(coin=coin, bids=bids, asks=asks)
+
     # ── writes ──────────────────────────────────────────────────────
 
     def cancel_all_open(self) -> dict[str, Any] | None:
@@ -178,9 +199,15 @@ class HLAdapter:
         return ex.bulk_cancel(requests)
 
     def submit_orders(self, orders: list[Order]) -> dict[str, Any]:
-        """Submit a batch of orders atomically via bulk_orders."""
+        """Submit a batch of orders atomically via bulk_orders.
+
+        The HL SDK expects `cloid` to be a `Cloid` instance, not a plain
+        hex string. We wrap our deterministic-cloid strings here so the
+        rest of the codebase can stay dependency-free of the SDK.
+        """
         if not orders:
             return {"status": "ok", "response": {"data": {"statuses": []}}}
+        from hyperliquid.utils.types import Cloid
         ex = self._ensure_exchange()
         order_args = []
         for o in orders:
@@ -191,9 +218,106 @@ class HLAdapter:
                 "limit_px": o.limit_px,
                 "order_type": {"limit": {"tif": o.tif}},
                 "reduce_only": o.reduce_only,
-                "cloid": o.cloid,
+                "cloid": Cloid.from_str(o.cloid),
             })
         return ex.bulk_orders(order_args)
+
+    def _submit_single_ioc(
+        self, coin: str, is_buy: bool, size: float, limit_px: float,
+        reduce_only: bool,
+    ) -> dict[str, Any]:
+        """Submit one IOC limit order. Returns the raw HL response."""
+        ex = self._ensure_exchange()
+        return ex.order(
+            coin, is_buy, size, limit_px,
+            order_type={"limit": {"tif": "Ioc"}},
+            reduce_only=reduce_only,
+        )
+
+    def submit_orders_book_aware(self, orders: list[Order]) -> dict[str, Any]:
+        """Fill each order by chasing the live L2 book with IOC slices.
+
+        For every order, repeatedly: fetch the current book, compute a
+        marketable in-band price for the remaining size, submit an IOC, and
+        accumulate fills. Retries up to `config.smart_max_attempts`, sleeping
+        `config.smart_poll_seconds` between attempts so transient oracle/book
+        divergence (where no crossable in-band price exists) can resolve.
+
+        Returns a synthetic response dict summarizing per-coin fills, shaped
+        loosely like the HL batch response so the audit log stays uniform.
+        """
+        cfg = self.config
+        summaries: list[dict[str, Any]] = []
+        for o in orders:
+            remaining = o.size
+            filled_total = 0.0
+            fills: list[dict[str, Any]] = []
+            last_error: str | None = None
+            # sz_decimals for size/price rounding
+            sz_dec = self._sz_decimals(o.coin)
+            min_size = 10 ** -sz_dec
+
+            for attempt in range(cfg.smart_max_attempts):
+                if remaining < min_size:
+                    break
+                book = self.fetch_l2_book(o.coin)
+                px = marketable_price(
+                    book, o.is_buy, remaining,
+                    max_band_bps=cfg.smart_max_band_bps,
+                )
+                if px is None:
+                    last_error = "no crossable in-band price (book/oracle divergence)"
+                    logger.warning(
+                        "%s: no valid price attempt %d/%d; waiting %.1fs",
+                        o.coin, attempt + 1, cfg.smart_max_attempts,
+                        cfg.smart_poll_seconds,
+                    )
+                    time.sleep(cfg.smart_poll_seconds)
+                    continue
+
+                px = _round_price(px, sz_dec)
+                size_r = self._round_size_down(remaining, sz_dec)
+                if size_r < min_size:
+                    break
+                resp = self._submit_single_ioc(
+                    o.coin, o.is_buy, size_r, px, o.reduce_only,
+                )
+                fr = parse_fill_response(resp)
+                if fr.filled_size > 0:
+                    filled_total += fr.filled_size
+                    remaining = max(0.0, remaining - fr.filled_size)
+                    fills.append({"sz": fr.filled_size, "px": fr.avg_px,
+                                  "attempt": attempt + 1})
+                    last_error = None
+                else:
+                    last_error = fr.error
+                    # Oracle reject → too aggressive for current band; no-match
+                    # → not aggressive enough. Either way a fresh book on the
+                    # next attempt re-clamps. Brief pause to let it move.
+                    time.sleep(cfg.smart_poll_seconds)
+
+                if remaining < min_size:
+                    break
+
+            summaries.append({
+                "coin": o.coin, "is_buy": o.is_buy,
+                "requested": o.size, "filled": filled_total,
+                "remaining": remaining, "fills": fills,
+                "error": last_error if filled_total < o.size - min_size else None,
+            })
+        return {"status": "ok", "response": {"type": "book_aware",
+                                             "data": {"summaries": summaries}}}
+
+    def _sz_decimals(self, coin: str) -> int:
+        meta = self.fetch_meta()
+        return meta[coin].sz_decimals if coin in meta else 4
+
+    @staticmethod
+    def _round_size_down(size: float, sz_decimals: int) -> float:
+        if size <= 0:
+            return 0.0
+        factor = 10 ** sz_decimals
+        return int(size * factor) / factor
 
 
 def execute_plan(
@@ -271,7 +395,10 @@ def _execute_plan_inner(
                 error="cancel-race detected: positions moved between cancel and submit",
             )
 
-        response = adapter.submit_orders(plan.orders)
+        if adapter.config.smart_execution:
+            response = adapter.submit_orders_book_aware(plan.orders)
+        else:
+            response = adapter.submit_orders(plan.orders)
         post = adapter.fetch_state()
         from causal_portfolio.execution.reconcile import format_drift_summary, reconcile
         drifts = reconcile(plan, post)

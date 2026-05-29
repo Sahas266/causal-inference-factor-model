@@ -9,7 +9,7 @@ Algorithm:
   3. Re-normalize so |w| sums to ≤ 1.0 (or less if caps clipped)
   4. target_usd[c] = equity * leverage * w[c]
   5. delta_usd[c] = target_usd[c] - current_usd[c]
-  6. Filter: dust threshold, single-trade cap
+  6. Filter: single-trade cap (no dust filter — closing positions of any size must work)
   7. Convert USD → signed size via mids; round to sz_decimals
   8. Drop coins where rounded size = 0
   9. Build IOC limit orders with deterministic cloid
@@ -53,6 +53,23 @@ def _round_size(size: float, sz_decimals: int) -> float:
     factor = 10 ** sz_decimals
     sign = 1.0 if size > 0 else -1.0
     return sign * (int(abs(size) * factor)) / factor
+
+
+def _round_price(px: float, sz_decimals: int, is_spot: bool = False) -> float:
+    """Round a price to HL's tick rules.
+
+    Mirrors `hyperliquid.exchange.Exchange._slippage_price`:
+      - 5 significant figures total
+      - Then at most (6 - sz_decimals) decimal places for perps,
+        (8 - sz_decimals) for spot.
+
+    Without this, HL rejects orders with "Order has invalid price".
+    """
+    if px <= 0:
+        return px
+    five_sig = float(f"{px:.5g}")
+    max_decimals = (8 if is_spot else 6) - sz_decimals
+    return round(five_sig, max_decimals)
 
 
 def _apply_position_caps(
@@ -152,12 +169,7 @@ def plan_rebalance(
         single_trade_cap_usd = min(single_trade_cap_usd, config.max_single_trade_usd)
 
     for coin, delta in sorted(deltas_usd.items()):
-        if abs(delta) < config.min_trade_usd:
-            if abs(delta) > 0:
-                skipped.append((
-                    coin, SkipReason.DUST,
-                    f"|delta|=${abs(delta):.2f} < min_trade_usd ${config.min_trade_usd:.2f}",
-                ))
+        if abs(delta) == 0:
             continue
 
         if abs(delta) > single_trade_cap_usd:
@@ -185,15 +197,7 @@ def plan_rebalance(
             ))
             continue
 
-        # Re-check the rounded notional against min_trade_usd — rounding down
-        # can take a $30 trade to $20.
         rounded_notional = size * mid
-        if rounded_notional < config.min_trade_usd:
-            skipped.append((
-                coin, SkipReason.DUST,
-                f"rounded notional ${rounded_notional:.2f} < min_trade_usd",
-            ))
-            continue
 
         # Precision-loss warning: if rounding shrank the trade noticeably
         # (>10% off the intended notional), surface it. Trade still goes out,
@@ -207,11 +211,25 @@ def plan_rebalance(
                 f"(sz_decimals={m.sz_decimals})"
             )
 
-        limit_px = mid * config.slippage_factor(is_buy)
+        raw_limit_px = mid * config.slippage_factor(is_buy)
+        limit_px = _round_price(raw_limit_px, m.sz_decimals)
         cloid = _make_cloid(ts, coin, is_buy, size)
+
+        # reduce_only=True when the order makes the absolute position SMALLER
+        # without flipping sign. HL allows wider price bands for reduce-only
+        # orders (they can't accidentally open new exposure).
+        current_notional = current_usd.get(coin, 0.0)
+        target_notional = target_usd.get(coin, 0.0)
+        # Same sign AND target magnitude < current magnitude → pure reduce
+        is_reduce_only = (
+            current_notional != 0
+            and (current_notional > 0) == (target_notional >= 0)
+            and abs(target_notional) < abs(current_notional)
+        )
+
         orders.append(Order(
             coin=coin, is_buy=is_buy, size=size,
-            limit_px=limit_px, cloid=cloid, reduce_only=False,
+            limit_px=limit_px, cloid=cloid, reduce_only=is_reduce_only,
         ))
 
     plan = RebalancePlan(
