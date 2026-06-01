@@ -44,6 +44,8 @@ target/
 # Parquet cache and pipeline outputs
 causal_model/cache/
 *.parquet
+# ...except the committed full-warehouse export at the repo root
+!/asset_metrics.parquet
 causal_model/results.json
 causal_model/results.csv
 
