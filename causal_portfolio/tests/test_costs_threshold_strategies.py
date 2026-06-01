@@ -139,6 +139,36 @@ def test_equal_weight_basket_holds_third_in_each():
     assert np.allclose(final_w.sum(), 1.0, atol=0.01)
 
 
+def test_fixed_weight_portfolio_default_btc_dominant():
+    from causal_portfolio.backtest.strategies import fixed_weight_portfolio
+    R = _synthetic_returns()  # btc, eth, sol
+    result = fixed_weight_portfolio(R, rebalance_freq=21)
+    # On a rebalance day, weights should be ~60/30/10
+    w_at_rebal = result.weights_history[21]
+    assert w_at_rebal[0] == pytest.approx(0.6, abs=0.01)  # btc
+    assert w_at_rebal[1] == pytest.approx(0.3, abs=0.01)  # eth
+    assert w_at_rebal[2] == pytest.approx(0.1, abs=0.01)  # sol
+
+
+def test_fixed_weight_portfolio_custom_weights_renormalized():
+    from causal_portfolio.backtest.strategies import fixed_weight_portfolio
+    R = _synthetic_returns()
+    # Unnormalized weights → should renormalize to sum to 1
+    result = fixed_weight_portfolio(R, target_weights={"btc": 2.0, "eth": 2.0},
+                                    rebalance_freq=21)
+    w = result.weights_history[21]
+    assert w[0] == pytest.approx(0.5, abs=0.01)
+    assert w[1] == pytest.approx(0.5, abs=0.01)
+    assert w[2] == pytest.approx(0.0, abs=0.01)
+
+
+def test_fixed_weight_portfolio_rejects_zero_weights():
+    from causal_portfolio.backtest.strategies import fixed_weight_portfolio
+    R = _synthetic_returns()
+    with pytest.raises(ValueError, match="sum to > 0"):
+        fixed_weight_portfolio(R, target_weights={"btc": 0.0})
+
+
 def test_regime_gated_long_only_runs_clean():
     pytest.importorskip("hmmlearn", reason="hmmlearn not installed")
     from causal_portfolio.backtest.strategies import regime_gated_long_only

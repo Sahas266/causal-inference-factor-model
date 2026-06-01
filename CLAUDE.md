@@ -116,8 +116,26 @@ cargo test -q
 python -m causal_portfolio.main --assets btc,eth,sol --m 3 --start 2022-01-01 --end 2025-12-31
 python -m causal_portfolio.run_backtest --solver v1 --m 3 --assets btc,eth,sol
 python -m causal_portfolio.run_backtest --solver v4 --use-ekf --rebalance-freq 5
-streamlit run causal_portfolio/dashboard.py
+streamlit run causal_portfolio/dashboard.py            # CPCM causal-model dashboard
+streamlit run causal_portfolio/execution_dashboard.py  # execution: strategy -> weights -> live HL account
 ```
+
+### Execution layer (`causal_portfolio/execution/`)
+
+Translates strategy weight vectors into Hyperliquid orders. Testnet by default.
+
+```bash
+# Dry-run a plan from a weights JSON ({"btc": 1.0})
+python -m causal_portfolio.execution.cli plan --weights weights.json --live-state
+# Read current account state
+python -m causal_portfolio.execution.cli state --verbose
+# Submit on testnet (default network); --mainnet requires a confirmation prompt
+python -m causal_portfolio.execution.cli execute --weights weights.json --live
+```
+
+- Credentials: `HYPERLIQUID_WALLET_ADDRESS` + `HYPERLIQUID_PRIVATE_KEY` (or `HL_ADDRESS`/`HL_PRIVATE_KEY`) in `.env`.
+- Order-book-aware execution (`ExecutionConfig.smart_execution`, default on) chases the live L2 book with IOC slices, handling thin books, partial fills, and oracle-band rejects.
+- Deployable strategies live in `causal_portfolio/backtest/strategies.py`. Research finding: **buy-and-hold BTC is the benchmark nothing in this repo beats out-of-sample** — see `causal_portfolio/docs/regime_ew_production_readiness.md`.
 
 ### `defi_pipeline/`
 

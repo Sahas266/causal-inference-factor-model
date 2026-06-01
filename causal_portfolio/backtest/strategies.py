@@ -232,6 +232,64 @@ def equal_weight_basket(
     )
 
 
+def fixed_weight_portfolio(
+    returns: pd.DataFrame,
+    target_weights: dict[str, float] | None = None,
+    *,
+    fee_bps: float = 5.0,
+    slippage_bps: float = 5.0,
+    rebalance_freq: int = 21,
+    threshold_l1: float = 0.0,
+) -> BacktestResult:
+    """Hold a fixed target-weight portfolio, rebalancing periodically.
+
+    The "known-good" diversified crypto-beta strategy: a BTC-dominant basket
+    that captures broad crypto upside while diversifying single-asset risk.
+    Defaults to 60/30/10 BTC/ETH/SOL — BTC dominance keeps it close to the
+    buy-and-hold-BTC benchmark (the one thing in our research that robustly
+    made money), while the ETH/SOL sleeves add diversification and give the
+    execution layer a multi-leg basket to fill.
+
+    Args:
+        returns: (T, n_assets) DataFrame; columns end with "_return".
+        target_weights: dict ticker -> weight (renormalized to sum to 1).
+            Defaults to {"btc": 0.6, "eth": 0.3, "sol": 0.1} for whichever of
+            those are present, else equal-weight all columns.
+        rebalance_freq: rebalance every N days (drift between rebalances).
+        threshold_l1: no-trade band; skip rebalances below this L1 distance.
+    """
+    n = returns.shape[1]
+    cols = list(returns.columns)
+
+    if target_weights is None:
+        default = {"btc": 0.6, "eth": 0.3, "sol": 0.1}
+        target_weights = {k: v for k, v in default.items()
+                          if f"{k}_return" in cols}
+        if not target_weights:
+            target_weights = {c.replace("_return", ""): 1.0 / n for c in cols}
+
+    target = np.zeros(n)
+    total = float(sum(target_weights.values()))
+    if total <= 0:
+        raise ValueError("target_weights must sum to > 0")
+    for ticker, w in target_weights.items():
+        col = f"{ticker}_return"
+        if col not in cols:
+            logger.warning("Skipping %s — not in returns columns", ticker)
+            continue
+        target[cols.index(col)] = w / total
+
+    def weight_fn(t):
+        if t % rebalance_freq == 0:
+            return target
+        return None  # hold (drift between rebalances)
+
+    return _walk(
+        returns, weight_fn, fee_bps=fee_bps, slippage_bps=slippage_bps,
+        initial_weights=np.zeros(n), threshold_l1=threshold_l1,
+    )
+
+
 # ── regime-gated long-only ───────────────────────────────────────────
 
 
