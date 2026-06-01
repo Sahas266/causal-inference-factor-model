@@ -159,3 +159,16 @@ watchdog==6.0.0
 watchfiles==1.1.1
 wcwidth==0.2.14
 websockets==15.0.1
+
+# ── Dashboards (Streamlit + Plotly) ──────────────────────────────────
+streamlit==1.58.0
+plotly==6.7.0
+
+# ── Regime modeling ──────────────────────────────────────────────────
+hmmlearn==0.3.3
+
+# ── Hyperliquid execution layer ──────────────────────────────────────
+# Optional at runtime: only needed to hit the live API (the pure rebalancer
+# and order-book pricing are SDK-free). Pinned here for reproducible deploys.
+hyperliquid-python-sdk==0.23.0
+eth-account==0.13.7

@@ -461,6 +461,15 @@ Walk-Forward Backtest    Rolling 252-day train, rebalance every N days
             y=port_cum, mode="lines", name="CPCM Portfolio",
             line=dict(color="#00cc88", width=2),
         ))
+        # Buy & Hold BTC benchmark over the same test window
+        ov_returns = data.get("returns")
+        if ov_returns is not None and "btc_return" in ov_returns.columns:
+            test_dates = data["dates"][train_window:train_window + len(port_cum)]
+            btc_r = ov_returns["btc_return"].reindex(test_dates).fillna(0.0)
+            fig.add_trace(go.Scatter(
+                y=np.cumprod(1 + btc_r.values), mode="lines", name="Buy & Hold BTC",
+                line=dict(color="#f7931a", width=1.6, dash="dash"),
+            ))
         fig.update_layout(**DARK, title="", height=300,
                           xaxis_title="Days", yaxis_title="Cumulative Value",
                           margin=dict(l=0, r=0, t=10, b=0))
@@ -803,6 +812,17 @@ with t_backtest:
             port_cum, index=data["dates"][train_window:train_window + len(port_cum)]
         )
 
+        # ── Buy & Hold BTC benchmark (same window) ──
+        # Align BTC daily returns to the portfolio's test window and compound.
+        # Skip gracefully if BTC isn't in the selected universe.
+        bh_cum_series = None
+        returns_df = data.get("returns")
+        if returns_df is not None and "btc_return" in returns_df.columns:
+            btc_r = returns_df["btc_return"].reindex(port_cum_series.index).fillna(0.0)
+            bh_cum_series = pd.Series(
+                np.cumprod(1 + btc_r.values), index=port_cum_series.index,
+            )
+
         fig_cum = go.Figure()
         fig_cum.add_trace(go.Scatter(
             x=port_cum_series.index, y=port_cum_series.values,
@@ -810,6 +830,12 @@ with t_backtest:
             line=dict(color="#00cc88", width=2),
             fill="tozeroy", fillcolor="rgba(0,204,136,0.1)",
         ))
+        if bh_cum_series is not None:
+            fig_cum.add_trace(go.Scatter(
+                x=bh_cum_series.index, y=bh_cum_series.values,
+                mode="lines", name="Buy & Hold BTC",
+                line=dict(color="#f7931a", width=1.8, dash="dash"),
+            ))
         # Drawdown shading
         peak = np.maximum.accumulate(port_cum)
         drawdown = (port_cum - peak) / peak
@@ -823,6 +849,21 @@ with t_backtest:
             margin=dict(l=0, r=0, t=10, b=0),
         )
         st.plotly_chart(fig_cum, use_container_width=True)
+
+        # ── Strategy vs Buy & Hold BTC comparison ──
+        if bh_cum_series is not None:
+            port_total = float(port_cum_series.iloc[-1] - 1)
+            bh_total = float(bh_cum_series.iloc[-1] - 1)
+            lift = port_total - bh_total
+            cc1, cc2, cc3 = st.columns(3)
+            cc1.metric("CPCM total return", f"{port_total:+.1%}")
+            cc2.metric("Buy & Hold BTC", f"{bh_total:+.1%}")
+            cc3.metric("CPCM − BH BTC", f"{lift:+.1%}",
+                       delta=f"{lift:+.1%}",
+                       delta_color="normal" if lift >= 0 else "inverse")
+            if lift < 0:
+                st.caption("⚠️ The CPCM strategy underperforms buy-and-hold BTC over "
+                           "this window. BH BTC remains the benchmark to beat.")
 
         # ── Drawdown ──
         fig_dd = go.Figure()
