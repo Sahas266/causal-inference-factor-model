@@ -116,9 +116,18 @@ cargo test -q
 python -m causal_portfolio.main --assets btc,eth,sol --m 3 --start 2022-01-01 --end 2025-12-31
 python -m causal_portfolio.run_backtest --solver v1 --m 3 --assets btc,eth,sol
 python -m causal_portfolio.run_backtest --solver v4 --use-ekf --rebalance-freq 5
-streamlit run causal_portfolio/dashboard.py            # CPCM causal-model dashboard
+streamlit run causal_portfolio/dashboard.py            # CPCM causal-model dashboard (incl. Regimes tab)
 streamlit run causal_portfolio/execution_dashboard.py  # execution: strategy -> weights -> live HL account
 ```
+
+The main dashboard's **🔀 Regimes tab** fits a Gaussian HMM (1–3 states) on
+(VIX, BTC realized vol) and shows per-regime top drivers, a transition matrix,
+a regime timeline, and per-regime return stats. It has its own controls +
+"Analyze Regimes" button (independent of the CPCM Run Pipeline flow). The
+**causal/non-causal toggle** switches between forward-filter labels (what a
+live system knows) and full-sample Viterbi (look-ahead); the latter overstates
+the structure — see `causal_portfolio/docs/driver_selection_regimes.md`. Logic
+lives in `causal_portfolio/regimes/dashboard_panel.py` (Streamlit-free, tested).
 
 ### Execution layer (`causal_portfolio/execution/`)
 

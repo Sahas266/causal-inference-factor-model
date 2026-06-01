@@ -157,8 +157,9 @@ tabs = st.tabs([
     "🔬 Solver",
     "📉 Backtest",
     "🔍 EKF Filter",
+    "🔀 Regimes",
 ])
-t_overview, t_factors, t_dag, t_solver, t_backtest, t_ekf = tabs
+t_overview, t_factors, t_dag, t_solver, t_backtest, t_ekf, t_regimes = tabs
 
 
 # ── Session state ─────────────────────────────────────────────────────
@@ -1069,3 +1070,154 @@ with t_ekf:
                 "Should drop quickly from the initial value and stabilize. "
                 "Spikes indicate periods where observations were noisy or missing."
             )
+
+
+# ── Regimes tab ───────────────────────────────────────────────────────
+with t_regimes:
+    st.markdown("## 🔀 Market Regime Analysis")
+    st.caption(
+        "Fits a Gaussian HMM on (VIX, BTC realized vol) and characterizes each "
+        "regime. Independent of the CPCM **Run Pipeline** flow — set the "
+        "parameters below and click **Analyze Regimes**. Uses the sidebar's "
+        f"asset universe ({', '.join(selected_assets)}) and date range."
+    )
+
+    rc1, rc2, rc3 = st.columns(3)
+    with rc1:
+        regime_n_states = st.slider("Number of regimes", 1, 3, 2)
+        regime_m = st.slider("Drivers per regime (m)", 1, 3, 3)
+    with rc2:
+        regime_window = st.slider("HMM window (days)", 90, 756, 504, 30)
+        regime_refit = st.slider("Causal refit cadence (days)", 7, 126, 63, 7)
+    with rc3:
+        regime_label_mode = st.radio(
+            "Labeling method",
+            ["Causal (forward filter)", "Non-causal (Viterbi · look-ahead)"],
+        )
+        st.caption(
+            "**Causal** = what a live system would have known at each point "
+            "(rolling fit + forward filter). **Non-causal** = full-sample "
+            "hindsight; overstates the structure (see research doc)."
+        )
+
+    if st.button("Analyze Regimes", type="primary"):
+        from causal_portfolio.regimes.dashboard_panel import analyze_regimes
+        with st.spinner("Fitting HMM + per-regime driver selection…"):
+            try:
+                st.session_state.regime_result = analyze_regimes(
+                    assets=selected_assets,
+                    start=str(start_date), end=str(end_date),
+                    n_states=regime_n_states, hmm_window=regime_window,
+                    hmm_refit_every=regime_refit, m_drivers=regime_m,
+                    causal=regime_label_mode.startswith("Causal"),
+                )
+            except Exception as e:
+                st.session_state.regime_result = None
+                st.error(f"Regime analysis failed: {e}")
+
+    rr = st.session_state.get("regime_result")
+    if rr is None:
+        st.info("Set parameters and click **Analyze Regimes** to run.")
+    else:
+        _REGIME_COLORS = ["#00cc88", "#f7931a", "#e45756"]  # calm → transitional → stress
+
+        def _regime_name(state: int, n: int) -> str:
+            if n == 1:
+                return "All"
+            if n == 2:
+                return ["Calm", "Stress"][state]
+            return ["Calm", "Transitional", "Stress"][state]
+
+        for note in rr.notes:
+            st.warning(note)
+
+        mode_tag = "causal (forward filter)" if rr.causal else "non-causal (Viterbi, look-ahead)"
+        st.markdown(f"**Labeling:** {mode_tag} · **features:** {', '.join(rr.feature_columns)} "
+                    f"· **labeled days:** {len(rr.dates)}")
+
+        # ── Characterization table ──
+        st.markdown("### Regime Characterization")
+        char_rows = []
+        for s in range(rr.n_states):
+            d = rr.dwell.get(s, {})
+            means = rr.state_means[s] if s < len(rr.state_means) else []
+            row = {"Regime": f"{s} · {_regime_name(s, rr.n_states)}"}
+            for col, mval in zip(rr.feature_columns, means):
+                row[f"{col} (z)"] = f"{mval:+.2f}"
+            row["Days"] = d.get("days", 0)
+            row["% sample"] = f"{d.get('pct', 0):.1%}"
+            row["Mean run (d)"] = f"{d.get('mean_run_length', 0):.0f}"
+            char_rows.append(row)
+        st.dataframe(pd.DataFrame(char_rows), hide_index=True, use_container_width=True)
+
+        # ── Transition matrix ──
+        if rr.n_states > 1:
+            st.markdown("### Transition Matrix  ·  P(next | current)")
+            labels_tm = [f"{s}·{_regime_name(s, rr.n_states)}" for s in range(rr.n_states)]
+            fig_tm = go.Figure(go.Heatmap(
+                z=rr.transition_matrix, x=labels_tm, y=labels_tm,
+                text=[[f"{v:.3f}" for v in row] for row in rr.transition_matrix],
+                texttemplate="%{text}", colorscale="Blues", zmin=0, zmax=1,
+                showscale=False,
+            ))
+            fig_tm.update_layout(**DARK, height=260, xaxis_title="To",
+                                 yaxis_title="From", margin=dict(l=0, r=0, t=10, b=0))
+            st.plotly_chart(fig_tm, use_container_width=True)
+
+        # ── Timeline ribbon ──
+        st.markdown("### Regime Timeline  ·  market equity colored by regime")
+        from causal_portfolio.regimes.dashboard_panel import contiguous_runs
+        fig_tl = go.Figure()
+        fig_tl.add_trace(go.Scatter(
+            x=rr.market_curve.index, y=rr.market_curve.values,
+            mode="lines", name="Equal-weight basket",
+            line=dict(color="#e8e8e8", width=1.6),
+        ))
+        for s0, s1, state in contiguous_runs(rr.dates, rr.labels):
+            fig_tl.add_vrect(
+                x0=s0, x1=s1, fillcolor=_REGIME_COLORS[state % len(_REGIME_COLORS)],
+                opacity=0.18, line_width=0, layer="below",
+            )
+        # Legend proxies for the regime bands
+        for s in range(rr.n_states):
+            fig_tl.add_trace(go.Scatter(
+                x=[None], y=[None], mode="markers",
+                marker=dict(size=10, color=_REGIME_COLORS[s % len(_REGIME_COLORS)]),
+                name=f"{s}·{_regime_name(s, rr.n_states)}",
+            ))
+        fig_tl.update_layout(**DARK, height=340, yaxis_title="Growth of $1",
+                             margin=dict(l=0, r=0, t=10, b=0),
+                             legend=dict(orientation="h", y=1.08))
+        st.plotly_chart(fig_tl, use_container_width=True)
+
+        # ── Top drivers per regime + return stats ──
+        cda, cdb = st.columns(2)
+        with cda:
+            st.markdown("### Top Drivers per Regime")
+            drv_rows = []
+            for s in range(rr.n_states):
+                info = rr.per_regime_drivers.get(s, {})
+                winner = info.get("winner")
+                drv_rows.append({
+                    "Regime": f"{s}·{_regime_name(s, rr.n_states)}",
+                    "Top drivers": ", ".join(winner) if winner else (info.get("note") or "—"),
+                    "Score": f"{info['score']:.3f}" if info.get("score") is not None else "—",
+                })
+            st.dataframe(pd.DataFrame(drv_rows), hide_index=True, use_container_width=True)
+            st.caption("Lowest commonality score = best subset (λ_max of residual "
+                       "correlation). Different drivers per regime is the whole point.")
+        with cdb:
+            st.markdown("### Market Returns by Regime")
+            ret_rows = []
+            for s in range(rr.n_states):
+                rstat = rr.per_regime_returns.get(s, {})
+                ret_rows.append({
+                    "Regime": f"{s}·{_regime_name(s, rr.n_states)}",
+                    "Ann. return": f"{rstat.get('ann_return', float('nan')):+.1%}",
+                    "Ann. vol": f"{rstat.get('ann_vol', float('nan')):.1%}",
+                    "Sharpe": f"{rstat.get('sharpe', float('nan')):.2f}",
+                    "Days": rstat.get("days", 0),
+                })
+            st.dataframe(pd.DataFrame(ret_rows), hide_index=True, use_container_width=True)
+            st.caption("Equal-weight basket performance while in each regime. "
+                       "A useful regime split shows clearly different return/risk.")
