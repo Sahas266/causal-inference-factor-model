@@ -65,6 +65,10 @@ def render_markdown(results, bh, assets, run_args) -> str:
              "selection), run through the identical downstream pipeline (V1 solver "
              "+ EKF + manifold optimizer + walk-forward backtest). Differences are "
              "attributable to DAG structure alone.\n")
+    L.append("**Lag grid:** every factor-pool config is run both contemporaneous "
+             "(`_lag0`, edges use same-day factor values) and fully lagged "
+             "(`_lag1`, edges use prior-day values everywhere — predictive, no "
+             "contemporaneous look-ahead). This covers lagging across all configs.\n")
     L.append(f"- Assets: `{', '.join(assets)}`")
     L.append(f"- Full window: `{run_args['full_start']}` → `{run_args['full_end']}`")
     L.append(f"- OOS window: `{run_args['oos_start']}` → `{run_args['full_end']}`")

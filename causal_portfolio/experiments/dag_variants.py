@@ -71,25 +71,42 @@ class DagVariant:
 
 
 # ── The variants to test ────────────────────────────────────────────
+#
+# Systematic grid: every "base structure" (factor pool + optional Combo
+# selection) is run BOTH contemporaneous (lag 0 everywhere) and fully lagged
+# (lag 1 everywhere). The lag-everywhere versions are the predictive forms —
+# they use only past factor values, removing the contemporaneous look-ahead
+# edge. This covers "lag everywhere, all the configs".
 
-VARIANTS: list[DagVariant] = [
-    DagVariant("baseline_combo", None, 0, 0, 3,
-               "Current pipeline: Combo-select m=3 from all factors, contemporaneous."),
-    DagVariant("baseline_macro_lag1", None, 0, 1, 3,
-               "Combo m=3 but macro edges lagged 1 day (honors the stated DAG lag)."),
-    DagVariant("global_only", tuple(GLOBAL_FACTORS), 0, 0, None,
-               "Only on-chain global factors → returns, contemporaneous."),
-    DagVariant("macro_only", tuple(MACRO_FACTORS), 0, 1, None,
-               "Only macro factors → returns, lagged 1 day."),
-    DagVariant("onchain_core", ("chain_congestion", "mev_pressure", "liq_flow"), 0, 0, None,
-               "The drivers Option-2 found dominate: chain_congestion + mev_pressure + liq_flow."),
-    DagVariant("all_lag0", None, 0, 0, None,
-               "Every factor → returns, contemporaneous (dense DAG)."),
-    DagVariant("all_lag1", None, 1, 1, None,
-               "Every factor → returns, lagged 1 day (fully predictive, no contemporaneous edge)."),
-    DagVariant("combo_all_lag1", None, 1, 1, 3,
-               "Combo m=3 with all edges lagged 1 day."),
+_BASE_STRUCTURES = [
+    # (label, factor_pool, combo_m, description)
+    ("combo3", None, 3,
+     "Combo-select m=3 from all factors (the pipeline's current default pool)."),
+    ("all", None, None,
+     "Every available factor → returns (dense DAG)."),
+    ("global", tuple(GLOBAL_FACTORS), None,
+     "Only on-chain global factors → returns."),
+    ("macro", tuple(MACRO_FACTORS), None,
+     "Only macro factors → returns."),
+    ("onchain_core", ("chain_congestion", "mev_pressure", "liq_flow"), None,
+     "The drivers Option-2 found dominate: chain_congestion + mev_pressure + liq_flow."),
 ]
+
+
+def _make_variants() -> list[DagVariant]:
+    variants: list[DagVariant] = []
+    for label, pool, combo_m, desc in _BASE_STRUCTURES:
+        for lag in (0, 1):
+            lag_tag = "lag0 (contemporaneous)" if lag == 0 else "lag1 (everywhere, predictive)"
+            variants.append(DagVariant(
+                name=f"{label}_lag{lag}",
+                factors=pool, lag_global=lag, lag_macro=lag, combo_m=combo_m,
+                description=f"{desc} {lag_tag}.",
+            ))
+    return variants
+
+
+VARIANTS: list[DagVariant] = _make_variants()
 
 
 @dataclass
