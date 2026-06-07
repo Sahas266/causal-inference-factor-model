@@ -9,6 +9,21 @@ Each variant is a different return-equation structure (which factors are direct 
 - OOS window: `2024-01-01` → `2025-12-31`
 - Run UTC: `2026-06-05T03:45:28+00:00`
 
+## Configurations
+
+| Config | Factor pool | Selection | Lag | What it tests |
+|---|---|---|---|---|
+| `combo3_lag0` | all available factors | Combo m=3 | contemporaneous | Combo-select m=3 from all factors (the pipeline's current default pool). lag0 (contemporaneous). |
+| `combo3_lag1` | all available factors | Combo m=3 | lagged 1 day (everywhere) | Combo-select m=3 from all factors (the pipeline's current default pool). lag1 (everywhere, predictive). |
+| `all_lag0` | all available factors | use whole pool | contemporaneous | Every available factor → returns (dense DAG). lag0 (contemporaneous). |
+| `all_lag1` | all available factors | use whole pool | lagged 1 day (everywhere) | Every available factor → returns (dense DAG). lag1 (everywhere, predictive). |
+| `global_lag0` | 7 factors (liq_flow, stable_flow, funding_basis, etc.) | use whole pool | contemporaneous | Only on-chain global factors → returns. lag0 (contemporaneous). |
+| `global_lag1` | 7 factors (liq_flow, stable_flow, funding_basis, etc.) | use whole pool | lagged 1 day (everywhere) | Only on-chain global factors → returns. lag1 (everywhere, predictive). |
+| `macro_lag0` | 7 factors (dff, dgs10, vixcls, etc.) | use whole pool | contemporaneous | Only macro factors → returns. lag0 (contemporaneous). |
+| `macro_lag1` | 7 factors (dff, dgs10, vixcls, etc.) | use whole pool | lagged 1 day (everywhere) | Only macro factors → returns. lag1 (everywhere, predictive). |
+| `onchain_core_lag0` | chain_congestion, mev_pressure, liq_flow | use whole pool | contemporaneous | The drivers Option-2 found dominate: chain_congestion + mev_pressure + liq_flow. lag0 (contemporaneous). |
+| `onchain_core_lag1` | chain_congestion, mev_pressure, liq_flow | use whole pool | lagged 1 day (everywhere) | The drivers Option-2 found dominate: chain_congestion + mev_pressure + liq_flow. lag1 (everywhere, predictive). |
+
 ## FULL window
 
 **Buy & Hold BTC:** total +9.7%, Sharpe 0.248, MaxDD -72.9%

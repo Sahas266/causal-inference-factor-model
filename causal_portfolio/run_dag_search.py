@@ -74,6 +74,23 @@ def render_markdown(results, bh, assets, run_args) -> str:
     L.append(f"- OOS window: `{run_args['oos_start']}` → `{run_args['full_end']}`")
     L.append(f"- Run UTC: `{datetime.now(timezone.utc).isoformat(timespec='seconds')}`\n")
 
+    # ── Config descriptions ──
+    from causal_portfolio.experiments.dag_variants import VARIANTS
+    L.append("## Configurations\n")
+    L.append("| Config | Factor pool | Selection | Lag | What it tests |")
+    L.append("|---|---|---|---|---|")
+    for v in VARIANTS:
+        if v.factors is None:
+            pool = "all available factors"
+        elif len(v.factors) > 4:
+            pool = f"{len(v.factors)} factors ({', '.join(v.factors[:3])}, etc.)"
+        else:
+            pool = ", ".join(v.factors)
+        sel = f"Combo m={v.combo_m}" if v.combo_m else "use whole pool"
+        lag = "contemporaneous" if v.lag_global == 0 and v.lag_macro == 0 else "lagged 1 day (everywhere)"
+        L.append(f"| `{v.name}` | {pool} | {sel} | {lag} | {v.description} |")
+    L.append("")
+
     for wlabel in ("full", "oos"):
         b = bh.get(wlabel, {})
         L.append(f"## {wlabel.upper()} window\n")
