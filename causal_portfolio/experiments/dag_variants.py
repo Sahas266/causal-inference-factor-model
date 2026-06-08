@@ -50,8 +50,18 @@ PANEL_METRICS = [
     "avg_gas_price_gwei", "avg_base_fee_gwei",
     "stddev_base_fee_gwei", "staking_apr",
     "cex_netflow_usd", "lp_net_flow_usd", "mev_revenue_eth",
+    # Perp funding — feeds the funding_basis factor (Hyperliquid, from 2023-10).
+    "funding_rate_8h", "funding_premium",
+    # Instrument sources (for 2SLS, Steps 4-5): liquidations + protocol fees.
+    "avg_gas_utilization", "liquidation_volume_usd", "perp_liquidation",
+    "avg_liquidation_usd", "fees", "total_fees_usd", "base_fees",
 ]
 MACRO_SERIES = ["DFF", "DGS10", "VIXCLS", "T10Y2Y", "CPIAUCSL", "M2SL", "DTWEXBGS"]
+
+# Stablecoins are loaded into the panel as FACTOR INPUTS ONLY (their supply
+# feeds stable_flow + the stablecoin_mint instrument). They are never part of
+# the trading universe, so returns are not computed for them.
+FACTOR_SOURCE_ASSETS = ["usdc", "usdt", "usde"]
 
 
 @dataclass(frozen=True)
@@ -125,7 +135,10 @@ class VariantResult:
 def load_inputs(assets: list[str], start: str, end: str):
     from causal_portfolio.data import get_loader
     loader = get_loader()
-    panel = loader.load_panel(assets, PANEL_METRICS, start, end)
+    # Panel spans trading assets + stablecoin factor sources, so stable_flow and
+    # the stablecoin_mint instrument have data; returns cover trading assets only.
+    panel_assets = list(dict.fromkeys(assets + FACTOR_SOURCE_ASSETS))
+    panel = loader.load_panel(panel_assets, PANEL_METRICS, start, end)
     returns = loader.load_returns(assets, start, end)
     macro = loader.load_macro(MACRO_SERIES, start, end)
     factors = build_all_factors(panel, macro)

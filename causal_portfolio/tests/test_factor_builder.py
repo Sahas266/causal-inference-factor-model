@@ -11,6 +11,7 @@ from causal_portfolio.factors.builder import (
     _compute_liq_flow,
     _compute_stable_flow,
     _compute_cex_dex_flow,
+    _compute_funding_basis,
 )
 
 
@@ -115,6 +116,48 @@ class TestStableFlow:
         panel = pd.DataFrame({"unrelated": [1, 2, 3]})
         result = _compute_stable_flow(panel)
         assert result.isna().all()
+
+
+class TestFundingBasis:
+    def _funding_panel(self):
+        dates = pd.date_range("2023-11-01", periods=60, freq="D")
+        rng = np.random.default_rng(7)
+        return pd.DataFrame(
+            {
+                "btc_funding_rate_8h": rng.normal(0.0001, 0.00005, 60),
+                "eth_funding_rate_8h": rng.normal(0.0001, 0.00005, 60),
+                "sol_funding_rate_8h": rng.normal(0.0002, 0.0001, 60),
+            },
+            index=dates,
+        )
+
+    def test_produces_zscored_series(self):
+        result = _compute_funding_basis(self._funding_panel())
+        assert isinstance(result, pd.Series)
+        valid = result.dropna()
+        assert len(valid) == 60
+        assert abs(valid.mean()) < 0.2
+        assert abs(valid.std() - 1.0) < 0.2
+
+    def test_falls_back_to_premium(self):
+        dates = pd.date_range("2023-11-01", periods=30, freq="D")
+        rng = np.random.default_rng(8)
+        panel = pd.DataFrame(
+            {"btc_funding_premium": rng.normal(0, 1, 30)}, index=dates
+        )
+        result = _compute_funding_basis(panel)
+        assert result.dropna().shape[0] == 30
+
+    def test_missing_funding_is_nan(self):
+        panel = pd.DataFrame({"btc_PriceUSD": [1.0, 2.0, 3.0]})
+        result = _compute_funding_basis(panel)
+        assert result.isna().all()
+
+    def test_included_in_build_all(self):
+        panel = self._funding_panel()
+        factors = build_all_factors(panel, macro=None)
+        assert "funding_basis" in factors.columns
+        assert not factors["funding_basis"].isna().all()
 
 
 class TestBuildAllFactors:

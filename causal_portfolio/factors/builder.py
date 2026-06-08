@@ -67,7 +67,7 @@ def build_all_factors(
     # Global factors
     factors["liq_flow"] = _compute_liq_flow(panel)
     factors["stable_flow"] = _compute_stable_flow(panel)
-    factors["funding_basis"] = np.nan  # GAP: no free data source
+    factors["funding_basis"] = _compute_funding_basis(panel)
     factors["chain_congestion"] = _compute_chain_congestion(panel)
     factors["staking_yield"] = _compute_staking_yield(panel)
     factors["mev_pressure"] = _compute_mev_pressure(panel)
@@ -112,6 +112,25 @@ def _compute_stable_flow(panel: pd.DataFrame) -> pd.Series:
 
     total_supply = panel[available].sum(axis=1)
     return z_score(total_supply.diff())
+
+
+def _compute_funding_basis(panel: pd.DataFrame) -> pd.Series:
+    """Perp funding basis — mean funding rate across the perp universe, z-scored.
+
+    The CPCM 'Funding Basis' factor. High aggregate funding = leveraged longs
+    paying to stay long (overheated/risk-on); negative = shorts paying.
+    Source: Hyperliquid funding_rate_8h (8h cadence, daily-resampled in the
+    panel). Only available from 2023-10-31 onward, so the series is NaN before
+    then and downstream alignment restricts the usable window accordingly.
+    """
+    funding_cols = [c for c in panel.columns if c.endswith("_funding_rate_8h")]
+    if not funding_cols:
+        # Fallback: funding premium if rate is absent
+        funding_cols = [c for c in panel.columns if c.endswith("_funding_premium")]
+    if not funding_cols:
+        return pd.Series(np.nan, index=panel.index)
+    mean_funding = panel[funding_cols].mean(axis=1)
+    return z_score(mean_funding)
 
 
 def _compute_chain_congestion(panel: pd.DataFrame) -> pd.Series:
