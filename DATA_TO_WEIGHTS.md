@@ -82,9 +82,76 @@ Dune gas price → CoinMetrics `FeeTotNtv`). All-NaN factors are dropped.
 
 `build_instruments` produces 4 IV series + `iv_map` (treatment → instrument):
 `gas_spike→liq_flow`, `liquidation_level→funding_basis`,
-`stablecoin_mint→stable_flow`, `protocol_event→chain_congestion`. Spike
-instruments are lagged |z(Δ)|>2σ indicators; `stablecoin_mint` is a lagged level
-diff.
+`stablecoin_mint→stable_flow`, `protocol_event→chain_congestion`.
+
+### Instrumental variables — what they are for
+
+An **instrument** Z for a treatment factor X (on outcome Y = return) is a
+variable that affects Y *only through* X. Its job is to isolate the part of X's
+movement that is exogenous — uncorrelated with the return's own shock — so the
+estimated effect of X on Y is causal rather than just correlational. Formally an
+IV must satisfy two conditions:
+
+- **Relevance:** Z genuinely moves X (`Z ⊥̸ X`). Measured empirically by the
+  **first-stage F**; weak relevance (F < 10) makes 2SLS worse than OLS.
+- **Exclusion:** Z affects Y *only* through X, not directly (`Z ⊥ Y | X`).
+  A graph-level property, checked by `scm.identification.check_iv_validity`.
+
+Each instrument is paired with the factor it is meant to identify because they
+share an underlying economic driver while the instrument is plausibly
+predetermined:
+
+| Instrument | Treatment factor | Economic rationale |
+|---|---|---|
+| `gas_spike` | `liq_flow` | A gas/fee spike reflects a congestion shock that pushes liquidity in/out of DeFi, but yesterday's spike shouldn't directly cause today's return except via that flow. |
+| `liquidation_level` | `funding_basis` | A liquidation cascade resets leverage and hence funding, without (in principle) directly setting the next day's return. |
+| `stablecoin_mint` | `stable_flow` | Net stablecoin minting is the mechanical source of stablecoin flow. |
+| `protocol_event` | `chain_congestion` | A protocol fee/usage spike is a congestion event. |
+
+### How each IV series is constructed
+
+**Code:** `factors/instruments.py` (port of `cpcm-factors/instruments.rs`),
+spec in `_INSTRUMENT_SPEC`.
+
+Two builder kinds:
+
+- **Spike instruments** (`gas_spike`, `liquidation_level`, `protocol_event`) via
+  `_lagged_z_score_spike(x, threshold=2.0, lag=1)`:
+  1. Pick the source series `x` from a fallback chain (e.g. `gas_spike` tries
+     `avg_gas_utilization` → `stddev_base_fee_gwei` → `avg_base_fee_gwei` →
+     `FeeTotNtv`, summed across available assets — `_find_columns` takes the
+     first family that exists).
+  2. `_diff(x)` — day-over-day change.
+  3. `_z_score_abs(Δx)` — z-score of the **absolute** change, so it flags
+     large-*magnitude* moves in either direction (not just positive).
+  4. Indicator: `1.0` if `|z| > 2σ` else `0.0` (a rare-event "spike happened" dummy).
+  5. `_lag(·, 1)` — shift forward one day (see lagging below).
+  → Result is a mostly-zero binary series that fires only on ~2σ days.
+
+- **Level-diff instrument** (`stablecoin_mint`) via `_lag(_diff(total), 1)`:
+  Sum stablecoin supply across usdc/usdt/usde, take the first difference (net
+  minting/burning), then lag one day. This is a *continuous* series (non-zero
+  almost everywhere), unlike the sparse spike dummies.
+
+### Why the instruments are lagged (lag = 1)
+
+Every instrument is shifted forward one day (`lag=1`) so that the value used at
+time *t* is **predetermined** — it was already known at *t−1*. This breaks
+**simultaneity**: a contemporaneous instrument (measured at the same instant as
+the treatment and the return) could be correlated with the same-day return shock,
+which would violate the exclusion restriction and reintroduce the endogeneity
+2SLS is supposed to remove. Lagging by ≥1 day guarantees the instrument cannot be
+a consequence of today's return. This is exactly what the DAG declares — the
+instrument edge `Z →(lag 1)→ X` in `scm/graph.py::INSTRUMENTS` carries `lag=1`.
+
+> **Two distinct kinds of lag in this codebase — don't conflate them:**
+> 1. **Instrument lag** (here, Stage 1): the fixed `lag=1` inside
+>    `build_instruments`, for IV validity (simultaneity-breaking).
+> 2. **Factor-edge lag** (Stages 2–3 / DAG variants): `lag_global` / `lag_macro`
+>    applied to the *factor → return* edges to test contemporaneous (`lag0`) vs
+>    predictive (`lag1`) structures. In the base DAG, macro factors enter the
+>    return at lag 1 and global factors at lag 0 (`scm/graph.py`); the DAG-variant
+>    search sweeps both. This lag is about *prediction horizon*, not IV validity.
 
 **Current state:**
 - `funding_basis` was hard-coded NaN; **now live** from Hyperliquid
