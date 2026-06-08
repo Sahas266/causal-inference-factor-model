@@ -4,7 +4,7 @@ Same walk-forward, optimizer, covariance, cadence and train window for both arms
 
 - Assets: `btc, eth, sol, bnb, avax, uni, aave, link, doge`
 - Window: `2022-01-01` → `2025-12-31` | train 252d, rebalance 5d
-- Run UTC: `2026-06-08T17:46:09+00:00`
+- Run UTC: `2026-06-08T18:11:04+00:00`
 
 ## Instrument strength (first-stage partial F gate)
 
@@ -34,4 +34,4 @@ Same walk-forward, optimizer, covariance, cadence and train window for both arms
 
 ## Verdict
 
-2SLS and OLS beat BH BTC equally often (50%). Where instruments failed the gate, 2SLS degraded to OLS by design, so identical results mean the instruments added nothing exploitable.
+2SLS produced results **identical** to OLS: every instrument failed the F ≥ 10.0 gate, so 2SLS reduced to OLS by design. Fold win-rate vs BH BTC 50% for both — the instruments add nothing exploitable, and the correlational fit itself does not reliably beat holding BTC.

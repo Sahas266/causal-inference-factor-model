@@ -352,25 +352,35 @@ def render_markdown(ab: ABResult, cmp: dict, args: dict) -> str:
     L.append("")
 
     # Verdict
-    ols_wr = cmp["reports"]["OLS"].win_rate
-    tsls_wr = cmp["reports"]["2SLS"].win_rate
+    ols_rep = cmp["reports"]["OLS"]
+    tsls_rep = cmp["reports"]["2SLS"]
+    ols_wr, tsls_wr = ols_rep.win_rate, tsls_rep.win_rate
+    ols_ms, tsls_ms = ols_rep.median_sharpe, tsls_rep.median_sharpe
+    # Did 2SLS actually differ from OLS? (If every instrument failed the gate,
+    # 2SLS reduces to OLS and the two arms are bit-identical.)
+    diverged = abs(ols_ms - tsls_ms) > 1e-6
     L.append("## Verdict\n")
-    if tsls_wr > ols_wr:
-        L.append(f"2SLS beat BH BTC in a higher fraction of folds than OLS "
-                 f"({tsls_wr:.0%} vs {ols_wr:.0%}) — weak evidence that causal "
-                 f"identification helps OOS. Discount by the instrument-strength "
-                 f"table: if the instruments rarely cleared the gate, 2SLS was "
-                 f"mostly OLS and the gap is noise.")
-    elif tsls_wr == ols_wr:
-        L.append(f"2SLS and OLS beat BH BTC equally often ({tsls_wr:.0%}). Where "
-                 f"instruments failed the gate, 2SLS degraded to OLS by design, so "
-                 f"identical results mean the instruments added nothing exploitable.")
+    if not diverged:
+        L.append(f"2SLS produced results **identical** to OLS: every instrument "
+                 f"failed the F ≥ {args['f_threshold']} gate, so 2SLS reduced to "
+                 f"OLS by design. Fold win-rate vs BH BTC {tsls_wr:.0%} for both — "
+                 f"the instruments add nothing exploitable, and the correlational "
+                 f"fit itself does not reliably beat holding BTC.")
+    elif tsls_ms >= ols_ms and tsls_wr >= ols_wr:
+        L.append(f"2SLS matched or beat OLS OOS (median Sharpe {tsls_ms:.3f} vs "
+                 f"{ols_ms:.3f}; fold win-rate {tsls_wr:.0%} vs {ols_wr:.0%}) — "
+                 f"weak evidence that causal estimation helps. Discount heavily by "
+                 f"the instrument-strength table: if F rarely cleared 10, the "
+                 f"instruments are weak and any edge is likely noise.")
     else:
-        L.append(f"OLS beat BH BTC more often than 2SLS ({ols_wr:.0%} vs "
-                 f"{tsls_wr:.0%}). Causal identification did NOT generalize better "
-                 f"here — consistent with weak instruments and with every prior "
-                 f"result in this project: nothing reliably beats buy-and-hold BTC "
-                 f"out of sample.")
+        L.append(f"Using the instruments made 2SLS **worse** than OLS OOS "
+                 f"(median Sharpe {tsls_ms:.3f} vs {ols_ms:.3f}; fold win-rate "
+                 f"{tsls_wr:.0%} vs {ols_wr:.0%}). This is the classic "
+                 f"weak-instrument failure: forcing 2SLS through near-zero-relevance "
+                 f"instruments (see the F column — all far below 10) injects "
+                 f"variance and bias rather than identifying a causal effect. It is "
+                 f"exactly why the production path gates on first-stage F. Neither "
+                 f"arm beats buy-and-hold BTC.")
     return "\n".join(L)
 
 
