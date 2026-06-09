@@ -42,6 +42,7 @@ from causal_portfolio.experiments.dag_variants import (
     FACTOR_SOURCE_ASSETS, MACRO_SERIES, PANEL_METRICS,
 )
 from causal_portfolio.experiments.ols_vs_2sls import _fit_ols_loadings
+from causal_portfolio.validation.walk_forward import bh_btc_returns, metric_row
 from causal_portfolio.factors.builder import build_all_factors
 from causal_portfolio.optimizer.manifold import ManifoldOptimizer, estimate_covariance
 from causal_portfolio.regimes.hmm import build_regime_features, rolling_fit_decode
@@ -125,10 +126,7 @@ def run_ab(
             regime_ret[i] = float(np.nansum(w_reg[valid] * day[valid]))
 
     test_idx = idx[train_window:]
-    if "btc_return" in returns:
-        bh = np.expm1(returns["btc_return"].reindex(test_idx)).fillna(0.0)
-    else:
-        bh = pd.Series(0.0, index=test_idx)
+    bh = bh_btc_returns(returns, test_idx)
     return (pd.Series(pooled_ret, index=test_idx),
             pd.Series(regime_ret, index=test_idx), bh, regime_fits, fallbacks)
 
@@ -187,11 +185,7 @@ def render_markdown(res: RegimeABResult, cmp: dict, args: dict) -> str:
              f"same-regime history).\n")
 
     def _line(name, s):
-        r = s.values
-        pv = np.cumprod(1 + r)
-        tot = pv[-1] / pv[0] - 1
-        sr = np.mean(r) / (np.std(r) + 1e-12) * np.sqrt(ANNUALIZATION)
-        return f"| {name} | {tot:+.1%} | {sr:.3f} |"
+        return metric_row(name, s)
 
     L.append("## Full OOS window\n")
     L.append("| Arm | Total | Sharpe |")

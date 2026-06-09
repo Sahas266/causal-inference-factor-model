@@ -32,7 +32,7 @@ from causal_portfolio.factors.builder import MACRO_FACTORS, build_all_factors
 from causal_portfolio.factors.combo_selector import ComboDriverSelector
 from causal_portfolio.factors.instruments import build_instruments
 from causal_portfolio.experiments.ols_vs_2sls import run_ab
-from causal_portfolio.validation.walk_forward import compare_variants, evaluate
+from causal_portfolio.validation.walk_forward import compare_variants
 
 logger = logging.getLogger("cpcm.run_causal_dag_search")
 

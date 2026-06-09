@@ -28,6 +28,7 @@ from causal_portfolio.experiments.dag_variants import (
     FACTOR_SOURCE_ASSETS, MACRO_SERIES, PANEL_METRICS,
 )
 from causal_portfolio.experiments.regime_dag import run_ab as regime_run_ab
+from causal_portfolio.validation.walk_forward import metric_row
 from causal_portfolio.factors.builder import build_all_factors
 from causal_portfolio.regimes.hmm import build_regime_features, rolling_fit_decode
 from causal_portfolio.regimes.wkmeans import rolling_fit_label
@@ -98,10 +99,7 @@ def render_markdown(out, cmp, args) -> str:
              f"WK regime-fits {out['wk_fits']} / fallbacks {out['wk_fb']}\n")
 
     def _line(name, s):
-        r = s.values
-        pv = np.cumprod(1 + r)
-        sr = np.mean(r) / (np.std(r) + 1e-12) * np.sqrt(ANNUALIZATION)
-        return f"| {name} | {pv[-1]/pv[0]-1:+.1%} | {sr:.3f} |"
+        return metric_row(name, s)
 
     L.append("## Full OOS window\n| Arm | Total | Sharpe |\n|---|---:|---:|")
     L.append(_line("Pooled", out["pooled"]))

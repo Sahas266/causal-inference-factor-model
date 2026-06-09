@@ -41,13 +41,12 @@ import pandas as pd
 from causal_portfolio.experiments.dag_variants import (
     FACTOR_SOURCE_ASSETS, MACRO_SERIES, PANEL_METRICS,
 )
-from causal_portfolio.factors.builder import (
-    MACRO_FACTORS, build_all_factors,
-)
+from causal_portfolio.factors.builder import build_all_factors
 from causal_portfolio.factors.instruments import build_instruments
 from causal_portfolio.optimizer.manifold import ManifoldOptimizer, estimate_covariance
 from causal_portfolio.scm.estimators import add_intercept, ols, tsls
 from causal_portfolio.solvers.base import CPCMSolver
+from causal_portfolio.validation.walk_forward import bh_btc_returns, metric_row
 
 logger = logging.getLogger("cpcm.experiments.ols_vs_2sls")
 
@@ -282,10 +281,7 @@ def run_ab(
             tsls_ret[i] = float(np.nansum(w_tsls[valid] * day[valid]))
 
     test_idx = idx[train_window:]
-    if "btc_return" in returns:
-        bh = np.expm1(returns["btc_return"].reindex(test_idx)).fillna(0.0)
-    else:
-        bh = pd.Series(0.0, index=test_idx)
+    bh = bh_btc_returns(returns, test_idx)
     return ABResult(
         ols_returns=pd.Series(ols_ret, index=test_idx),
         tsls_returns=pd.Series(tsls_ret, index=test_idx),
@@ -298,8 +294,6 @@ def run_ab(
 
 
 def render_markdown(ab: ABResult, cmp: dict, args: dict) -> str:
-    from causal_portfolio.validation.walk_forward import evaluate
-
     L = ["# OLS vs 2SLS — does causal identification generalize OOS?\n"]
     L.append("Same walk-forward, optimizer, covariance, cadence and train window "
              "for both arms; the only difference is OLS vs 2SLS estimation of the "
@@ -327,11 +321,7 @@ def render_markdown(ab: ABResult, cmp: dict, args: dict) -> str:
 
     # Full-window OOS metrics for each arm + BH
     def _line(name, s):
-        r = s.values
-        pv = np.cumprod(1 + r)
-        tot = pv[-1] / pv[0] - 1
-        sr = np.mean(r) / (np.std(r) + 1e-12) * np.sqrt(ANNUALIZATION)
-        return f"| {name} | {tot:+.1%} | {sr:.3f} |"
+        return metric_row(name, s)
 
     L.append("## Full OOS window\n")
     L.append("| Arm | Total | Sharpe |")

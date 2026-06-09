@@ -148,6 +148,18 @@ class WassersteinKMeans:
     def _dist_to_centroids(self, seg_sorted: np.ndarray, centroids: np.ndarray) -> np.ndarray:
         return np.array([wasserstein_distance_sorted(seg_sorted, c, self.p) for c in centroids])
 
+    def _all_distances(self, segs_sorted: np.ndarray, centroids: np.ndarray) -> np.ndarray:
+        """W_p distance matrix (M, k): every segment to every centroid, vectorized.
+
+        Identical formula to `wasserstein_distance_sorted` (eq 21), but one
+        broadcast op instead of M*k Python-level calls — this is the k-means
+        inner loop, run per iteration × restart × refit.
+        """
+        diff = np.abs(segs_sorted[:, None, :] - centroids[None, :, :])  # (M, k, N)
+        if self.p == 1:
+            return diff.mean(axis=2)
+        return (diff ** self.p).mean(axis=2) ** (1.0 / self.p)
+
     def _run_once(self, segs_sorted: np.ndarray, seed: int):
         rng = np.random.default_rng(seed)
         M = segs_sorted.shape[0]
@@ -156,9 +168,7 @@ class WassersteinKMeans:
         labels = np.zeros(M, dtype=int)
         for _ in range(self.n_iter):
             # assignment
-            new_labels = np.array([
-                int(np.argmin(self._dist_to_centroids(s, centroids))) for s in segs_sorted
-            ])
+            new_labels = self._all_distances(segs_sorted, centroids).argmin(axis=1)
             # update (Wasserstein barycenter per cluster)
             new_centroids = centroids.copy()
             for l in range(k):
@@ -172,8 +182,8 @@ class WassersteinKMeans:
             if loss < self.tol:
                 break
         # total within-cluster W_p (inertia) for restart selection
-        inertia = sum(self._dist_to_centroids(segs_sorted[i], centroids)[labels[i]]
-                      for i in range(M))
+        D = self._all_distances(segs_sorted, centroids)
+        inertia = float(D[np.arange(M), labels].sum())
         return centroids, labels, inertia
 
     def fit(self, returns: np.ndarray) -> "WassersteinKMeans":
@@ -200,10 +210,7 @@ class WassersteinKMeans:
             raise RuntimeError("fit() first")
         segs = segment_stream(returns, self.h1, self.h2)
         segs_sorted = np.sort(segs, axis=1)
-        return np.array([
-            int(np.argmin(self._dist_to_centroids(s, self._fitted.centroids)))
-            for s in segs_sorted
-        ])
+        return self._all_distances(segs_sorted, self._fitted.centroids).argmin(axis=1)
 
     def predict_latest_label(self, returns_window: np.ndarray) -> int:
         """Label the most recent length-h1 segment of a window (causal use)."""

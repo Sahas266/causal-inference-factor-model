@@ -92,10 +92,27 @@ def _svd_pinv(a: np.ndarray) -> np.ndarray:
 
 def _solve_via_svd(a: np.ndarray, b: np.ndarray) -> np.ndarray:
     """Solve a x = b via SVD (handles near-singular a)."""
+    u, s_inv, vt = _svd_factor(a)
+    return vt.T @ (s_inv * (u.T @ b))
+
+
+def _svd_factor(a: np.ndarray):
+    """SVD of `a` with the Rust cutoff applied, returning (u, s_inv, vt).
+
+    Lets a caller derive BOTH the least-squares solve and the pseudo-inverse
+    from a single decomposition (see `ols`, which needs both of X'X)."""
     u, s, vt = np.linalg.svd(a, full_matrices=False)
     threshold = _SVD_REL_THRESHOLD * s.max() if s.size else 0.0
     s_inv = np.where(s > threshold, 1.0 / s, 0.0)
-    return vt.T @ (s_inv * (u.T @ b))
+    return u, s_inv, vt
+
+
+def _t_and_p(beta: np.ndarray, std_errors: np.ndarray, df: float):
+    """t-statistics and two-sided p-values (zero t where SE ~ 0)."""
+    safe_se = np.where(std_errors > 1e-15, std_errors, np.inf)
+    t_stats = beta / safe_se
+    p_values = 2.0 * (1.0 - _student_t.cdf(np.abs(t_stats), df))
+    return t_stats, np.asarray(p_values)
 
 
 def add_intercept(x: np.ndarray) -> np.ndarray:
@@ -129,9 +146,12 @@ def ols(y: np.ndarray, x: np.ndarray, feature_names: list[str]) -> OlsResult:
     if len(feature_names) != k:
         raise ValueError(f"feature_names len ({len(feature_names)}) != X cols ({k})")
 
+    # One SVD of X'X serves both the β solve and the (X'X)⁻¹ for SEs.
     xtx = x.T @ x
     xty = x.T @ y
-    beta = _solve_via_svd(xtx, xty)
+    u, s_inv, vt = _svd_factor(xtx)
+    beta = vt.T @ (s_inv * (u.T @ xty))
+    xtx_inv = (vt.T * s_inv) @ u.T
 
     residuals = y - x @ beta
     sse = float(residuals @ residuals)
@@ -143,11 +163,9 @@ def ols(y: np.ndarray, x: np.ndarray, feature_names: list[str]) -> OlsResult:
     adj_r_squared = 1.0 - (1.0 - r_squared) * (n - 1) / df_resid
 
     sigma2 = sse / df_resid
-    xtx_inv = _svd_pinv(xtx)
     std_errors = np.sqrt(np.maximum(sigma2 * np.diag(xtx_inv), 0.0))
 
-    t_stats = np.where(std_errors > 1e-15, beta / np.where(std_errors > 1e-15, std_errors, 1.0), 0.0)
-    p_values = 2.0 * (1.0 - _student_t.cdf(np.abs(t_stats), df_resid))
+    t_stats, p_values = _t_and_p(beta, std_errors, df_resid)
 
     return OlsResult(
         coefficients=beta, std_errors=std_errors, t_stats=t_stats,
@@ -174,20 +192,15 @@ def tsls(
     x_exog should already include an intercept column if desired.
     """
     y = np.asarray(y, dtype=float).reshape(-1)
-    x_endog = np.atleast_2d(np.asarray(x_endog, dtype=float))
-    x_exog = np.atleast_2d(np.asarray(x_exog, dtype=float))
-    z = np.atleast_2d(np.asarray(z, dtype=float))
-    # atleast_2d may transpose 1-D column inputs; coerce to (n, *) by row count.
     n = y.shape[0]
-    x_endog = _as_cols(x_endog, n)
-    x_exog = _as_cols(x_exog, n)
-    z = _as_cols(z, n)
+    # Reshape to n rows directly: (n,) -> (n,1), (n,k) unchanged.
+    x_endog = np.asarray(x_endog, dtype=float).reshape(n, -1)
+    x_exog = np.asarray(x_exog, dtype=float).reshape(n, -1)
+    z = np.asarray(z, dtype=float).reshape(n, -1)
 
     k1 = x_endog.shape[1]
     k2 = x_exog.shape[1]
     m = z.shape[1]
-    if not (x_endog.shape[0] == x_exog.shape[0] == z.shape[0] == n):
-        raise ValueError("row mismatch among y / x_endog / x_exog / z")
     if m < k1:
         raise ValueError(f"Need >= as many instruments ({m}) as endogenous ({k1})")
 
@@ -215,8 +228,7 @@ def tsls(
     var_beta = sigma2 * xtx_hat_inv
     std_errors = np.sqrt(np.maximum(np.diag(var_beta), 0.0))
 
-    t_stats = np.where(std_errors > 1e-15, beta / np.where(std_errors > 1e-15, std_errors, 1.0), 0.0)
-    p_values = 2.0 * (1.0 - _student_t.cdf(np.abs(t_stats), df_resid))
+    t_stats, p_values = _t_and_p(beta, std_errors, df_resid)
 
     y_mean = float(y.mean())
     sst = float(((y - y_mean) ** 2).sum())
@@ -238,15 +250,6 @@ def tsls(
         sargan_stat=sargan_stat, sargan_p=sargan_p,
         hausman_stat=hausman_stat, hausman_p=hausman_p,
     )
-
-
-def _as_cols(a: np.ndarray, n: int) -> np.ndarray:
-    """Coerce a 2-D array so it has n rows (transpose if atleast_2d flipped it)."""
-    if a.shape[0] == n:
-        return a
-    if a.shape[1] == n:
-        return a.T
-    raise ValueError(f"cannot coerce array of shape {a.shape} to {n} rows")
 
 
 def _compute_first_stage_f(

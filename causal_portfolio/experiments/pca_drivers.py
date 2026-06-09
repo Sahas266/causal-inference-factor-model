@@ -28,6 +28,7 @@ from causal_portfolio.experiments.dag_variants import (
     FACTOR_SOURCE_ASSETS, MACRO_SERIES, PANEL_METRICS,
 )
 from causal_portfolio.experiments.ols_vs_2sls import _fit_ols_loadings
+from causal_portfolio.validation.walk_forward import bh_btc_returns, metric_row
 from causal_portfolio.factors.builder import build_all_factors
 from causal_portfolio.optimizer.manifold import ManifoldOptimizer, estimate_covariance
 
@@ -101,8 +102,7 @@ def run_ab(returns, factors, *, train_window=252, rebalance_freq=5,
             pca_ret[i] = float(np.nansum(w_pca[valid] * day[valid]))
 
     test_idx = idx[train_window:]
-    bh = np.expm1(returns["btc_return"].reindex(test_idx)).fillna(0.0) \
-        if "btc_return" in returns else pd.Series(0.0, index=test_idx)
+    bh = bh_btc_returns(returns, test_idx)
     return PCAABResult(pd.Series(raw_ret, index=test_idx),
                        pd.Series(pca_ret, index=test_idx), bh,
                        float(np.mean(ncomps)) if ncomps else 0.0)
@@ -121,10 +121,7 @@ def render_markdown(res: PCAABResult, cmp: dict, args: dict) -> str:
     L.append(f"- Run UTC: `{datetime.now(timezone.utc).isoformat(timespec='seconds')}`\n")
 
     def _line(name, s):
-        r = s.values
-        pv = np.cumprod(1 + r)
-        sr = np.mean(r) / (np.std(r) + 1e-12) * np.sqrt(ANNUALIZATION)
-        return f"| {name} | {pv[-1]/pv[0]-1:+.1%} | {sr:.3f} |"
+        return metric_row(name, s)
 
     L.append("## Full OOS window\n| Arm | Total | Sharpe |\n|---|---:|---:|")
     L.append(_line("Raw factors", res.raw_returns))

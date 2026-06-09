@@ -32,9 +32,7 @@ from dataclasses import dataclass, field
 import numpy as np
 import pandas as pd
 
-from causal_portfolio.backtest.metrics import (
-    max_drawdown, sharpe_ratio, sortino_ratio,
-)
+from causal_portfolio.backtest.metrics import max_drawdown, sharpe_ratio
 
 ANNUALIZATION = 365
 
@@ -73,6 +71,31 @@ def _total_return(r: np.ndarray) -> float:
     if len(r) == 0:
         return float("nan")
     return float(np.prod(1.0 + r) - 1.0)
+
+
+# ── shared report helpers (used by the experiment writers) ───────────
+
+
+def metric_row(name: str, returns, *, with_dd: bool = False) -> str:
+    """Markdown table row: total return, annualized Sharpe (365), optional MaxDD.
+
+    One implementation so every experiment's OOS summary is computed identically
+    (was copy-pasted as a local ``_line`` closure in each report writer).
+    """
+    r = np.asarray(returns)
+    row = f"| {name} | {_total_return(r):+.1%} | {sharpe_ratio(r, annualization=ANNUALIZATION):.3f} |"
+    return row + f" {max_drawdown(r):+.1%} |" if with_dd else row
+
+
+def bh_btc_returns(returns: pd.DataFrame, index) -> pd.Series:
+    """Buy-and-hold BTC simple-return benchmark aligned to ``index``.
+
+    ``returns`` holds LOG returns (loader convention); convert to simple so the
+    benchmark compounds consistently with the strategy return series.
+    """
+    if "btc_return" in returns:
+        return np.expm1(returns["btc_return"].reindex(index)).fillna(0.0)
+    return pd.Series(0.0, index=index)
 
 
 def make_test_folds(

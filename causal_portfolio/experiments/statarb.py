@@ -27,6 +27,7 @@ import pandas as pd
 from causal_portfolio.analysis.cointegration import (
     find_cointegrated_pairs, spread_positions, spread_series,
 )
+from causal_portfolio.validation.walk_forward import metric_row
 
 logger = logging.getLogger("cpcm.experiments.statarb")
 ANNUALIZATION = 365
@@ -130,12 +131,7 @@ def render_markdown(res: StatArbResult, cmp: dict, args: dict) -> str:
                  ", ".join(f"`{k}` ({v})" for k, v in top) + "\n")
 
     def _line(name, s):
-        r = s.values
-        pv = np.cumprod(1 + r)
-        tot = pv[-1] / pv[0] - 1
-        sr = np.mean(r) / (np.std(r) + 1e-12) * np.sqrt(ANNUALIZATION)
-        from causal_portfolio.backtest.metrics import max_drawdown
-        return f"| {name} | {tot:+.1%} | {sr:.3f} | {max_drawdown(r):+.1%} |"
+        return metric_row(name, s, with_dd=True)
 
     L.append("## Full OOS window\n")
     L.append("| Strategy | Total | Sharpe | MaxDD |")

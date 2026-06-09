@@ -26,7 +26,7 @@ from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
-from statsmodels.tsa.stattools import adfuller, coint
+from statsmodels.tsa.stattools import adfuller
 
 logger = logging.getLogger("cpcm.analysis.cointegration")
 
@@ -40,7 +40,6 @@ class CointPair:
     mu: float         # in-sample spread mean
     sigma: float      # in-sample spread std
     adf_p: float      # ADF p-value on the residual (lower = more stationary)
-    coint_p: float    # Engle-Granger cointegration p-value
 
 
 def _ols_hedge(log_a: np.ndarray, log_b: np.ndarray) -> tuple[float, float]:
@@ -64,7 +63,7 @@ def find_cointegrated_pairs(
     `log_prices` is a (T, n_assets) frame of LOG prices on the (training)
     window. For each ordered pair we fit a hedge ratio and ADF-test the
     residual; pairs with ADF p < `adf_pvalue` are returned, best (lowest ADF p)
-    first. We also record the statsmodels `coint` p-value as a cross-check.
+    first.
     """
     cols = list(log_prices.columns)
     clean = log_prices.dropna()
@@ -86,14 +85,12 @@ def find_cointegrated_pairs(
                 continue
             try:
                 adf_p = float(adfuller(resid, autolag="AIC")[1])
-                coint_p = float(coint(la, lb)[1])
             except Exception:
                 continue
             if adf_p < adf_pvalue:
                 pairs.append(CointPair(
                     a=a, b=b, beta=beta, const=const,
-                    mu=float(resid.mean()), sigma=sigma,
-                    adf_p=adf_p, coint_p=coint_p,
+                    mu=float(resid.mean()), sigma=sigma, adf_p=adf_p,
                 ))
     # Deduplicate symmetric pairs: keep the orientation with the lower ADF p.
     best: dict[frozenset, CointPair] = {}

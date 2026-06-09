@@ -25,6 +25,7 @@ import numpy as np
 import pandas as pd
 
 from causal_portfolio.analysis.correlation import hrp_weights
+from causal_portfolio.validation.walk_forward import metric_row
 
 logger = logging.getLogger("cpcm.experiments.hrp")
 ANNUALIZATION = 365
@@ -82,11 +83,7 @@ def render_markdown(res: HRPResult, cmp: dict, args: dict) -> str:
     L.append(f"- Run UTC: `{datetime.now(timezone.utc).isoformat(timespec='seconds')}`\n")
 
     def _line(name, s):
-        r = s.values
-        pv = np.cumprod(1 + r)
-        sr = np.mean(r) / (np.std(r) + 1e-12) * np.sqrt(ANNUALIZATION)
-        from causal_portfolio.backtest.metrics import max_drawdown
-        return f"| {name} | {pv[-1]/pv[0]-1:+.1%} | {sr:.3f} | {max_drawdown(r):+.1%} |"
+        return metric_row(name, s, with_dd=True)
 
     L.append("## Full OOS window\n| Strategy | Total | Sharpe | MaxDD |\n|---|---:|---:|---:|")
     L.append(_line("HRP", res.hrp_returns))
