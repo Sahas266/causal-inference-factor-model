@@ -20,6 +20,16 @@ the Rust reference, but the binding constraint is **instrument relevance**: the
 declared instruments have near-zero first-stage strength, so causal estimation
 cannot even separate from plain OLS, and OLS doesn't beat BH BTC either.
 
+**Update (additional techniques tried):** PCA-orthogonalized drivers,
+cointegration stat-arb, correlation/HRP allocation, and the Wasserstein
+k-means regime detector (SSRN 3947905) were each added and tested. Each
+improved the narrow thing it targets — WK-means is a strictly better regime
+detector than the HMM; HRP beats equal-weight; cointegration is genuinely
+market-neutral (BTC corr ≈ 0.09) — but **none beats buy-and-hold BTC OOS.**
+See `causal_portfolio/docs/four_techniques_summary.md`. The two with standalone
+merit worth costed follow-up are cointegration (as an uncorrelated sleeve) and
+WK-means (swap in wherever regimes are used).
+
 There are **two estimation paths** that share the same data→factors front-end
 (Stages 0–2) and the same optimizer back-end (Stages 4–5):
 
@@ -365,6 +375,11 @@ Dust-filter removed (closes residual positions). Audit logs gitignored.
 | `causal_portfolio/docs/ols_vs_2sls_ungated.md` | Ungated 2SLS — weak-instrument failure demo |
 | `causal_portfolio/docs/regime_dag_search.md` | Regime × DAG (exploratory) |
 | `causal_portfolio/docs/regime_ew_production_readiness.md` | Why REGIME_EW's headline was an artifact |
+| `causal_portfolio/docs/four_techniques_summary.md` | PCA, cointegration, HRP, Wasserstein regimes — combined results |
+| `causal_portfolio/docs/pca_drivers.md` | PCA-orthogonalized drivers vs raw factors |
+| `causal_portfolio/docs/cointegration_statarb.md` | Market-neutral cointegration stat-arb |
+| `causal_portfolio/docs/hrp_allocation.md` | Hierarchical Risk Parity vs equal-weight vs BH |
+| `causal_portfolio/docs/wkmeans_regime.md` | Wasserstein k-means regimes × DAG |
 | `causal_model/README.md` | Rust engine = reference-only port oracle |
 
 ## The single most important next step
