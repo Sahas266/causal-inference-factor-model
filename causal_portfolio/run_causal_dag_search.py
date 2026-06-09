@@ -28,6 +28,7 @@ import pandas as pd
 from causal_portfolio.experiments.dag_variants import (
     FACTOR_SOURCE_ASSETS, MACRO_SERIES, PANEL_METRICS, VARIANTS,
 )
+from causal_portfolio.backtest.metrics import ANNUALIZATION
 from causal_portfolio.factors.builder import MACRO_FACTORS, build_all_factors
 from causal_portfolio.factors.combo_selector import ComboDriverSelector
 from causal_portfolio.factors.instruments import build_instruments
@@ -130,7 +131,7 @@ def render_markdown(rows, bh_ref, args) -> str:
         r = bh_ref.values
         pv = np.cumprod(1 + r)
         L.append(f"**Buy & Hold BTC (OOS):** total {pv[-1]/pv[0]-1:+.1%}, "
-                 f"Sharpe {np.mean(r)/(np.std(r)+1e-12)*np.sqrt(365):.3f}\n")
+                 f"Sharpe {np.mean(r)/(np.std(r)+1e-12)*np.sqrt(ANNUALIZATION):.3f}\n")
 
     L.append("| Variant | OLS wr | 2SLS wr | OLS medSharpe | 2SLS medSharpe | "
              "Instrument gate (passed/seen) |")

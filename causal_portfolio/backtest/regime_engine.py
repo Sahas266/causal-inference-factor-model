@@ -111,7 +111,7 @@ class RegimeConditionalBacktester:
         """Run the regime-conditional walk-forward backtest.
 
         Args:
-            returns: (T, n_assets) DataFrame of log returns.
+            returns: (T, n_assets) DataFrame of simple returns.
             factor_panel: (T, n_factors) DataFrame of ALL candidate factors.
             macro: (T, n_macro) DataFrame — used for HMM features (needs 'vixcls').
             dates: optional date array; defaults to returns.index.

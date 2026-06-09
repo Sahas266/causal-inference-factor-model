@@ -7,7 +7,7 @@ chain with Gaussian emissions, it clusters the *distributions* of short return
 segments directly, using the p-Wasserstein distance.
 
 Pipeline (paper Section 1.3–2, Algorithm 1):
-  1. Stream lift (Def 1.2): slice the log-return stream into M overlapping
+  1. Stream lift (Def 1.2): slice the return stream into M overlapping
      segments of length `h1` with sliding offset `h2`. Each segment, sorted, is
      an empirical measure µ_i with N=h1 atoms.
   2. Distance (Prop 2.5, eq 21): for two equal-size empirical measures with

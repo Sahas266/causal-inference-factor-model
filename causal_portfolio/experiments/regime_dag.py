@@ -49,8 +49,6 @@ from causal_portfolio.regimes.hmm import build_regime_features, rolling_fit_deco
 
 logger = logging.getLogger("cpcm.experiments.regime_dag")
 
-ANNUALIZATION = 365
-
 
 @dataclass
 class RegimeABResult:
@@ -73,7 +71,7 @@ def run_ab(
     joined = joined.join(regime_labels.rename("regime"), how="inner").dropna()
     factor_cols = list(factors.columns)
     F = joined[factor_cols].values
-    R = np.expm1(joined[returns.columns].values)   # log -> simple
+    R = joined[returns.columns].values  # simple returns (loader default)
     reg = joined["regime"].astype(int).values
     idx = joined.index
     T = F.shape[0]

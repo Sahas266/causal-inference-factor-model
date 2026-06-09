@@ -34,7 +34,6 @@ from causal_portfolio.regimes.hmm import build_regime_features, rolling_fit_deco
 from causal_portfolio.regimes.wkmeans import rolling_fit_label
 
 logger = logging.getLogger("cpcm.experiments.wkmeans_regime")
-ANNUALIZATION = 365
 
 
 def run(assets, start, end, *, n_states, train_window, rebalance_freq,

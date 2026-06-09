@@ -26,6 +26,8 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+from causal_portfolio.factors.builder import FACTOR_SOURCE_ASSETS
+
 # treatment_factor -> (instrument_name, builder_kind, candidate_source_columns)
 # builder_kind: "spike" = lagged z-score spike indicator; "level_diff" = lagged diff
 _INSTRUMENT_SPEC = {
@@ -40,7 +42,7 @@ _INSTRUMENT_SPEC = {
 }
 
 # Stablecoin assets whose supply we sum for stablecoin_mint
-_STABLE_ASSETS = ["usdc", "usdt", "usde"]
+_STABLE_ASSETS = FACTOR_SOURCE_ASSETS
 
 
 # ── helpers (faithful to instruments.rs) ────────────────────────────

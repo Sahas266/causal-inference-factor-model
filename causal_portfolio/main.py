@@ -15,7 +15,9 @@ import numpy as np
 import pandas as pd
 
 from causal_portfolio.data import get_loader
-from causal_portfolio.factors.builder import build_all_factors
+from causal_portfolio.factors.builder import (
+    FACTOR_SOURCE_ASSETS, MACRO_SERIES, PANEL_METRICS, build_all_factors,
+)
 from causal_portfolio.factors.combo_selector import ComboDriverSelector
 from causal_portfolio.scm.graph import build_cpcm_dag, summarize_dag
 from causal_portfolio.solvers.v1_linear import V1LinearSolver
@@ -46,12 +48,10 @@ def run_pipeline(
     # ── 1. Load data ────────────────────────────────────────────
     logger.info(f"Loading data for {len(assets)} assets: {assets}")
     loader = get_loader()
-    panel = loader.load_panel(assets, _all_metrics(), start, end)
+    panel_assets = list(dict.fromkeys(assets + FACTOR_SOURCE_ASSETS))
+    panel = loader.load_panel(panel_assets, PANEL_METRICS, start, end)
     returns = loader.load_returns(assets, start, end)
-    macro = loader.load_macro(
-        ["DFF", "DGS10", "VIXCLS", "T10Y2Y", "CPIAUCSL", "M2SL", "DTWEXBGS"],
-        start, end,
-    )
+    macro = loader.load_macro(MACRO_SERIES, start, end)
 
     if panel.empty or returns.empty:
         logger.error("No data loaded. Check Supabase connection.")
@@ -113,19 +113,6 @@ def run_pipeline(
             for col, r2 in zip(return_cols, diag["r2_per_asset"])
         },
     }
-
-
-def _all_metrics() -> list[str]:
-    """All metrics needed for factor computation."""
-    return [
-        "PriceUSD", "price",
-        "tvl_usd", "SplyCur", "stablecoin_circulating_usd",
-        "FeeTotNtv", "FlowInExNtv", "FlowOutExNtv",
-        "avg_gas_price_gwei", "avg_base_fee_gwei", "stddev_base_fee_gwei",
-        "staking_apr", "cex_netflow_usd", "lp_net_flow_usd",
-        "mev_revenue_eth",
-        "TxCnt", "AdrActCnt", "CapMrktCurUSD",
-    ]
 
 
 def main():

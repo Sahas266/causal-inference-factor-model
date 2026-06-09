@@ -29,6 +29,31 @@ MACRO_FACTORS = [
     "dtwexbgs",  # Trade-weighted dollar index
 ]
 
+# Canonical warehouse pull for every entry point that builds factors. Anything
+# narrower silently starves a factor (e.g. omitting funding_rate_8h made
+# funding_basis all-NaN in half the pipelines).
+PANEL_METRICS = [
+    "PriceUSD", "price", "tvl_usd", "SplyCur",
+    "stablecoin_circulating_usd", "FeeTotNtv",
+    "FlowInExNtv", "FlowOutExNtv",
+    "avg_gas_price_gwei", "avg_base_fee_gwei",
+    "stddev_base_fee_gwei", "staking_apr",
+    "cex_netflow_usd", "lp_net_flow_usd", "mev_revenue_eth",
+    # Perp funding — feeds the funding_basis factor (Hyperliquid, from 2023-10).
+    "funding_rate_8h", "funding_premium",
+    # Instrument sources (for 2SLS): liquidations + protocol fees.
+    "avg_gas_utilization", "liquidation_volume_usd", "perp_liquidation",
+    "avg_liquidation_usd", "fees", "total_fees_usd", "base_fees",
+]
+
+# FRED series IDs as stored in the warehouse (uppercase asset='macro' metrics).
+MACRO_SERIES = [m.upper() for m in MACRO_FACTORS]
+
+# Stablecoins are loaded into the panel as FACTOR INPUTS ONLY (their supply
+# feeds stable_flow + the stablecoin_mint instrument). They are never part of
+# the trading universe, so returns are not computed for them.
+FACTOR_SOURCE_ASSETS = ["usdc", "usdt", "usde"]
+
 TVL_COLUMNS = [
     "aave_tvl_usd", "uni_tvl_usd", "crv_tvl_usd", "pendle_tvl_usd",
     "morpho_tvl_usd", "jup_tvl_usd", "ena_tvl_usd", "aero_tvl_usd",

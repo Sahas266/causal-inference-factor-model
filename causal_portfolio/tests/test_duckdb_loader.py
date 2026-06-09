@@ -5,7 +5,8 @@ or Supabase dependency. Verifies:
   - schema creation
   - asset_metrics_best view picks lowest provider_priority
   - load_panel pivots correctly with daily resampling
-  - load_returns computes log returns with correct column naming + fallback
+  - load_returns computes simple returns (default) / log returns (kind="log")
+    with correct column naming + fallback
   - load_macro pivots, ffills, lowercases columns
   - get_loader factory routes by CPCM_LOCAL_DB
   - PK upsert behavior (INSERT OR REPLACE)
@@ -155,7 +156,7 @@ def test_load_panel_unknown_asset(seeded_db):
 # ── load_returns ────────────────────────────────────────────────────
 
 
-def test_load_returns_computes_log_returns(seeded_db):
+def test_load_returns_computes_simple_returns(seeded_db):
     rets = seeded_db.load_returns(
         ["btc", "eth"],
         "2024-01-01", "2024-01-31",
@@ -165,9 +166,31 @@ def test_load_returns_computes_log_returns(seeded_db):
     assert "eth_return" in rets.columns
     # First row dropped (NaN from shift)
     assert len(rets) == 9
-    # Manual check: log(50200/50100) for day-2 BTC
+    # Manual check: 50200/50100 - 1 for day-2 BTC (simple returns by default)
+    expected = 50200.0 / 50100.0 - 1.0
+    assert rets["btc_return"].iloc[0] == pytest.approx(expected, rel=1e-9)
+
+
+def test_load_returns_log_kind(seeded_db):
+    rets = seeded_db.load_returns(
+        ["btc"], "2024-01-01", "2024-01-31",
+        kind="log", use_cache=False,
+    )
     expected = np.log(50200.0 / 50100.0)
     assert rets["btc_return"].iloc[0] == pytest.approx(expected, rel=1e-9)
+
+
+def test_load_returns_rejects_unknown_kind(seeded_db):
+    with pytest.raises(ValueError, match="kind"):
+        seeded_db.load_returns(["btc"], "2024-01-01", "2024-01-31",
+                               kind="bogus", use_cache=False)
+
+
+def test_load_prices_strips_metric_suffix(seeded_db):
+    prices = seeded_db.load_prices(["btc", "eth"], "2024-01-01", "2024-01-31",
+                                   use_cache=False)
+    assert list(prices.columns) == ["btc", "eth"]
+    assert prices["btc"].iloc[0] == pytest.approx(50100.0)
 
 
 def test_load_returns_falls_back_to_lowercase_price(tmp_path: Path):
@@ -228,7 +251,7 @@ def test_upsert_empty_is_noop(tmp_db):
 
 def test_panel_cache_round_trip(seeded_db, monkeypatch, tmp_path):
     """Second call with use_cache=True returns the cached frame."""
-    from causal_portfolio.data import duckdb_loader as dl
+    from causal_portfolio.data import base_loader as dl
 
     monkeypatch.setattr(dl, "CACHE_DIR", tmp_path / "cache")
     (tmp_path / "cache").mkdir()

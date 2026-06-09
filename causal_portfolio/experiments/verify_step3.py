@@ -13,7 +13,9 @@ import numpy as np
 import pandas as pd
 
 from causal_portfolio.data import get_loader
-from causal_portfolio.factors.builder import build_all_factors
+from causal_portfolio.factors.builder import (
+    FACTOR_SOURCE_ASSETS, MACRO_SERIES, PANEL_METRICS, build_all_factors,
+)
 from causal_portfolio.factors.instruments import build_instruments
 
 # Universe: trading assets + perp-funding assets + stablecoins (so stable_flow
@@ -21,22 +23,10 @@ from causal_portfolio.factors.instruments import build_instruments
 ASSETS = [
     "btc", "eth", "sol", "bnb", "avax", "uni", "aave", "crv", "pendle",
     "ena", "link", "doge", "xrp", "jup", "hype", "aero", "morpho", "tao",
-    "usdc", "usdt", "usde",
-]
+] + FACTOR_SOURCE_ASSETS
 
-# Panel metrics: prices + factor sources + instrument sources.
-METRICS = [
-    "PriceUSD", "price", "tvl_usd",
-    "SplyCur", "stablecoin_circulating_usd",
-    "funding_rate_8h", "funding_premium",
-    "FeeTotNtv", "FlowInExNtv", "FlowOutExNtv",
-    "avg_gas_price_gwei", "avg_base_fee_gwei", "stddev_base_fee_gwei",
-    "avg_gas_utilization", "staking_apr",
-    "cex_netflow_usd", "lp_net_flow_usd", "mev_revenue_eth",
-    "liquidation_volume_usd", "perp_liquidation", "avg_liquidation_usd",
-    "fees", "total_fees_usd", "base_fees",
-]
-MACRO = ["DFF", "DGS10", "VIXCLS", "T10Y2Y", "CPIAUCSL", "M2SL", "DTWEXBGS"]
+METRICS = PANEL_METRICS
+MACRO = MACRO_SERIES
 
 START, END = "2021-01-01", "2026-01-01"
 

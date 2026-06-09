@@ -61,3 +61,4 @@ causal_model/results.csv
 
 # Execution audit logs (real account activity, never commit)
 causal_portfolio/execution/logs/
+causal_portfolio/ssrn-3947905.pdf

@@ -27,10 +27,10 @@ import pandas as pd
 from causal_portfolio.analysis.cointegration import (
     find_cointegrated_pairs, spread_positions, spread_series,
 )
+from causal_portfolio.backtest.metrics import ANNUALIZATION
 from causal_portfolio.validation.walk_forward import metric_row
 
 logger = logging.getLogger("cpcm.experiments.statarb")
-ANNUALIZATION = 365
 
 
 @dataclass
@@ -43,14 +43,7 @@ class StatArbResult:
 
 def _load_prices(assets, start, end):
     from causal_portfolio.data import get_loader
-    loader = get_loader()
-    # Price levels (not returns): try PriceUSD then price.
-    panel = loader.load_panel(assets, ["PriceUSD"], start, end)
-    if panel.empty:
-        panel = loader.load_panel(assets, ["price"], start, end)
-    # columns like btc_PriceUSD -> btc
-    panel.columns = [c.rsplit("_", 1)[0] for c in panel.columns]
-    return panel.sort_index()
+    return get_loader().load_prices(assets, start, end).sort_index()
 
 
 def run_statarb(

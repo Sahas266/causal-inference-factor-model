@@ -33,6 +33,8 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
+from causal_portfolio.backtest.metrics import ANNUALIZATION
+
 logger = logging.getLogger("cpcm.regimes.hmm")
 
 
@@ -49,7 +51,7 @@ def build_regime_features(
 
     Args:
         macro: macro DataFrame with a "vixcls" column.
-        returns: returns DataFrame with `btc_col` column (log returns).
+        returns: returns DataFrame with `btc_col` column (simple returns).
         btc_col: name of the BTC return column.
         vol_window: rolling window for realized vol (default 21 days).
 
@@ -63,8 +65,9 @@ def build_regime_features(
     if btc_col not in returns.columns:
         raise KeyError(f"returns DataFrame must contain a '{btc_col}' column")
 
-    # Realized vol: 21d rolling std of log returns, annualized
-    rv = returns[btc_col].rolling(vol_window, min_periods=vol_window).std() * np.sqrt(365)
+    # Realized vol: 21d rolling std of daily returns, annualized
+    rv = (returns[btc_col].rolling(vol_window, min_periods=vol_window).std()
+          * np.sqrt(ANNUALIZATION))
     df = pd.DataFrame({
         "vix": macro["vixcls"].reindex(returns.index).ffill(),
         "btc_vol": rv,

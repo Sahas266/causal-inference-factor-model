@@ -20,7 +20,13 @@ from dataclasses import dataclass, field
 import numpy as np
 import pandas as pd
 
-from causal_portfolio.factors.builder import build_all_factors
+from causal_portfolio.backtest.metrics import ANNUALIZATION
+from causal_portfolio.factors.builder import (
+    FACTOR_SOURCE_ASSETS,
+    MACRO_SERIES,
+    PANEL_METRICS,
+    build_all_factors,
+)
 from causal_portfolio.factors.combo_selector import ComboDriverSelector
 from causal_portfolio.regimes.hmm import (
     RegimeClassifier,
@@ -28,18 +34,6 @@ from causal_portfolio.regimes.hmm import (
     dwell_stats,
     rolling_fit_decode,
 )
-
-ANNUALIZATION = 365.0  # crypto trades 24/7
-
-PANEL_METRICS = [
-    "PriceUSD", "price", "tvl_usd", "SplyCur",
-    "stablecoin_circulating_usd", "FeeTotNtv",
-    "FlowInExNtv", "FlowOutExNtv",
-    "avg_gas_price_gwei", "avg_base_fee_gwei",
-    "stddev_base_fee_gwei", "staking_apr",
-    "cex_netflow_usd", "lp_net_flow_usd", "mev_revenue_eth",
-]
-MACRO_SERIES = ["DFF", "DGS10", "VIXCLS", "T10Y2Y", "CPIAUCSL", "M2SL", "DTWEXBGS"]
 
 
 @dataclass
@@ -61,7 +55,8 @@ class RegimePanelResult:
 def _load(assets, start, end):
     from causal_portfolio.data import get_loader
     loader = get_loader()
-    panel = loader.load_panel(assets, PANEL_METRICS, start, end)
+    panel_assets = list(dict.fromkeys(list(assets) + FACTOR_SOURCE_ASSETS))
+    panel = loader.load_panel(panel_assets, PANEL_METRICS, start, end)
     returns = loader.load_returns(assets, start, end)
     macro = loader.load_macro(MACRO_SERIES, start, end)
     return panel, returns, macro

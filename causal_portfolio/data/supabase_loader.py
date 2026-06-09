@@ -1,24 +1,30 @@
-"""Load CPCM data from Supabase asset_metrics_best view into pandas DataFrames."""
+"""Load CPCM data from Supabase asset_metrics_best view into pandas DataFrames.
+
+Thin backend over BaseCPCMDataLoader: this class only knows how to fetch
+long-format rows from the Supabase REST API; pivoting, returns, and caching
+live in the shared base.
+"""
 
 import os
-import hashlib
 import logging
 from pathlib import Path
 from typing import Optional
 
-import numpy as np
 import pandas as pd
 from dotenv import load_dotenv
 from supabase import create_client, Client
 
+from causal_portfolio.data.base_loader import BaseCPCMDataLoader
+
 logger = logging.getLogger("cpcm.data")
 
-CACHE_DIR = Path(__file__).parent / "cache"
 PAGE_SIZE = 1000
 
 
-class CPCMDataLoader:
+class CPCMDataLoader(BaseCPCMDataLoader):
     """Loads asset metrics from Supabase and pivots into wide-format DataFrames."""
+
+    cache_tag = "supabase"
 
     def __init__(self, env_path: Optional[str] = None):
         if env_path:
@@ -39,76 +45,19 @@ class CPCMDataLoader:
                 "`environment` entries)."
             )
         self._client: Client = create_client(url, key)
-        CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
-    # ── public API ──────────────────────────────────────────────────
+    # ── backend hooks ───────────────────────────────────────────────
 
-    def load_panel(
-        self,
-        assets: list[str],
-        metrics: list[str],
-        start: str,
-        end: str,
-        use_cache: bool = True,
-    ) -> pd.DataFrame:
-        """Query asset_metrics_best and pivot to wide format.
-
-        Returns DataFrame with DatetimeIndex and columns ``{asset}_{metric}``.
-        """
-        cache_key = self._cache_key("panel", assets, metrics, start, end)
-        if use_cache and (cached := self._read_cache(cache_key)) is not None:
-            return cached
-
+    def _fetch_panel_long(self, assets, metrics, start, end) -> pd.DataFrame:
         rows = self._fetch_all(
             table="asset_metrics_best",
             select="asset,metric,time,value",
             filters={"gte": {"time": start}, "lte": {"time": end}},
             in_filters={"asset": assets, "metric": metrics},
         )
-        df = self._pivot(rows)
-        if use_cache and not df.empty:
-            self._write_cache(cache_key, df)
-        return df
+        return pd.DataFrame(rows)
 
-    def load_returns(
-        self,
-        assets: list[str],
-        start: str,
-        end: str,
-        price_metric: str = "PriceUSD",
-        use_cache: bool = True,
-    ) -> pd.DataFrame:
-        """Load prices and compute log returns."""
-        cache_key = self._cache_key("returns", assets, [price_metric], start, end)
-        if use_cache and (cached := self._read_cache(cache_key)) is not None:
-            return cached
-
-        # Try PriceUSD first, fall back to price
-        panel = self.load_panel(assets, [price_metric], start, end, use_cache=False)
-        if panel.empty and price_metric == "PriceUSD":
-            panel = self.load_panel(assets, ["price"], start, end, use_cache=False)
-
-        if panel.empty:
-            return pd.DataFrame()
-
-        returns = np.log(panel / panel.shift(1)).dropna(how="all")
-        returns.columns = [c.rsplit("_", 1)[0] + "_return" for c in returns.columns]
-        if use_cache and not returns.empty:
-            self._write_cache(cache_key, returns)
-        return returns
-
-    def load_macro(
-        self,
-        series_ids: list[str],
-        start: str,
-        end: str,
-        use_cache: bool = True,
-    ) -> pd.DataFrame:
-        """Load FRED macro data (asset='macro')."""
-        cache_key = self._cache_key("macro", ["macro"], series_ids, start, end)
-        if use_cache and (cached := self._read_cache(cache_key)) is not None:
-            return cached
-
+    def _fetch_macro_long(self, series_ids, start, end) -> pd.DataFrame:
         rows = self._fetch_all(
             table="asset_metrics_best",
             select="metric,time,value",
@@ -119,20 +68,7 @@ class CPCMDataLoader:
             },
             in_filters={"metric": series_ids},
         )
-        if not rows:
-            return pd.DataFrame()
-
-        df = pd.DataFrame(rows)
-        df["time"] = pd.to_datetime(df["time"])
-        df["value"] = pd.to_numeric(df["value"], errors="coerce")
-        df = df.pivot_table(index="time", columns="metric", values="value")
-        df = df.sort_index().resample("D").last().ffill()
-        # Lowercase column names for consistency
-        df.columns = [c.lower() for c in df.columns]
-
-        if use_cache and not df.empty:
-            self._write_cache(cache_key, df)
-        return df
+        return pd.DataFrame(rows)
 
     # ── internal ────────────────────────────────────────────────────
 
@@ -173,36 +109,3 @@ class CPCMDataLoader:
 
         logger.info(f"Fetched {len(all_rows)} rows from {table}")
         return all_rows
-
-    def _pivot(self, rows: list[dict]) -> pd.DataFrame:
-        """Convert long-format rows to wide DataFrame."""
-        if not rows:
-            return pd.DataFrame()
-
-        df = pd.DataFrame(rows)
-        df["time"] = pd.to_datetime(df["time"])
-        df["value"] = pd.to_numeric(df["value"], errors="coerce")
-        df["col"] = df["asset"] + "_" + df["metric"]
-        df = df.pivot_table(index="time", columns="col", values="value")
-        return df.sort_index().resample("D").last()
-
-    # ── cache ───────────────────────────────────────────────────────
-
-    @staticmethod
-    def _cache_key(prefix: str, *parts) -> str:
-        raw = f"{prefix}:{parts}"
-        return hashlib.md5(raw.encode()).hexdigest()[:12]
-
-    @staticmethod
-    def _read_cache(key: str) -> Optional[pd.DataFrame]:
-        path = CACHE_DIR / f"{key}.parquet"
-        if path.exists():
-            logger.debug(f"Cache hit: {path}")
-            return pd.read_parquet(path)
-        return None
-
-    @staticmethod
-    def _write_cache(key: str, df: pd.DataFrame) -> None:
-        path = CACHE_DIR / f"{key}.parquet"
-        df.to_parquet(path)
-        logger.debug(f"Cached: {path}")

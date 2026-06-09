@@ -50,8 +50,6 @@ from causal_portfolio.validation.walk_forward import bh_btc_returns, metric_row
 
 logger = logging.getLogger("cpcm.experiments.ols_vs_2sls")
 
-ANNUALIZATION = 365
-
 
 # ── a minimal fitted-solver wrapper so ManifoldOptimizer can be reused ──
 
@@ -226,9 +224,7 @@ def run_ab(
     joined = pd.concat([factors, instruments, returns], axis=1).dropna()
     F = joined[factor_cols].values
     Z = joined[inst_cols].values
-    # load_returns gives LOG returns; convert to simple so portfolio daily
-    # return w·r and the harness's cumprod(1+r) are on a consistent basis.
-    R = np.expm1(joined[returns.columns].values)
+    R = joined[returns.columns].values  # simple returns (loader default)
     idx = joined.index
     T, m = F.shape
     n_assets = R.shape[1]

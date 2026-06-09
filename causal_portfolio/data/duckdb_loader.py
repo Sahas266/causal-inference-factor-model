@@ -1,8 +1,10 @@
 """Local DuckDB-backed CPCM data loader.
 
-Mirrors CPCMDataLoader's public API (load_panel, load_returns, load_macro) but
-reads from a local DuckDB file instead of the Supabase REST API. Use for offline
-work or to speed up read-heavy analytics.
+Mirrors CPCMDataLoader's public API (load_panel, load_prices, load_returns,
+load_macro) but reads from a local DuckDB file instead of the Supabase REST
+API. Use for offline work or to speed up read-heavy analytics. The shared
+pivot/returns/caching logic lives in BaseCPCMDataLoader; this class only
+implements the SQL fetch hooks and write helpers.
 
 Schema parity with Supabase:
 - table `asset_metrics` matches the Postgres definition
@@ -14,19 +16,17 @@ Snapshot a Supabase warehouse into a DuckDB file with `snapshot.py`.
 
 from __future__ import annotations
 
-import hashlib
 import logging
 import os
 from pathlib import Path
 from typing import Optional
 
 import duckdb
-import numpy as np
 import pandas as pd
 
-logger = logging.getLogger("cpcm.data.duckdb")
+from causal_portfolio.data.base_loader import BaseCPCMDataLoader
 
-CACHE_DIR = Path(__file__).parent / "cache"
+logger = logging.getLogger("cpcm.data.duckdb")
 
 ASSET_METRICS_SCHEMA = """
 CREATE TABLE IF NOT EXISTS asset_metrics (
@@ -75,12 +75,14 @@ def ensure_schema(con: duckdb.DuckDBPyConnection) -> None:
     con.execute(ASSET_METRICS_BEST_VIEW)
 
 
-class DuckDBCPCMDataLoader:
+class DuckDBCPCMDataLoader(BaseCPCMDataLoader):
     """Drop-in DuckDB replacement for CPCMDataLoader.
 
     Selected via the CPCM_LOCAL_DB env var (path to .duckdb file). The factory
     in `causal_portfolio.data.__init__` routes here automatically when set.
     """
+
+    cache_tag = "duckdb"
 
     def __init__(self, db_path: Optional[str] = None, read_only: bool = True):
         self.db_path = db_path or os.environ.get("CPCM_LOCAL_DB")
@@ -98,7 +100,6 @@ class DuckDBCPCMDataLoader:
         self._con = duckdb.connect(self.db_path, read_only=read_only)
         if not read_only:
             ensure_schema(self._con)
-        CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
     def close(self) -> None:
         self._con.close()
@@ -109,25 +110,10 @@ class DuckDBCPCMDataLoader:
     def __exit__(self, *exc):
         self.close()
 
-    # ── public API (mirrors CPCMDataLoader) ─────────────────────────
+    # ── backend hooks ───────────────────────────────────────────────
 
-    def load_panel(
-        self,
-        assets: list[str],
-        metrics: list[str],
-        start: str,
-        end: str,
-        use_cache: bool = True,
-    ) -> pd.DataFrame:
-        """Query asset_metrics_best and pivot to wide format.
-
-        Returns DataFrame with DatetimeIndex and columns ``{asset}_{metric}``.
-        """
-        cache_key = self._cache_key("panel_duckdb", assets, metrics, start, end)
-        if use_cache and (cached := self._read_cache(cache_key)) is not None:
-            return cached
-
-        df_long = self._con.execute(
+    def _fetch_panel_long(self, assets, metrics, start, end) -> pd.DataFrame:
+        return self._con.execute(
             """
             SELECT asset, metric, time, value
             FROM asset_metrics_best
@@ -138,50 +124,8 @@ class DuckDBCPCMDataLoader:
             [assets, metrics, _to_utc_bound(start, "start"), _to_utc_bound(end, "end")],
         ).fetchdf()
 
-        df = self._pivot(df_long)
-        if use_cache and not df.empty:
-            self._write_cache(cache_key, df)
-        return df
-
-    def load_returns(
-        self,
-        assets: list[str],
-        start: str,
-        end: str,
-        price_metric: str = "PriceUSD",
-        use_cache: bool = True,
-    ) -> pd.DataFrame:
-        """Load prices and compute log returns. Falls back to 'price' metric."""
-        cache_key = self._cache_key("returns_duckdb", assets, [price_metric], start, end)
-        if use_cache and (cached := self._read_cache(cache_key)) is not None:
-            return cached
-
-        panel = self.load_panel(assets, [price_metric], start, end, use_cache=False)
-        if panel.empty and price_metric == "PriceUSD":
-            panel = self.load_panel(assets, ["price"], start, end, use_cache=False)
-
-        if panel.empty:
-            return pd.DataFrame()
-
-        returns = np.log(panel / panel.shift(1)).dropna(how="all")
-        returns.columns = [c.rsplit("_", 1)[0] + "_return" for c in returns.columns]
-        if use_cache and not returns.empty:
-            self._write_cache(cache_key, returns)
-        return returns
-
-    def load_macro(
-        self,
-        series_ids: list[str],
-        start: str,
-        end: str,
-        use_cache: bool = True,
-    ) -> pd.DataFrame:
-        """Load FRED macro series (asset='macro')."""
-        cache_key = self._cache_key("macro_duckdb", ["macro"], series_ids, start, end)
-        if use_cache and (cached := self._read_cache(cache_key)) is not None:
-            return cached
-
-        df = self._con.execute(
+    def _fetch_macro_long(self, series_ids, start, end) -> pd.DataFrame:
+        return self._con.execute(
             """
             SELECT metric, time, value
             FROM asset_metrics_best
@@ -191,19 +135,6 @@ class DuckDBCPCMDataLoader:
             """,
             [series_ids, _to_utc_bound(start, "start"), _to_utc_bound(end, "end")],
         ).fetchdf()
-
-        if df.empty:
-            return pd.DataFrame()
-
-        df["time"] = pd.to_datetime(df["time"], utc=True).dt.tz_convert(None)
-        df["value"] = pd.to_numeric(df["value"], errors="coerce")
-        df = df.pivot_table(index="time", columns="metric", values="value")
-        df = df.sort_index().resample("D").last().ffill()
-        df.columns = [c.lower() for c in df.columns]
-
-        if use_cache and not df.empty:
-            self._write_cache(cache_key, df)
-        return df
 
     # ── write helpers (only available when read_only=False) ─────────
 
@@ -230,34 +161,3 @@ class DuckDBCPCMDataLoader:
         )
         self._con.unregister("incoming")
         return len(df)
-
-    # ── internal ────────────────────────────────────────────────────
-
-    def _pivot(self, df: pd.DataFrame) -> pd.DataFrame:
-        if df.empty:
-            return pd.DataFrame()
-        df = df.copy()
-        # Normalize all timestamps to UTC then drop tz so daily resample is
-        # deterministic regardless of system local timezone.
-        df["time"] = pd.to_datetime(df["time"], utc=True).dt.tz_convert(None)
-        df["value"] = pd.to_numeric(df["value"], errors="coerce")
-        df["col"] = df["asset"] + "_" + df["metric"]
-        df = df.pivot_table(index="time", columns="col", values="value")
-        return df.sort_index().resample("D").last()
-
-    @staticmethod
-    def _cache_key(prefix: str, *parts) -> str:
-        raw = f"{prefix}:{parts}"
-        return hashlib.md5(raw.encode()).hexdigest()[:12]
-
-    @staticmethod
-    def _read_cache(key: str) -> Optional[pd.DataFrame]:
-        path = CACHE_DIR / f"{key}.parquet"
-        if path.exists():
-            return pd.read_parquet(path)
-        return None
-
-    @staticmethod
-    def _write_cache(key: str, df: pd.DataFrame) -> None:
-        path = CACHE_DIR / f"{key}.parquet"
-        df.to_parquet(path)

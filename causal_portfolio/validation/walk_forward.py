@@ -32,9 +32,9 @@ from dataclasses import dataclass, field
 import numpy as np
 import pandas as pd
 
-from causal_portfolio.backtest.metrics import max_drawdown, sharpe_ratio
-
-ANNUALIZATION = 365
+from causal_portfolio.backtest.metrics import (
+    ANNUALIZATION, max_drawdown, sharpe_ratio,
+)
 
 
 @dataclass(frozen=True)
@@ -88,13 +88,13 @@ def metric_row(name: str, returns, *, with_dd: bool = False) -> str:
 
 
 def bh_btc_returns(returns: pd.DataFrame, index) -> pd.Series:
-    """Buy-and-hold BTC simple-return benchmark aligned to ``index``.
+    """Buy-and-hold BTC benchmark aligned to ``index``.
 
-    ``returns`` holds LOG returns (loader convention); convert to simple so the
-    benchmark compounds consistently with the strategy return series.
+    ``returns`` holds SIMPLE returns (loader default), so the benchmark
+    compounds consistently with the strategy return series as-is.
     """
     if "btc_return" in returns:
-        return np.expm1(returns["btc_return"].reindex(index)).fillna(0.0)
+        return returns["btc_return"].reindex(index).fillna(0.0)
     return pd.Series(0.0, index=index)
 
 

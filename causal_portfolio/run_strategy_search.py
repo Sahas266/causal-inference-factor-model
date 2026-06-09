@@ -39,6 +39,7 @@ from causal_portfolio.backtest.strategies import (
     regime_gated_long_only,
 )
 from causal_portfolio.data import get_loader
+from causal_portfolio.factors.builder import MACRO_SERIES
 
 logger = logging.getLogger("cpcm.strategy_search")
 
@@ -66,10 +67,8 @@ class StrategyMetrics:
 
 def _load_data(assets: list[str], start: str, end: str):
     loader = get_loader()
-    macro_series = ["DFF", "DGS10", "VIXCLS", "T10Y2Y",
-                    "CPIAUCSL", "M2SL", "DTWEXBGS"]
     returns = loader.load_returns(assets, start, end)
-    macro = loader.load_macro(macro_series, start, end)
+    macro = loader.load_macro(MACRO_SERIES, start, end)
     return returns, macro
 
 

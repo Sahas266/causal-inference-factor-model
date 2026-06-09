@@ -28,7 +28,6 @@ from causal_portfolio.analysis.correlation import hrp_weights
 from causal_portfolio.validation.walk_forward import metric_row
 
 logger = logging.getLogger("cpcm.experiments.hrp")
-ANNUALIZATION = 365
 
 
 @dataclass
@@ -118,12 +117,7 @@ def render_markdown(res: HRPResult, cmp: dict, args: dict) -> str:
 def run(assets, start, end, **kw):
     from causal_portfolio.data import get_loader
     from causal_portfolio.validation.walk_forward import compare_variants
-    loader = get_loader()
-    panel = loader.load_panel(assets, ["PriceUSD"], start, end)
-    if panel.empty:
-        panel = loader.load_panel(assets, ["price"], start, end)
-    panel.columns = [c.rsplit("_", 1)[0] for c in panel.columns]
-    rets = panel.sort_index().pct_change()
+    rets = get_loader().load_prices(assets, start, end).sort_index().pct_change()
     res = run_alloc(rets, **kw)
     cmp = compare_variants({"HRP": res.hrp_returns, "EqualWeight": res.ew_returns},
                            res.bh_btc, win_rate_bar=0.8)

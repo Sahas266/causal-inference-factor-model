@@ -27,7 +27,9 @@ import numpy as np
 import pandas as pd
 
 from causal_portfolio.data import get_loader
-from causal_portfolio.factors.builder import build_all_factors
+from causal_portfolio.factors.builder import (
+    FACTOR_SOURCE_ASSETS, MACRO_SERIES, PANEL_METRICS, build_all_factors,
+)
 from causal_portfolio.factors.combo_selector import ComboDriverSelector
 from causal_portfolio.regimes.hmm import (
     RegimeClassifier,
@@ -69,20 +71,10 @@ def _load_inputs(
     assets: list[str], start: str, end: str,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     loader = get_loader()
-    all_metrics = [
-        "PriceUSD", "price", "tvl_usd", "SplyCur",
-        "stablecoin_circulating_usd", "FeeTotNtv",
-        "FlowInExNtv", "FlowOutExNtv",
-        "avg_gas_price_gwei", "avg_base_fee_gwei",
-        "stddev_base_fee_gwei", "staking_apr",
-        "cex_netflow_usd", "lp_net_flow_usd", "mev_revenue_eth",
-    ]
-    macro_series = ["DFF", "DGS10", "VIXCLS", "T10Y2Y",
-                    "CPIAUCSL", "M2SL", "DTWEXBGS"]
-
-    panel = loader.load_panel(assets, all_metrics, start, end)
+    panel_assets = list(dict.fromkeys(assets + FACTOR_SOURCE_ASSETS))
+    panel = loader.load_panel(panel_assets, PANEL_METRICS, start, end)
     returns = loader.load_returns(assets, start, end)
-    macro = loader.load_macro(macro_series, start, end)
+    macro = loader.load_macro(MACRO_SERIES, start, end)
     factors = build_all_factors(panel, macro)
     return factors, returns, macro
 

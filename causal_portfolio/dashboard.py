@@ -200,20 +200,15 @@ def _metric(label: str, value: str, delta: str | None = None, good_positive: boo
 @st.cache_data(show_spinner=False, ttl=3600)
 def _load_data(assets, start, end, use_cache_flag):
     from causal_portfolio.data import get_loader
-    loader = get_loader()
-    all_metrics = [
-        "PriceUSD", "price", "tvl_usd", "SplyCur",
-        "stablecoin_circulating_usd", "FeeTotNtv",
-        "FlowInExNtv", "FlowOutExNtv",
-        "avg_gas_price_gwei", "avg_base_fee_gwei", "stddev_base_fee_gwei",
-        "staking_apr", "cex_netflow_usd", "lp_net_flow_usd", "mev_revenue_eth",
-    ]
-    panel = loader.load_panel(assets, all_metrics, start, end, use_cache=use_cache_flag)
-    returns = loader.load_returns(assets, start, end, use_cache=use_cache_flag)
-    macro = loader.load_macro(
-        ["DFF", "DGS10", "VIXCLS", "T10Y2Y", "CPIAUCSL", "M2SL", "DTWEXBGS"],
-        start, end, use_cache=use_cache_flag,
+    from causal_portfolio.factors.builder import (
+        FACTOR_SOURCE_ASSETS, MACRO_SERIES, PANEL_METRICS,
     )
+    loader = get_loader()
+    panel_assets = list(dict.fromkeys(list(assets) + FACTOR_SOURCE_ASSETS))
+    panel = loader.load_panel(panel_assets, PANEL_METRICS, start, end,
+                              use_cache=use_cache_flag)
+    returns = loader.load_returns(list(assets), start, end, use_cache=use_cache_flag)
+    macro = loader.load_macro(MACRO_SERIES, start, end, use_cache=use_cache_flag)
     return panel, returns, macro
 
 
@@ -942,9 +937,11 @@ with t_backtest:
         st.markdown("### Rolling Sharpe Ratio (63-day)")
         roll_window = 63
         if len(result.returns_series) > roll_window:
+            from causal_portfolio.backtest.metrics import ANNUALIZATION
             roll_sharpe = [
                 result.returns_series[i - roll_window:i].mean() /
-                max(result.returns_series[i - roll_window:i].std(), 1e-10) * np.sqrt(252)
+                max(result.returns_series[i - roll_window:i].std(), 1e-10)
+                * np.sqrt(ANNUALIZATION)
                 for i in range(roll_window, len(result.returns_series))
             ]
             fig_rs = go.Figure()

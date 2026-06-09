@@ -33,7 +33,6 @@ from causal_portfolio.factors.builder import build_all_factors
 from causal_portfolio.optimizer.manifold import ManifoldOptimizer, estimate_covariance
 
 logger = logging.getLogger("cpcm.experiments.pca_drivers")
-ANNUALIZATION = 365
 
 
 @dataclass
@@ -61,7 +60,7 @@ def run_ab(returns, factors, *, train_window=252, rebalance_freq=5,
     joined = pd.concat([factors, returns], axis=1).dropna()
     factor_cols = list(factors.columns)
     F = joined[factor_cols].values
-    R = np.expm1(joined[returns.columns].values)
+    R = joined[returns.columns].values  # simple returns (loader default)
     idx = joined.index
     T = F.shape[0]
     n_assets = R.shape[1]

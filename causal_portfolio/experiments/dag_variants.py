@@ -34,34 +34,15 @@ from causal_portfolio.backtest.engine import CPCMBacktester
 from causal_portfolio.backtest.metrics import (
     max_drawdown, sharpe_ratio, sortino_ratio,
 )
-from causal_portfolio.factors.builder import (
-    GLOBAL_FACTORS, MACRO_FACTORS, build_all_factors,
+from causal_portfolio.factors.builder import (  # noqa: F401 — re-exported
+    FACTOR_SOURCE_ASSETS, GLOBAL_FACTORS, MACRO_FACTORS, MACRO_SERIES,
+    PANEL_METRICS, build_all_factors,
 )
 from causal_portfolio.factors.combo_selector import ComboDriverSelector
 from causal_portfolio.optimizer.manifold import ManifoldOptimizer
 from causal_portfolio.solvers.v1_linear import V1LinearSolver
 
 logger = logging.getLogger("cpcm.experiments.dag")
-
-PANEL_METRICS = [
-    "PriceUSD", "price", "tvl_usd", "SplyCur",
-    "stablecoin_circulating_usd", "FeeTotNtv",
-    "FlowInExNtv", "FlowOutExNtv",
-    "avg_gas_price_gwei", "avg_base_fee_gwei",
-    "stddev_base_fee_gwei", "staking_apr",
-    "cex_netflow_usd", "lp_net_flow_usd", "mev_revenue_eth",
-    # Perp funding — feeds the funding_basis factor (Hyperliquid, from 2023-10).
-    "funding_rate_8h", "funding_premium",
-    # Instrument sources (for 2SLS, Steps 4-5): liquidations + protocol fees.
-    "avg_gas_utilization", "liquidation_volume_usd", "perp_liquidation",
-    "avg_liquidation_usd", "fees", "total_fees_usd", "base_fees",
-]
-MACRO_SERIES = ["DFF", "DGS10", "VIXCLS", "T10Y2Y", "CPIAUCSL", "M2SL", "DTWEXBGS"]
-
-# Stablecoins are loaded into the panel as FACTOR INPUTS ONLY (their supply
-# feeds stable_flow + the stablecoin_mint instrument). They are never part of
-# the trading universe, so returns are not computed for them.
-FACTOR_SOURCE_ASSETS = ["usdc", "usdt", "usde"]
 
 
 @dataclass(frozen=True)

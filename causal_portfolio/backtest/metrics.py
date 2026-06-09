@@ -3,11 +3,15 @@
 import numpy as np
 import pandas as pd
 
+# Crypto trades 24/7, so a year is 365 daily observations (not 252 trading
+# days). Single source of truth for every Sharpe/Sortino/Calmar in the repo.
+ANNUALIZATION = 365
+
 
 def sharpe_ratio(
     returns: np.ndarray | pd.Series,
     rf: float = 0.0,
-    annualization: int = 252,
+    annualization: int = ANNUALIZATION,
 ) -> float:
     """Annualized Sharpe ratio."""
     excess = np.asarray(returns) - rf / annualization
@@ -19,7 +23,7 @@ def sharpe_ratio(
 def sortino_ratio(
     returns: np.ndarray | pd.Series,
     rf: float = 0.0,
-    annualization: int = 252,
+    annualization: int = ANNUALIZATION,
 ) -> float:
     """Annualized Sortino ratio (downside deviation)."""
     excess = np.asarray(returns) - rf / annualization
@@ -42,7 +46,7 @@ def max_drawdown(returns: np.ndarray | pd.Series) -> float:
 
 def calmar_ratio(
     returns: np.ndarray | pd.Series,
-    annualization: int = 252,
+    annualization: int = ANNUALIZATION,
 ) -> float:
     """Calmar ratio = annualized return / |max drawdown|."""
     mdd = max_drawdown(returns)

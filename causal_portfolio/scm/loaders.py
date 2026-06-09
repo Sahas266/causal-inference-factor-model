@@ -10,7 +10,9 @@ from pathlib import Path
 import pandas as pd
 
 from causal_portfolio.data import get_loader
-from causal_portfolio.factors.builder import MACRO_FACTORS
+from causal_portfolio.factors.builder import (  # noqa: F401 — re-exported
+    FACTOR_SOURCE_ASSETS, MACRO_SERIES, PANEL_METRICS,
+)
 
 DATA_DIR = Path(__file__).parent.parent / "data"
 
@@ -19,19 +21,6 @@ DEFAULT_ASSETS = [
     "btc", "eth", "sol", "bnb", "avax", "xrp", "doge",
     "uni", "aave", "link", "crv", "pendle",
 ]
-
-# Metrics needed for factor computation
-PANEL_METRICS = [
-    "PriceUSD", "price",
-    "tvl_usd", "SplyCur", "stablecoin_circulating_usd",
-    "FeeTotNtv", "FlowInExNtv", "FlowOutExNtv",
-    "avg_gas_price_gwei", "avg_base_fee_gwei", "stddev_base_fee_gwei",
-    "staking_apr", "cex_netflow_usd", "lp_net_flow_usd",
-    "mev_revenue_eth",
-    "TxCnt", "AdrActCnt", "CapMrktCurUSD",
-]
-
-MACRO_SERIES = [m.upper() for m in MACRO_FACTORS]
 
 
 def load_from_supabase(
@@ -46,7 +35,8 @@ def load_from_supabase(
     """
     assets = assets or DEFAULT_ASSETS
     loader = get_loader()
-    panel = loader.load_panel(assets, PANEL_METRICS, start, end)
+    panel_assets = list(dict.fromkeys(assets + FACTOR_SOURCE_ASSETS))
+    panel = loader.load_panel(panel_assets, PANEL_METRICS, start, end)
     returns = loader.load_returns(assets, start, end)
     macro = loader.load_macro(MACRO_SERIES, start, end)
     return panel, returns, macro
