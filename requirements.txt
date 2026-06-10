@@ -172,3 +172,10 @@ hmmlearn==0.3.3
 # and order-book pricing are SDK-free). Pinned here for reproducible deploys.
 hyperliquid-python-sdk==0.23.0
 eth-account==0.13.7
+
+# ── V4 PINN solver (torch) ───────────────────────────────────────────
+# Needed for solvers/v4_pinn.py (--solver v4) and tests/test_v4_pinn.py.
+# CPU build is sufficient; for a smaller install (esp. on Linux, where the
+# default PyPI wheel bundles CUDA) use:
+#   pip install torch --index-url https://download.pytorch.org/whl/cpu
+torch==2.12.0
