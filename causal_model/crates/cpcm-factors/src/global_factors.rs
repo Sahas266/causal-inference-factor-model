@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+use crate::stats::{diff, z_score};
+
 /// Compute the 7 global CPCM factors from the data panel.
 ///
 /// Each factor maps raw Supabase metrics into a single time series.
@@ -169,39 +171,6 @@ fn sum_columns(data: &HashMap<String, Vec<f64>>, cols: &[&str], n: usize) -> Vec
     result
 }
 
-/// First-difference: diff[i] = x[i] - x[i-1]. First element is NaN.
-fn diff(x: &[f64]) -> Vec<f64> {
-    if x.is_empty() {
-        return vec![];
-    }
-    let mut d = vec![f64::NAN];
-    for i in 1..x.len() {
-        d.push(if x[i].is_nan() || x[i - 1].is_nan() {
-            f64::NAN
-        } else {
-            x[i] - x[i - 1]
-        });
-    }
-    d
-}
-
-/// Z-score normalization: (x - mean) / std.
-fn z_score(x: &[f64]) -> Vec<f64> {
-    let valid: Vec<f64> = x.iter().filter(|v| !v.is_nan()).copied().collect();
-    if valid.is_empty() {
-        return x.to_vec();
-    }
-    let mean = valid.iter().sum::<f64>() / valid.len() as f64;
-    let variance = valid.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / valid.len() as f64;
-    let std = variance.sqrt();
-    if std < 1e-15 {
-        return vec![0.0; x.len()];
-    }
-    x.iter()
-        .map(|&v| if v.is_nan() { f64::NAN } else { (v - mean) / std })
-        .collect()
-}
-
 /// Rolling standard deviation with the given window size.
 fn rolling_std(x: &[f64], window: usize) -> Vec<f64> {
     let n = x.len();
@@ -233,25 +202,6 @@ fn rolling_std(x: &[f64], window: usize) -> Vec<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_diff() {
-        let x = vec![10.0, 12.0, 11.0, 15.0];
-        let d = diff(&x);
-        assert!(d[0].is_nan());
-        assert!((d[1] - 2.0).abs() < 1e-10);
-        assert!((d[2] - (-1.0)).abs() < 1e-10);
-        assert!((d[3] - 4.0).abs() < 1e-10);
-    }
-
-    #[test]
-    fn test_z_score() {
-        let x = vec![1.0, 2.0, 3.0, 4.0, 5.0];
-        let z = z_score(&x);
-        // Mean=3, std=sqrt(2)
-        let mean: f64 = z.iter().sum::<f64>() / z.len() as f64;
-        assert!(mean.abs() < 1e-10, "z-scored mean should be ~0");
-    }
 
     #[test]
     fn test_rolling_std() {

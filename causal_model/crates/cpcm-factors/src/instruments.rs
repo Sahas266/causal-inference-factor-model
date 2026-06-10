@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+use crate::stats::{diff, z_score_abs};
+
 /// Compute instrumental variables from the data panel.
 ///
 /// Each IV is lagged by >= 1 day to avoid simultaneity.
@@ -84,50 +86,6 @@ fn lagged_z_score_spike(x: &[f64], threshold: f64, lag_days: usize) -> Vec<f64> 
         })
         .collect();
     lag(&indicator, lag_days)
-}
-
-/// First-difference.
-fn diff(x: &[f64]) -> Vec<f64> {
-    if x.is_empty() {
-        return vec![];
-    }
-    let mut d = vec![f64::NAN];
-    for i in 1..x.len() {
-        d.push(if x[i].is_nan() || x[i - 1].is_nan() {
-            f64::NAN
-        } else {
-            x[i] - x[i - 1]
-        });
-    }
-    d
-}
-
-/// Z-score of absolute values: |x_i - mean| / std.
-fn z_score_abs(x: &[f64]) -> Vec<f64> {
-    let valid: Vec<f64> = x.iter().filter(|v| !v.is_nan()).copied().collect();
-    if valid.is_empty() {
-        return x.to_vec();
-    }
-    let abs_vals: Vec<f64> = valid.iter().map(|v| v.abs()).collect();
-    let mean = abs_vals.iter().sum::<f64>() / abs_vals.len() as f64;
-    let var = abs_vals
-        .iter()
-        .map(|v| (v - mean).powi(2))
-        .sum::<f64>()
-        / abs_vals.len() as f64;
-    let std = var.sqrt();
-    if std < 1e-15 {
-        return vec![0.0; x.len()];
-    }
-    x.iter()
-        .map(|&v| {
-            if v.is_nan() {
-                f64::NAN
-            } else {
-                (v.abs() - mean) / std
-            }
-        })
-        .collect()
 }
 
 /// Lag a series by `k` positions (shift forward). First `k` elements become NaN.

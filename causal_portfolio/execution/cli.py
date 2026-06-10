@@ -32,14 +32,10 @@ from pathlib import Path
 
 from datetime import datetime, timezone
 
-from causal_portfolio.execution.audit import LOG_DIR, append as audit_append, read_log
+from causal_portfolio.execution.audit import LOG_DIR, read_log
 from causal_portfolio.execution.config import ExecutionConfig
 from causal_portfolio.execution.rebalancer import plan_rebalance
-from causal_portfolio.execution.types import (
-    AccountState,
-    AssetMeta,
-    SubmitResult,
-)
+from causal_portfolio.execution.types import AccountState, AssetMeta
 
 logger = logging.getLogger("cpcm.execution.cli")
 
@@ -226,11 +222,6 @@ def cmd_logs(args) -> int:
         n_skipped = len(plan.get("skipped") or [])
         gross = sum(abs(v) for v in (plan.get("deltas_usd") or {}).values())
         equity = (plan.get("current_state") or {}).get("account_value_usd", 0)
-        drifts = rec.get("plan", {}).get("drifts") or []  # legacy slot
-        actual_drifts = []
-        # drifts may live on the submit result, not the plan. Try both shapes.
-        if "drifts" in rec:
-            actual_drifts = rec["drifts"] or []
         status = "SUBMITTED" if rec.get("submitted") else "DRY-RUN" if rec.get("error") is None else "ERROR"
         if rec.get("error"):
             status = "ERROR"

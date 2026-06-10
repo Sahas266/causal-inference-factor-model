@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+use crate::stats::z_score;
+
 /// Compute per-asset covariates from the data panel.
 ///
 /// Returns a map of `{asset}_{covariate}` → Vec<f64>.
@@ -67,22 +69,6 @@ pub fn compute_asset_covariates(
     }
 
     covariates
-}
-
-fn z_score(x: &[f64]) -> Vec<f64> {
-    let valid: Vec<f64> = x.iter().filter(|v| !v.is_nan()).copied().collect();
-    if valid.is_empty() {
-        return x.to_vec();
-    }
-    let mean = valid.iter().sum::<f64>() / valid.len() as f64;
-    let var = valid.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / valid.len() as f64;
-    let std = var.sqrt();
-    if std < 1e-15 {
-        return vec![0.0; x.len()];
-    }
-    x.iter()
-        .map(|&v| if v.is_nan() { f64::NAN } else { (v - mean) / std })
-        .collect()
 }
 
 #[cfg(test)]

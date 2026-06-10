@@ -100,13 +100,7 @@ Examples:
         action='store_true',
         help='Show provider statistics'
     )
-    
-    parser.add_argument(
-        '--provider',
-        type=str,
-        help='Filter by specific provider'
-    )
-    
+
     parser.add_argument(
         '--log-level',
         type=str,

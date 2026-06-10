@@ -51,7 +51,6 @@ class AccountState:
     account_value_usd: float           # total equity (cash + unrealized PnL)
     margin_used_usd: float
     positions: dict[str, Position] = field(default_factory=dict)
-    open_order_ids: list[int] = field(default_factory=list)
 
     @property
     def free_margin_usd(self) -> float:

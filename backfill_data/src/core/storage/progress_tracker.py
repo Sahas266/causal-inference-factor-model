@@ -211,16 +211,6 @@ class ProgressTracker:
         except Exception as e:
             logger.error(f"Failed to mark {endpoint_id} as failed: {e}")
     
-    def log_error(self, endpoint_id: str, error_message: str) -> None:
-        """
-        Log an error for an endpoint (alias for mark_failed).
-        
-        Args:
-            endpoint_id: Unique endpoint identifier
-            error_message: Error description
-        """
-        self.mark_failed(endpoint_id, error_message)
-    
     def get_failed_endpoints(self) -> list:
         """
         Get all failed endpoint records.
@@ -237,24 +227,6 @@ class ProgressTracker:
             
         except Exception as e:
             logger.error(f"Failed to get failed endpoints: {e}")
-            return []
-    
-    def get_running_endpoints(self) -> list:
-        """
-        Get all currently running endpoint records.
-        
-        Returns:
-            List of running progress records
-        """
-        try:
-            result = self.client.table(self.table).select('*').eq(
-                'status', 'running'
-            ).execute()
-            
-            return result.data if result.data else []
-            
-        except Exception as e:
-            logger.error(f"Failed to get running endpoints: {e}")
             return []
     
     def reset_progress(self, endpoint_id: str) -> None:

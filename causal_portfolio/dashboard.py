@@ -15,8 +15,6 @@ from pathlib import Path
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-import matplotlib
-import matplotlib.pyplot as plt
 import networkx as nx
 import numpy as np
 import pandas as pd
@@ -24,8 +22,6 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 from plotly.subplots import make_subplots
-
-matplotlib.use("Agg")
 
 # ── Page config ──────────────────────────────────────────────────────
 st.set_page_config(

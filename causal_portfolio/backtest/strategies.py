@@ -167,7 +167,7 @@ def buy_and_hold(
     target[returns.columns.get_loc(asset)] = 1.0
 
     def weight_fn(t):
-        return target if t == 0 else target  # constant — no_trade band auto-skips
+        return target  # constant target — only the initial buy moves weights
 
     return _walk(
         returns, weight_fn, threshold_l1=0.0, fee_bps=fee_bps, slippage_bps=slippage_bps,

@@ -143,7 +143,6 @@ class HLAdapter:
             account_value_usd=float(margin_summary.get("accountValue", 0)),
             margin_used_usd=float(margin_summary.get("totalMarginUsed", 0)),
             positions=positions,
-            open_order_ids=[],  # filled by fetch_open_orders if needed
         )
 
     def fetch_mids(self) -> dict[str, float]:

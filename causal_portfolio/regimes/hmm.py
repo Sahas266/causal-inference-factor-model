@@ -16,8 +16,8 @@ that best explains driver X is the regime defined by driver X."
 Two label outputs:
     - `decode(features)` — viterbi over the full sequence (non-causal,
       uses future data within the sample). Fine for in-sample diagnostics.
-    - `predict_causal(features)` — expanding-window one-step decode (only
-      uses data up to and including each time t). Required for live use.
+    - `forward_filter(features)` — causal filtered posteriors (only uses
+      data up to and including each time t). Required for live use.
 
 The classes are NOT order-invariant in state labels. After fit, we sort
 states by the first feature's mean so state 0 is always the lower-stress
@@ -186,21 +186,6 @@ class RegimeClassifier:
         X = np.asarray(features)
         _, raw = self._fitted.model.decode(X)
         return self._relabel(raw)
-
-    def predict_causal(self, features: pd.DataFrame | np.ndarray) -> np.ndarray:
-        """One-step-at-a-time decode using only data up to and including each t.
-
-        Slower than `decode` (O(T²) vs O(T)) but does not leak future info.
-        """
-        if self._fitted is None:
-            raise RuntimeError("fit() before predict_causal()")
-        X = np.asarray(features)
-        T = len(X)
-        labels = np.empty(T, dtype=int)
-        for t in range(T):
-            _, raw = self._fitted.model.decode(X[: t + 1])
-            labels[t] = self._fitted.permutation[raw[-1]]
-        return labels
 
     def forward_filter(self, features: pd.DataFrame | np.ndarray) -> np.ndarray:
         """Causal posterior P(state_t | observations[0:t+1]) for each t.

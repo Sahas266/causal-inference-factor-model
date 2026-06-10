@@ -4,6 +4,7 @@ use crate::asset_covariates::compute_asset_covariates;
 use crate::global_factors::compute_global_factors;
 use crate::instruments::compute_instruments;
 use crate::returns::compute_all_returns;
+use crate::stats::z_score;
 
 /// Full factor computation result.
 pub struct FactorPanel {
@@ -55,7 +56,7 @@ pub fn compute_all(
         if let Some(values) = data.get(&col_name) {
             let valid = values.iter().filter(|v| !v.is_nan()).count();
             if valid > 0 {
-                macro_factors.insert(series.to_lowercase(), z_score_vec(values));
+                macro_factors.insert(series.to_lowercase(), z_score(values));
             }
         }
     }
@@ -98,23 +99,6 @@ pub fn merge_all(panel: &FactorPanel) -> HashMap<String, Vec<f64>> {
     }
 
     merged
-}
-
-/// Z-score normalization: (x - mean) / std. NaN-safe.
-fn z_score_vec(x: &[f64]) -> Vec<f64> {
-    let valid: Vec<f64> = x.iter().filter(|v| !v.is_nan()).copied().collect();
-    if valid.is_empty() {
-        return x.to_vec();
-    }
-    let mean = valid.iter().sum::<f64>() / valid.len() as f64;
-    let var = valid.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / valid.len() as f64;
-    let std = var.sqrt();
-    if std < 1e-15 {
-        return vec![0.0; x.len()];
-    }
-    x.iter()
-        .map(|&v| if v.is_nan() { f64::NAN } else { (v - mean) / std })
-        .collect()
 }
 
 /// Print a coverage report: which factors/covariates have data.

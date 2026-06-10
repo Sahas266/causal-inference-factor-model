@@ -58,21 +58,6 @@ def test_decode_returns_correct_shape():
     assert set(np.unique(labels).tolist()).issubset({0, 1})
 
 
-# ── causal decode ───────────────────────────────────────────────────
-
-
-def test_causal_decode_does_not_use_future():
-    """predict_causal at t=k should only depend on data[:k+1]."""
-    X = _synthetic_two_regime_features(n=200)
-    cls = RegimeClassifier(n_states=2, random_state=42).fit(X)
-    labels_full = cls.predict_causal(X)
-
-    # Recompute by truncating: labels_full[t] should equal predict_causal(X[:t+1])[-1]
-    for t in [10, 50, 100, 150]:
-        truncated = cls.predict_causal(X[: t + 1])
-        assert labels_full[t] == truncated[-1]
-
-
 # ── error handling ──────────────────────────────────────────────────
 
 

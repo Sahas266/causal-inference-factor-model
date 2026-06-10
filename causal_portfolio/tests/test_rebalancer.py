@@ -47,7 +47,6 @@ def _state(equity: float = 10_000.0, positions: dict | None = None) -> AccountSt
         account_value_usd=equity,
         margin_used_usd=0.0,
         positions=positions or {},
-        open_order_ids=[],
     )
 
 
