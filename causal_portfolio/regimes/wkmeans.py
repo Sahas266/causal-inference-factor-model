@@ -49,6 +49,11 @@ def segment_stream(returns: np.ndarray, h1: int, h2: int) -> np.ndarray:
 
     Offset h2 is the slide between consecutive segments (h2 < h1 => overlap;
     h2 == h1 => disjoint). Returns an (M, h1) array; row i is segment i.
+
+    NOTE — convention differs from the paper: in the paper's Def 1.2 /
+    Section 3.4, h2 is the OVERLAP between adjacent segments (slide =
+    h1 - h2; their SPY choice (h1, h2) = (35, 28) means slide 7). Here h2
+    is the slide directly, so paper-(35, 28) corresponds to h2=7 here.
     """
     returns = np.asarray(returns, dtype=float).reshape(-1)
     n = returns.shape[0]
@@ -72,13 +77,20 @@ def wasserstein_distance_sorted(a_sorted: np.ndarray, b_sorted: np.ndarray, p: i
     return float((diff ** p).mean()) ** (1.0 / p)
 
 
-def barycenter_sorted(segments_sorted: np.ndarray) -> np.ndarray:
-    """1-Wasserstein barycenter of equal-size measures (Prop 2.6, eq 22).
+def barycenter_sorted(segments_sorted: np.ndarray, p: int = 1) -> np.ndarray:
+    """W_p barycenter of equal-size empirical measures (Prop 2.6, eq 22).
 
-    Per-order-statistic median across the (already sorted) member segments.
+    Per-order-statistic aggregation across the (already sorted) member
+    segments: the median minimizes Σ|x − a|  (W_1 barycenter, the paper's
+    Prop 2.6), the mean minimizes Σ|x − a|² (W_2 barycenter). Other p have
+    no closed form here.
     Input: (m, N) array of sorted segments. Output: (N,) sorted centroid atoms.
     """
-    return np.median(segments_sorted, axis=0)
+    if p == 1:
+        return np.median(segments_sorted, axis=0)
+    if p == 2:
+        return segments_sorted.mean(axis=0)
+    raise ValueError(f"no closed-form W_p barycenter for p={p} (use 1 or 2)")
 
 
 # ── MMD self-similarity (Def 1.9) ────────────────────────────────────
@@ -174,7 +186,7 @@ class WassersteinKMeans:
             for l in range(k):
                 members = segs_sorted[new_labels == l]
                 if members.shape[0] > 0:
-                    new_centroids[l] = barycenter_sorted(members)
+                    new_centroids[l] = barycenter_sorted(members, self.p)
             # loss = total centroid movement (eq 23)
             loss = sum(wasserstein_distance_sorted(centroids[l], new_centroids[l], self.p)
                        for l in range(k))

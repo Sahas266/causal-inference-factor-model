@@ -179,7 +179,13 @@ def equal_weight_basket(
     returns: pd.DataFrame, fee_bps: float = 5.0, slippage_bps: float = 5.0,
     rebalance_freq: int = 21,
 ) -> BacktestResult:
-    """Equal-weighted across all return columns, monthly rebalance."""
+    """Equal-weighted across all return columns, monthly rebalance.
+
+    NOTE: like the rest of the return-space engine, weights are held CONSTANT
+    between rebalances (no drift), which is equivalent to costless daily
+    rebalancing — so after the initial buy, periodic rebalances are zero-trade
+    no-ops. This slightly flatters the basket vs a real drifting portfolio.
+    """
     n = returns.shape[1]
     target = np.ones(n) / n
 
@@ -217,7 +223,11 @@ def fixed_weight_portfolio(
         target_weights: dict ticker -> weight (renormalized to sum to 1).
             Defaults to {"btc": 0.6, "eth": 0.3, "sol": 0.1} for whichever of
             those are present, else equal-weight all columns.
-        rebalance_freq: rebalance every N days (drift between rebalances).
+        rebalance_freq: rebalance every N days. NOTE: `_walk` holds weights
+            CONSTANT in return space between rebalances (no drift), which is
+            equivalent to costless daily rebalancing — so periodic rebalances
+            back to the same target are zero-trade no-ops after the initial
+            buy, and `threshold_l1` rarely binds.
         threshold_l1: no-trade band; skip rebalances below this L1 distance.
     """
     n = returns.shape[1]
@@ -235,7 +245,7 @@ def fixed_weight_portfolio(
     def weight_fn(t):
         if t % rebalance_freq == 0:
             return target
-        return None  # hold (drift between rebalances)
+        return None  # hold (constant weights between rebalances; no drift)
 
     return _walk(
         returns, weight_fn, fee_bps=fee_bps, slippage_bps=slippage_bps,

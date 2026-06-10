@@ -205,7 +205,12 @@ class V4PINNSolver(CPCMSolver):
         """Compute Jacobian smoothness penalty.
 
         Approximates ||d²A/dF²||_F via finite differences of the Jacobian
-        at neighboring points in the batch for efficiency.
+        between consecutive batch rows. With full-batch training (the
+        default) consecutive rows are adjacent days, so this is a local
+        smoothness penalty; with `batch_size` set the batch is shuffled and
+        the pairs are random, making it a global Jacobian-constancy
+        (toward-linear) regularizer instead. The difference is not scaled
+        by ||ΔF||, so it is a regularizer, not a literal Hessian norm.
         """
         if lambda_J <= 0 or len(D_batch) < 3:
             return torch.tensor(0.0, device=self.device)

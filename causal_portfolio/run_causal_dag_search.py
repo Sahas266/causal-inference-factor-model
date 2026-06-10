@@ -38,11 +38,13 @@ from causal_portfolio.validation.walk_forward import compare_variants
 logger = logging.getLogger("cpcm.run_causal_dag_search")
 
 
-def _prepare_variant_factors(variant, returns, factors):
+def _prepare_variant_factors(variant, returns, factors, *, train_window=252):
     """Apply the variant's factor pool + per-type lags (+ optional Combo).
 
     Returns a factor DataFrame (lagged, subset) ready for run_ab, or None if
-    the variant has no usable factors.
+    the variant has no usable factors. Combo selection sees only the first
+    `train_window` aligned rows — strictly before run_ab's first evaluated
+    day — so the selected drivers cannot leak the OOS folds.
     """
     available = factors.dropna(axis=1, how="all")
     pool = (list(available.columns) if variant.factors is None
@@ -60,8 +62,9 @@ def _prepare_variant_factors(variant, returns, factors):
         if len(common) < 50:
             return None
         m = min(variant.combo_m, lagged.shape[1])
+        sel_idx = common[:train_window]  # train window only — no OOS leak
         ranking = ComboDriverSelector().rank_all_subsets(
-            returns.loc[common], lagged.loc[common], m=m)
+            returns.loc[sel_idx], lagged.loc[sel_idx], m=m)
         selected = list(ranking[0][0])
         lagged = lagged[selected]
     return lagged
@@ -81,7 +84,8 @@ def run(assets, start, end, *, train_window, rebalance_freq, f_threshold):
     rows = []
     bh_ref = None
     for v in VARIANTS:
-        vf = _prepare_variant_factors(v, returns, factors)
+        vf = _prepare_variant_factors(v, returns, factors,
+                                      train_window=train_window)
         if vf is None or vf.shape[1] == 0:
             rows.append((v, None, None, None))
             continue
@@ -130,7 +134,7 @@ def render_markdown(rows, bh_ref, args) -> str:
     if bh_ref is not None and len(bh_ref):
         r = bh_ref.values
         pv = np.cumprod(1 + r)
-        L.append(f"**Buy & Hold BTC (OOS):** total {pv[-1]/pv[0]-1:+.1%}, "
+        L.append(f"**Buy & Hold BTC (OOS):** total {pv[-1]-1:+.1%}, "
                  f"Sharpe {np.mean(r)/(np.std(r)+1e-12)*np.sqrt(ANNUALIZATION):.3f}\n")
 
     L.append("| Variant | OLS wr | 2SLS wr | OLS medSharpe | 2SLS medSharpe | "

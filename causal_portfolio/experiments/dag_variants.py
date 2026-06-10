@@ -128,10 +128,14 @@ def load_inputs(assets: list[str], start: str, end: str):
 
 def _build_drivers(
     variant: DagVariant, returns: pd.DataFrame, factors: pd.DataFrame,
+    *, train_window: int = 252,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, list[str]]:
     """Construct the (returns, drivers, dates, driver_names) for a variant.
 
     Applies per-factor-type lags, optionally Combo-selects, and aligns.
+    Combo selection sees only the first `train_window` rows — strictly before
+    the first evaluated return (the backtester's evaluation starts after its
+    initial train window), so the selected drivers cannot leak OOS data.
     """
     available = factors.dropna(axis=1, how="all")
     pool = list(available.columns) if variant.factors is None else [
@@ -151,10 +155,13 @@ def _build_drivers(
     lagged = lagged.loc[common]
     R = returns.loc[common]
 
-    # Optional Combo selection within the pool
+    # Optional Combo selection within the pool — on the train window ONLY
+    # (selecting on the full sample would pick drivers using the very days
+    # the walk-forward backtest then scores as out-of-sample).
     if variant.combo_m is not None:
         m = min(variant.combo_m, lagged.shape[1])
-        ranking = ComboDriverSelector().rank_all_subsets(R, lagged, m=m)
+        ranking = ComboDriverSelector().rank_all_subsets(
+            R.iloc[:train_window], lagged.iloc[:train_window], m=m)
         selected = list(ranking[0][0])
     else:
         selected = list(lagged.columns)
@@ -172,7 +179,8 @@ def run_variant(
     risk_aversion: float = 1.0, max_weight: float = 0.25,
 ) -> VariantResult:
     try:
-        Rv, D, dates, selected = _build_drivers(variant, returns, factors)
+        Rv, D, dates, selected = _build_drivers(
+            variant, returns, factors, train_window=train_window)
         if len(Rv) <= train_window + 10:
             return VariantResult(variant.name, window_label, selected,
                                  float("nan"), float("nan"), float("nan"),
@@ -201,7 +209,8 @@ def buy_and_hold_btc(returns: pd.DataFrame) -> dict:
     r = returns["btc_return"].dropna().values
     pv = np.cumprod(1 + r)
     return {
-        "total_return": float(pv[-1] / pv[0] - 1),
+        # cumprod starts at 1+r[0]; dividing by pv[0] would drop day 1's return
+        "total_return": float(pv[-1] - 1.0),
         "sharpe": float(sharpe_ratio(r)),
         "max_dd": float(max_drawdown(r)),
         "n_obs": len(r),

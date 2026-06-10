@@ -104,18 +104,32 @@ class ManifoldOptimizer:
         return U[:, :k] @ U[:, :k].T
 
     def _apply_constraints(self, w: np.ndarray) -> np.ndarray:
-        """Clip weights and normalize."""
+        """Normalize to gross exposure 1 with a per-asset |w| cap.
+
+        Clip-then-normalize alone violates the cap: scaling back to gross 1
+        pushes clipped weights over max_weight again. Instead, weights at the
+        cap are frozen and the remaining gross budget is redistributed across
+        the uncapped names until both constraints hold. If everything ends up
+        capped (n_active * max_weight < 1), the cap wins and gross stays < 1.
+        """
         if self.long_only:
             w = np.maximum(w, 0.0)
-
-        # Clip to max weight
         w = np.clip(w, -self.max_weight, self.max_weight)
+        if np.sum(np.abs(w)) <= 1e-10:
+            return w
 
-        # Normalize to sum to 1 (fully invested)
-        w_sum = np.sum(np.abs(w))
-        if w_sum > 1e-10:
-            w = w / w_sum
-
+        capped = np.zeros(len(w), dtype=bool)
+        for _ in range(len(w)):
+            free = ~capped & (np.abs(w) > 1e-15)
+            budget = 1.0 - self.max_weight * capped.sum()
+            if budget <= 0 or not free.any():
+                break
+            w[free] *= budget / np.sum(np.abs(w[free]))
+            over = free & (np.abs(w) > self.max_weight)
+            if not over.any():
+                break
+            w[over] = np.sign(w[over]) * self.max_weight
+            capped |= over
         return w
 
 

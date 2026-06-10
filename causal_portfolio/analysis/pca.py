@@ -9,8 +9,9 @@ its principal components (orthogonal by construction), keep the components that
 explain most variance, and use THOSE as the drivers fed to the OLS/manifold
 pipeline. Fewer, decorrelated drivers => lower-variance loadings.
 
-`fit_transform_causal` fits the rotation on a TRAILING window only and applies
-it forward, so there's no look-ahead in a walk-forward backtest.
+`pca_drivers` here is full-sample (for diagnostics/reporting). The causal
+walk-forward variant lives in `experiments/pca_drivers.py::_causal_pca`,
+which fits the rotation on a TRAILING window only and applies it forward.
 """
 
 from __future__ import annotations
