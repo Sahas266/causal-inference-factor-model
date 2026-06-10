@@ -4,14 +4,14 @@ Each variant's return-equation structure (factor pool + lags + optional Combo se
 
 - Assets: `btc, eth, sol, bnb, avax, uni, aave, link, doge`
 - Window: `2022-01-01` → `2025-12-31` | train 252d, rebalance 5d
-- Run UTC: `2026-06-08T17:50:21+00:00`
+- Run UTC: `2026-06-10T18:22:11+00:00`
 
-**Buy & Hold BTC (OOS):** total +291.8%, Sharpe 1.127
+**Buy & Hold BTC (OOS):** total +302.6%, Sharpe 1.127
 
 | Variant | OLS wr | 2SLS wr | OLS medSharpe | 2SLS medSharpe | Instrument gate (passed/seen) |
 |---|---:|---:|---:|---:|---|
-| combo3_lag0 | 25% | 25% | -0.216 | -0.497 | liquidation_level 0/108; stablecoin_mint 44/108 |
-| combo3_lag1 | 33% | 33% | -0.222 | -0.222 | gas_spike 1/242 |
+| combo3_lag0 | 25% | 25% | 1.457 | 1.457 | gas_spike 0/108; liquidation_level 0/108 |
+| combo3_lag1 | 44% | 56% | 0.522 | 0.008 | gas_spike 3/242; protocol_event 23/242; stablecoin_mint 242/242 |
 | all_lag0 | 50% | 50% | 0.831 | 0.831 | gas_spike 0/108; liquidation_level 0/108; protocol_event 0/108; stablecoin_mint 0/108 |
 | all_lag1 | 50% | 50% | 0.451 | 0.963 | gas_spike 0/108; liquidation_level 0/108; protocol_event 0/108; stablecoin_mint 108/108 |
 | global_lag0 | 50% | 50% | -0.587 | -0.731 | gas_spike 0/108; liquidation_level 0/108; protocol_event 0/108; stablecoin_mint 12/108 |
