@@ -145,6 +145,13 @@ def plan_rebalance(
     if hit_cap:
         notes.append(f"position cap ({config.max_position_pct}) clipped: {hit_cap}")
 
+    # ── 3b. Gross-exposure cap: scale so Σ|w| ≤ 1.0 ─────────────────
+    gross = sum(abs(w) for w in mapped.values())
+    if gross > 1.0:
+        scale = 1.0 / gross
+        mapped = {coin: w * scale for coin, w in mapped.items()}
+        notes.append(f"gross exposure {gross:.4f} > 1.0; scaled all weights by {scale:.4f}")
+
     # ── 4. Compute target USD per coin ──────────────────────────────
     equity_used = state.account_value_usd * config.leverage
     target_usd = {coin: equity_used * w for coin, w in mapped.items()}
@@ -220,11 +227,16 @@ def plan_rebalance(
         # orders (they can't accidentally open new exposure).
         current_notional = current_usd.get(coin, 0.0)
         target_notional = target_usd.get(coin, 0.0)
-        # Same sign AND target magnitude < current magnitude → pure reduce
+        # Pure reduce: position shrinks toward (or to) zero without flipping
+        # sign. target == 0 (full close) is always a reduce, whichever side
+        # the current position is on.
         is_reduce_only = (
             current_notional != 0
-            and (current_notional > 0) == (target_notional >= 0)
             and abs(target_notional) < abs(current_notional)
+            and (
+                target_notional == 0
+                or (current_notional > 0) == (target_notional > 0)
+            )
         )
 
         orders.append(Order(

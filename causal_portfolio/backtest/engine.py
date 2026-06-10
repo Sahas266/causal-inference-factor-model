@@ -73,7 +73,9 @@ class BacktestResult:
         """
         port_values = np.cumprod(1 + portfolio_returns)
         return cls(
-            total_return=float(port_values[-1] / port_values[0] - 1),
+            # port_values[0] is already 1 + r[0]; dividing by it would drop
+            # the first day's return. Start value is 1.0 by construction.
+            total_return=float(port_values[-1] - 1.0),
             sharpe=sharpe_ratio(portfolio_returns),
             sortino=sortino_ratio(portfolio_returns),
             max_dd=max_drawdown(portfolio_returns),

@@ -230,7 +230,13 @@ class DefiLlamaTransformer:
                 ts, value = point[0], point[1]
             elif isinstance(point, dict):
                 ts = point.get('date')
-                value = point.get('fees') or point.get('revenue') or point.get('value')
+                # Explicit None-checks: `or` would treat a legitimate 0.0 fee
+                # day as missing and silently substitute the revenue field.
+                value = next(
+                    (point[k] for k in ('fees', 'revenue', 'value')
+                     if point.get(k) is not None),
+                    None,
+                )
             else:
                 continue
 

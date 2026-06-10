@@ -34,6 +34,21 @@ CACHE_DIR = Path(__file__).parent / "cache"
 CACHE_VERSION = 2
 
 
+def _to_utc_bound(s: str, which: str) -> str:
+    """Normalize a date or datetime string to UTC ISO with offset.
+
+    Bare 'YYYY-MM-DD' bounds are ambiguous: DuckDB parses them against the
+    session timezone, and a midnight `end` bound excludes intraday rows on
+    the end day. Always pass explicit UTC bounds: start → 00:00:00+00:00,
+    end → 23:59:59.999+00:00 — both backends share this so their query
+    windows cannot drift apart.
+    """
+    if "T" in s or " " in s:
+        # Already has a time component — trust the caller.
+        return s
+    return f"{s}T00:00:00+00:00" if which == "start" else f"{s}T23:59:59.999+00:00"
+
+
 class BaseCPCMDataLoader(ABC):
     """Shared load_panel / load_prices / load_returns / load_macro logic."""
 
@@ -81,13 +96,15 @@ class BaseCPCMDataLoader(ABC):
         assets: list[str],
         start: str,
         end: str,
-        price_metric: str = "PriceUSD",
+        price_metric: str = "price",
         use_cache: bool = True,
     ) -> pd.DataFrame:
-        """Daily price levels, one column per asset (PriceUSD → 'price' fallback)."""
+        """Daily price levels, one column per asset.
+
+        The warehouse standardizes the price metric name to 'price' across
+        all providers (legacy PriceUSD / price_usd names were migrated).
+        """
         panel = self.load_panel(assets, [price_metric], start, end, use_cache=use_cache)
-        if panel.empty and price_metric == "PriceUSD":
-            panel = self.load_panel(assets, ["price"], start, end, use_cache=use_cache)
         if panel.empty:
             return panel
         panel = panel.copy()
@@ -99,7 +116,7 @@ class BaseCPCMDataLoader(ABC):
         assets: list[str],
         start: str,
         end: str,
-        price_metric: str = "PriceUSD",
+        price_metric: str = "price",
         kind: str = "simple",
         use_cache: bool = True,
     ) -> pd.DataFrame:

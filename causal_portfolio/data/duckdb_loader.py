@@ -24,7 +24,7 @@ from typing import Optional
 import duckdb
 import pandas as pd
 
-from causal_portfolio.data.base_loader import BaseCPCMDataLoader
+from causal_portfolio.data.base_loader import BaseCPCMDataLoader, _to_utc_bound
 
 logger = logging.getLogger("cpcm.data.duckdb")
 
@@ -54,19 +54,6 @@ QUALIFY ROW_NUMBER() OVER (
     ORDER BY provider_priority ASC
 ) = 1;
 """
-
-
-def _to_utc_bound(s: str, which: str) -> str:
-    """Normalize a date or datetime string to UTC ISO with offset.
-
-    DuckDB parses bare 'YYYY-MM-DD' against the session timezone, which shifts
-    UTC-midnight rows out of the query window on non-UTC machines. Always pass
-    explicit UTC bounds: start → 00:00:00+00:00, end → 23:59:59.999+00:00.
-    """
-    if "T" in s or " " in s:
-        # Already has a time component — trust the caller.
-        return s
-    return f"{s}T00:00:00+00:00" if which == "start" else f"{s}T23:59:59.999+00:00"
 
 
 def ensure_schema(con: duckdb.DuckDBPyConnection) -> None:

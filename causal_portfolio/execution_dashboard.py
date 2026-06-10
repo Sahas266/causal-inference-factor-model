@@ -42,7 +42,24 @@ DEFAULT_ASSETS = ("btc", "eth", "sol")
 run_strategy = st.cache_data(show_spinner="Running backtest…", ttl=3600)(dd.run_strategy)
 # Cache live account reads briefly so every widget interaction doesn't
 # re-hit the Hyperliquid API (3 network calls per rerun otherwise).
-fetch_live_account = st.cache_data(show_spinner=False, ttl=30)(dd.fetch_live_account)
+# Errors are raised inside the cached function so st.cache_data never
+# stores a failure (a cached error tuple would poison reads for the TTL).
+
+
+@st.cache_data(show_spinner=False, ttl=30)
+def _fetch_live_account_ok(testnet: bool):
+    state, mids, err = dd.fetch_live_account(testnet=testnet)
+    if err:
+        raise RuntimeError(err)
+    return state, mids
+
+
+def fetch_live_account(testnet: bool):
+    try:
+        state, mids = _fetch_live_account_ok(testnet=testnet)
+        return state, mids, None
+    except Exception as e:
+        return None, None, str(e)
 
 
 st.title("⚡ CPCM Execution Dashboard")

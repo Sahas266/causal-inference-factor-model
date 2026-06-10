@@ -56,21 +56,19 @@ class TokenBucketRateLimiter(RateLimiterInterface):
     def acquire(self) -> None:
         with self.lock:
             self._refill_tokens()
-            if self.tokens >= 1.0:
-                self.tokens -= 1.0
-                self.total_requests += 1
+            # Reserve the token up front (balance may go negative). If we
+            # instead slept and debited afterwards, every thread waiting on
+            # the same deficit would wake together and burst past the limit;
+            # reserving makes each waiter extend the deficit for the next.
+            self.tokens -= 1.0
+            self.total_requests += 1
+            if self.tokens >= 0.0:
                 return
-            tokens_needed = 1.0 - self.tokens
-            wait_time = tokens_needed / self.refill_rate
+            wait_time = -self.tokens / self.refill_rate
             self._log.debug(f"Rate limit reached, waiting {wait_time:.2f}s")
             self.total_wait_time += wait_time
 
         time.sleep(wait_time)
-
-        with self.lock:
-            self._refill_tokens()
-            self.tokens -= 1.0
-            self.total_requests += 1
 
     def try_acquire(self) -> bool:
         with self.lock:
@@ -88,7 +86,7 @@ class TokenBucketRateLimiter(RateLimiterInterface):
     def get_remaining_quota(self) -> Optional[int]:
         with self.lock:
             self._refill_tokens()
-            return int(self.tokens)
+            return max(0, int(self.tokens))
 
     def get_statistics(self) -> dict:
         with self.lock:

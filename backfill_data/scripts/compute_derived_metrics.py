@@ -8,7 +8,7 @@ are computed, not raw.
 Metrics computed:
     - realized_volatility_7d:  7-day rolling annualized volatility from daily log returns
     - realized_volatility_30d: 30-day rolling annualized volatility from daily log returns
-        Source: CoinMetrics PriceUSD, fallback to CoinGecko price_usd
+        Source: 'price' metric — Artemis, fallback to CoinMetrics then CoinGecko
 
     - dex_cex_volume_ratio: Daily DEX volume / CEX netflow (absolute value)
         Source: DefiLlama volume_usd (sum across protocols) / Dune cex_netflow_usd (absolute)
@@ -50,11 +50,16 @@ client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 
 def fetch_all(table, filters, select='*', order_col='time'):
-    """Paginated fetch from Supabase (1000 rows per page)."""
+    """Paginated fetch from Supabase (1000 rows per page).
+
+    Orders by (order_col, asset, metric) — a total order under the usual
+    provider filter. Paginating on `time` alone (non-unique) can skip or
+    duplicate rows at page boundaries.
+    """
     all_rows = []
     offset = 0
     while True:
-        q = client.table(table).select(select).order(order_col)
+        q = client.table(table).select(select).order(order_col).order('asset').order('metric')
         for col, val in filters.items():
             q = q.eq(col, val)
         result = q.range(offset, offset + 999).execute()
@@ -75,26 +80,29 @@ def upsert_batch(records, batch_size=500):
     return total
 
 
+# Price sources in priority order. The metric name is standardized to
+# 'price' across all providers; Artemis is the authoritative price source
+# in the warehouse, with CoinMetrics and CoinGecko as fallbacks.
+PRICE_SOURCES = [('artemis', 'price'), ('coinmetrics', 'price'), ('coingecko', 'price')]
+
+
 def get_all_assets_with_price():
     """Get distinct assets that have price data in asset_metrics."""
     assets = set()
-    for provider, metric in [('coinmetrics', 'PriceUSD'), ('coingecko', 'price_usd')]:
+    for provider, metric in PRICE_SOURCES:
         rows = fetch_all('asset_metrics', {'provider': provider, 'metric': metric}, select='asset')
         assets.update(r['asset'] for r in rows)
     return sorted(assets)
 
 
 def fetch_price_data(asset):
-    """Fetch price data for an asset, trying CoinMetrics first then CoinGecko."""
-    # Try CoinMetrics PriceUSD first
-    rows = fetch_all('asset_metrics', {'provider': 'coinmetrics', 'asset': asset, 'metric': 'PriceUSD'}, select='time,value')
-    source = 'coinmetrics:PriceUSD'
-
-    if len(rows) < 31:
-        # Fall back to CoinGecko price_usd
-        rows = fetch_all('asset_metrics', {'provider': 'coingecko', 'asset': asset, 'metric': 'price_usd'}, select='time,value')
-        source = 'coingecko:price_usd'
-
+    """Fetch price data for an asset, trying each PRICE_SOURCES provider in order."""
+    rows, source = [], 'none'
+    for provider, metric in PRICE_SOURCES:
+        rows = fetch_all('asset_metrics', {'provider': provider, 'asset': asset, 'metric': metric}, select='time,value')
+        source = f'{provider}:{metric}'
+        if len(rows) >= 31:
+            break
     return rows, source
 
 
@@ -104,7 +112,7 @@ def compute_realized_volatility(asset):
 
     Formula: RV_N = std(log_returns over N days) * sqrt(365) * 100  (annualized %)
 
-    Source: CoinMetrics PriceUSD, fallback to CoinGecko price_usd
+    Source: 'price' metric via PRICE_SOURCES priority (Artemis → CoinMetrics → CoinGecko)
     Output: provider=derived, asset={asset}, metric=realized_volatility_7d / realized_volatility_30d
     """
     logger.info(f"Fetching price data for {asset} realized volatility...")
@@ -161,17 +169,21 @@ def compute_dex_cex_volume_ratio():
     """
     Compute daily DEX/CEX volume ratio (ETH only).
 
-    Formula: dex_cex_volume_ratio = sum(DEX volume) / abs(CEX netflow)
+    Formula: dex_cex_volume_ratio = sum(ETH DEX volume) / abs(ETH CEX netflow)
 
-    Source DEX: provider=defillama, metric=volume_usd (all assets)
+    Source DEX: provider=defillama, asset=eth, metric=volume_usd
     Source CEX: provider=dune, asset=eth, metric=cex_netflow_usd
     Output: provider=derived, asset=eth, metric=dex_cex_volume_ratio
-    """
-    logger.info("Fetching DefiLlama DEX volumes...")
-    dex_rows = fetch_all('asset_metrics', {'provider': 'defillama', 'metric': 'volume_usd'}, select='time,value')
 
-    logger.info("Fetching Dune CEX netflow...")
-    cex_rows = fetch_all('asset_metrics', {'provider': 'dune', 'metric': 'cex_netflow_usd'}, select='time,value')
+    Both legs are restricted to asset='eth' — the output is stored under
+    asset='eth', so mixing other chains' DEX volume into the numerator
+    would make the ratio meaningless.
+    """
+    logger.info("Fetching DefiLlama DEX volumes (eth)...")
+    dex_rows = fetch_all('asset_metrics', {'provider': 'defillama', 'asset': 'eth', 'metric': 'volume_usd'}, select='time,value')
+
+    logger.info("Fetching Dune CEX netflow (eth)...")
+    cex_rows = fetch_all('asset_metrics', {'provider': 'dune', 'asset': 'eth', 'metric': 'cex_netflow_usd'}, select='time,value')
 
     if not dex_rows or not cex_rows:
         logger.warning("Missing DEX or CEX data. Skipping ratio calculation.")

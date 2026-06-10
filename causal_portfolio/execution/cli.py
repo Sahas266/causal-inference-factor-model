@@ -222,9 +222,12 @@ def cmd_logs(args) -> int:
         n_skipped = len(plan.get("skipped") or [])
         gross = sum(abs(v) for v in (plan.get("deltas_usd") or {}).values())
         equity = (plan.get("current_state") or {}).get("account_value_usd", 0)
-        status = "SUBMITTED" if rec.get("submitted") else "DRY-RUN" if rec.get("error") is None else "ERROR"
         if rec.get("error"):
             status = "ERROR"
+        elif rec.get("submitted"):
+            status = "SUBMITTED"
+        else:
+            status = "DRY-RUN"
         print(f"\n[{i}] {rec.get('ts_utc', '?')}  status={status}")
         print(f"     equity=${equity:,.2f}  orders={n_orders}  skipped={n_skipped}  gross=${gross:,.2f}")
         if rec.get("error"):

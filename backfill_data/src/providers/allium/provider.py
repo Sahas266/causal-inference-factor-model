@@ -19,6 +19,9 @@ from .transformer import AlliumTransformer
 
 logger = logging.getLogger('backfill_system.allium')
 
+# Max consecutive retries for a single page before giving up.
+MAX_PAGE_RETRIES = 5
+
 
 class AlliumProvider(DataProviderInterface):
     """
@@ -216,6 +219,7 @@ class AlliumProvider(DataProviderInterface):
 
         cursor = None
         page = 0
+        retries = 0  # consecutive failures for the current page
 
         while True:
             page += 1
@@ -225,13 +229,19 @@ class AlliumProvider(DataProviderInterface):
                 result = self.fetch_data_batch(endpoint_config, start_time, end_time, cursor)
             except Exception as e:
                 error_info = self.handle_error(e, {'endpoint_config': endpoint_config})
-                if error_info.get('retry'):
-                    wait = error_info.get('wait_seconds', 10)
-                    logger.warning(f"Retrying after {wait}s...")
+                retries += 1
+                if error_info.get('retry') and retries <= MAX_PAGE_RETRIES:
+                    # Linear backoff, capped at 4x the base wait.
+                    wait = error_info.get('wait_seconds', 10) * min(retries, 4)
+                    logger.warning(
+                        f"Retry {retries}/{MAX_PAGE_RETRIES} after {wait}s..."
+                    )
                     time.sleep(wait)
+                    page -= 1  # keep page numbering accurate on retry
                     continue
                 raise
 
+            retries = 0
             raw_payload = result.data[0] if result.data else {}
             if raw_payload:
                 standard = self.transformer.transform(

@@ -1,12 +1,12 @@
-"""Tests for the DuckDB local loader.
+﻿"""Tests for the DuckDB local loader.
 
-Uses tempfile-backed DuckDB instances seeded with synthetic data — no network
+Uses tempfile-backed DuckDB instances seeded with synthetic data â€” no network
 or Supabase dependency. Verifies:
   - schema creation
   - asset_metrics_best view picks lowest provider_priority
   - load_panel pivots correctly with daily resampling
   - load_returns computes simple returns (default) / log returns (kind="log")
-    with correct column naming + fallback
+    with correct column naming; explicit price_metric override for legacy data
   - load_macro pivots, ffills, lowercases columns
   - get_loader factory routes by CPCM_LOCAL_DB
   - PK upsert behavior (INSERT OR REPLACE)
@@ -31,7 +31,7 @@ from causal_portfolio.data.duckdb_loader import (
 )
 
 
-# ── fixtures ────────────────────────────────────────────────────────
+# â”€â”€ fixtures â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 
 def _row(provider, priority, asset, metric, day, value, freq="1d"):
@@ -64,10 +64,10 @@ def seeded_db(tmp_path: Path):
     rows = []
     for day in range(1, 11):
         # btc: provider A (priority 1) wins over provider B (priority 5)
-        rows.append(_row("provA", 1, "btc", "PriceUSD", day, 50000 + day * 100))
-        rows.append(_row("provB", 5, "btc", "PriceUSD", day, 99999.0))  # should lose
+        rows.append(_row("provA", 1, "btc", "price", day, 50000 + day * 100))
+        rows.append(_row("provB", 5, "btc", "price", day, 99999.0))  # should lose
         # eth: only one provider
-        rows.append(_row("provA", 1, "eth", "PriceUSD", day, 3000 + day * 10))
+        rows.append(_row("provA", 1, "eth", "price", day, 3000 + day * 10))
         # macro
         rows.append(_row("fred", 1, "macro", "DFF", day, 5.0 + day * 0.01))
         rows.append(_row("fred", 1, "macro", "VIXCLS", day, 15.0 + day * 0.1))
@@ -77,7 +77,7 @@ def seeded_db(tmp_path: Path):
     loader.close()
 
 
-# ── schema + view ───────────────────────────────────────────────────
+# â”€â”€ schema + view â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 
 def test_ensure_schema_creates_table_and_view(tmp_db):
@@ -92,7 +92,7 @@ def test_view_picks_lowest_priority(seeded_db):
     """asset_metrics_best should yield only the priority=1 provider for btc."""
     df = seeded_db._con.execute(
         "SELECT provider, value FROM asset_metrics_best "
-        "WHERE asset='btc' AND metric='PriceUSD' ORDER BY time"
+        "WHERE asset='btc' AND metric='price' ORDER BY time"
     ).fetchdf()
     assert len(df) == 10  # one row per day, not two
     assert (df["provider"] == "provA").all()
@@ -107,28 +107,28 @@ def test_view_keeps_unique_provider(seeded_db):
     assert df[0] == 10
 
 
-# ── load_panel ──────────────────────────────────────────────────────
+# â”€â”€ load_panel â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 
 def test_load_panel_pivots_wide(seeded_db):
     df = seeded_db.load_panel(
-        ["btc", "eth"], ["PriceUSD"],
+        ["btc", "eth"], ["price"],
         "2024-01-01", "2024-01-15",
         use_cache=False,
     )
     assert not df.empty
-    assert "btc_PriceUSD" in df.columns
-    assert "eth_PriceUSD" in df.columns
+    assert "btc_price" in df.columns
+    assert "eth_price" in df.columns
     assert isinstance(df.index, pd.DatetimeIndex)
     # 10 days seeded
     assert len(df) == 10
     # Sanity check on first BTC value (priority 1 = 50100, not 99999)
-    assert df["btc_PriceUSD"].iloc[0] == pytest.approx(50100.0)
+    assert df["btc_price"].iloc[0] == pytest.approx(50100.0)
 
 
 def test_load_panel_date_range_filter(seeded_db):
     df = seeded_db.load_panel(
-        ["btc"], ["PriceUSD"],
+        ["btc"], ["price"],
         "2024-01-03", "2024-01-07",
         use_cache=False,
     )
@@ -146,14 +146,14 @@ def test_load_panel_empty_when_no_match(seeded_db):
 
 def test_load_panel_unknown_asset(seeded_db):
     df = seeded_db.load_panel(
-        ["doge"], ["PriceUSD"],
+        ["doge"], ["price"],
         "2024-01-01", "2024-01-31",
         use_cache=False,
     )
     assert df.empty
 
 
-# ── load_returns ────────────────────────────────────────────────────
+# â”€â”€ load_returns â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 
 def test_load_returns_computes_simple_returns(seeded_db):
@@ -193,12 +193,13 @@ def test_load_prices_strips_metric_suffix(seeded_db):
     assert prices["btc"].iloc[0] == pytest.approx(50100.0)
 
 
-def test_load_returns_falls_back_to_lowercase_price(tmp_path: Path):
-    """If PriceUSD is absent, should retry with 'price'."""
-    loader = DuckDBCPCMDataLoader(db_path=str(tmp_path / "fallback.duckdb"), read_only=False)
-    rows = [_row("provA", 1, "btc", "price", d, 100 + d) for d in range(1, 6)]
+def test_load_returns_explicit_price_metric_override(tmp_path: Path):
+    """Legacy snapshots can still be read via an explicit price_metric."""
+    loader = DuckDBCPCMDataLoader(db_path=str(tmp_path / "legacy.duckdb"), read_only=False)
+    rows = [_row("provA", 1, "btc", "PriceUSD", d, 100 + d) for d in range(1, 6)]
     loader.upsert_rows(rows)
-    rets = loader.load_returns(["btc"], "2024-01-01", "2024-01-31", use_cache=False)
+    rets = loader.load_returns(["btc"], "2024-01-01", "2024-01-31",
+                               price_metric="PriceUSD", use_cache=False)
     loader.close()
     assert "btc_return" in rets.columns
     assert len(rets) == 4
@@ -209,7 +210,7 @@ def test_load_returns_empty_when_no_price(tmp_db):
     assert rets.empty
 
 
-# ── load_macro ──────────────────────────────────────────────────────
+# â”€â”€ load_macro â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 
 def test_load_macro_pivots_and_lowercases(seeded_db):
@@ -220,7 +221,7 @@ def test_load_macro_pivots_and_lowercases(seeded_db):
     )
     assert "dff" in macro.columns
     assert "vixcls" in macro.columns
-    # Resampled to daily — covers full range, ffilled
+    # Resampled to daily â€” covers full range, ffilled
     assert macro["dff"].iloc[0] == pytest.approx(5.01)
 
 
@@ -229,13 +230,13 @@ def test_load_macro_empty(tmp_db):
     assert macro.empty
 
 
-# ── upsert behavior ─────────────────────────────────────────────────
+# â”€â”€ upsert behavior â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 
 def test_upsert_replaces_on_pk_collision(tmp_db):
-    """INSERT OR REPLACE: same PK → second value wins."""
-    tmp_db.upsert_rows([_row("provA", 1, "btc", "PriceUSD", 1, 100.0)])
-    tmp_db.upsert_rows([_row("provA", 1, "btc", "PriceUSD", 1, 200.0)])
+    """INSERT OR REPLACE: same PK â†’ second value wins."""
+    tmp_db.upsert_rows([_row("provA", 1, "btc", "price", 1, 100.0)])
+    tmp_db.upsert_rows([_row("provA", 1, "btc", "price", 1, 200.0)])
     val = tmp_db._con.execute(
         "SELECT value FROM asset_metrics WHERE asset='btc'"
     ).fetchone()
@@ -246,7 +247,7 @@ def test_upsert_empty_is_noop(tmp_db):
     assert tmp_db.upsert_rows([]) == 0
 
 
-# ── cache round-trip ────────────────────────────────────────────────
+# â”€â”€ cache round-trip â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 
 def test_panel_cache_round_trip(seeded_db, monkeypatch, tmp_path):
@@ -256,15 +257,15 @@ def test_panel_cache_round_trip(seeded_db, monkeypatch, tmp_path):
     monkeypatch.setattr(dl, "CACHE_DIR", tmp_path / "cache")
     (tmp_path / "cache").mkdir()
 
-    df1 = seeded_db.load_panel(["btc"], ["PriceUSD"], "2024-01-01", "2024-01-31", use_cache=True)
-    # Wipe DB → second call must come from cache
+    df1 = seeded_db.load_panel(["btc"], ["price"], "2024-01-01", "2024-01-31", use_cache=True)
+    # Wipe DB â†’ second call must come from cache
     seeded_db._con.execute("DELETE FROM asset_metrics")
-    df2 = seeded_db.load_panel(["btc"], ["PriceUSD"], "2024-01-01", "2024-01-31", use_cache=True)
+    df2 = seeded_db.load_panel(["btc"], ["price"], "2024-01-01", "2024-01-31", use_cache=True)
     # check_freq=False because parquet round-trip drops DatetimeIndex.freq
     pd.testing.assert_frame_equal(df1, df2, check_freq=False)
 
 
-# ── error handling ──────────────────────────────────────────────────
+# â”€â”€ error handling â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 
 def test_missing_db_file_raises_in_readonly(tmp_path):
@@ -278,7 +279,7 @@ def test_no_path_no_env_raises(monkeypatch):
         DuckDBCPCMDataLoader()
 
 
-# ── factory ────────────────────────────────────────────────────────
+# â”€â”€ factory â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 
 def test_get_loader_routes_to_duckdb(tmp_path, monkeypatch):
@@ -304,7 +305,7 @@ def test_get_loader_force_remote_skips_local(tmp_path, monkeypatch):
     try:
         loader = get_loader()
     except (KeyError, ValueError, FileNotFoundError):
-        # No Supabase creds → confirmed we tried the remote branch, not DuckDB.
+        # No Supabase creds â†’ confirmed we tried the remote branch, not DuckDB.
         return
     assert not isinstance(loader, DuckDBCPCMDataLoader)
 

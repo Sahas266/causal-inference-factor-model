@@ -14,7 +14,7 @@ import pandas as pd
 from dotenv import load_dotenv
 from supabase import create_client, Client
 
-from causal_portfolio.data.base_loader import BaseCPCMDataLoader
+from causal_portfolio.data.base_loader import BaseCPCMDataLoader, _to_utc_bound
 
 logger = logging.getLogger("cpcm.data")
 
@@ -52,7 +52,10 @@ class CPCMDataLoader(BaseCPCMDataLoader):
         rows = self._fetch_all(
             table="asset_metrics_best",
             select="asset,metric,time,value",
-            filters={"gte": {"time": start}, "lte": {"time": end}},
+            filters={
+                "gte": {"time": _to_utc_bound(start, "start")},
+                "lte": {"time": _to_utc_bound(end, "end")},
+            },
             in_filters={"asset": assets, "metric": metrics},
         )
         return pd.DataFrame(rows)
@@ -63,8 +66,8 @@ class CPCMDataLoader(BaseCPCMDataLoader):
             select="metric,time,value",
             filters={
                 "eq": {"asset": "macro"},
-                "gte": {"time": start},
-                "lte": {"time": end},
+                "gte": {"time": _to_utc_bound(start, "start")},
+                "lte": {"time": _to_utc_bound(end, "end")},
             },
             in_filters={"metric": series_ids},
         )
@@ -98,7 +101,13 @@ class CPCMDataLoader(BaseCPCMDataLoader):
                 for col, values in in_filters.items():
                     query = query.in_(col, values)
 
-            query = query.order("time").range(offset, offset + PAGE_SIZE - 1)
+            # Total ordering: `time` alone is not unique across (asset, metric)
+            # — pagination on a non-unique sort can skip/duplicate rows at
+            # page boundaries when the server's tiebreak order varies.
+            query = (
+                query.order("time").order("asset").order("metric")
+                .range(offset, offset + PAGE_SIZE - 1)
+            )
             result = query.execute()
             rows = result.data or []
             all_rows.extend(rows)

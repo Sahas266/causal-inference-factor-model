@@ -15,6 +15,7 @@ AND ExecutionConfig.dry_run=False (caller's responsibility to gate).
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import time
@@ -229,14 +230,19 @@ class HLAdapter:
 
     def _submit_single_ioc(
         self, coin: str, is_buy: bool, size: float, limit_px: float,
-        reduce_only: bool,
+        reduce_only: bool, cloid: str | None = None,
     ) -> dict[str, Any]:
         """Submit one IOC limit order. Returns the raw HL response."""
         ex = self._ensure_exchange()
+        kwargs: dict[str, Any] = {}
+        if cloid is not None:
+            from hyperliquid.utils.types import Cloid
+            kwargs["cloid"] = Cloid.from_str(cloid)
         return ex.order(
             coin, is_buy, size, limit_px,
             order_type={"limit": {"tif": "Ioc"}},
             reduce_only=reduce_only,
+            **kwargs,
         )
 
     def submit_orders_book_aware(self, orders: list[Order]) -> dict[str, Any]:
@@ -284,8 +290,15 @@ class HLAdapter:
                 size_r = self._round_size_down(remaining, sz_dec)
                 if size_r < min_size:
                     break
+                # Per-slice deterministic cloid derived from the plan order's
+                # cloid + attempt index — a network-level retry of the same
+                # slice gets the same cloid and HL rejects the duplicate.
+                slice_cloid = "0x" + hashlib.sha256(
+                    f"{o.cloid}:{attempt}".encode()
+                ).hexdigest()[:32]
                 resp = self._submit_single_ioc(
                     o.coin, o.is_buy, size_r, px, o.reduce_only,
+                    cloid=slice_cloid,
                 )
                 fr = parse_fill_response(resp)
                 if fr.filled_size > 0:
@@ -296,6 +309,16 @@ class HLAdapter:
                     last_error = None
                 else:
                     last_error = fr.error
+                    if fr.is_ambiguous:
+                        # We couldn't tell whether the slice filled. Retrying
+                        # blind could double-fill — abort this coin and let
+                        # reconcile/post-state surface the drift.
+                        logger.error(
+                            "%s: ambiguous order response (%s) — aborting "
+                            "retries to avoid a possible double-fill",
+                            o.coin, fr.error,
+                        )
+                        break
                     # Oracle reject → too aggressive for current band; no-match
                     # → not aggressive enough. Either way a fresh book on the
                     # next attempt re-clamps. Brief pause to let it move.
@@ -412,7 +435,14 @@ def _execute_plan_inner(
                             response=response, post_state=post, drifts=drifts)
     except Exception as e:
         logger.exception("submit_orders failed")
-        return SubmitResult(plan=plan, submitted=False, error=str(e))
+        # Best-effort post-state snapshot: orders may have partially gone out
+        # before the failure, and the audit log should capture where we landed.
+        post = None
+        try:
+            post = adapter.fetch_state()
+        except Exception:
+            logger.warning("post-failure state fetch also failed")
+        return SubmitResult(plan=plan, submitted=False, post_state=post, error=str(e))
 
 
 def _detect_cancel_race(plan, mid_state, tolerance_usd: float = 25.0) -> bool:
@@ -423,7 +453,12 @@ def _detect_cancel_race(plan, mid_state, tolerance_usd: float = 25.0) -> bool:
     tolerance_usd — that's our signal a stale order filled.
     """
     pre = plan.current_state.positions
-    coins_touched = set(plan.target_usd.keys())
+    # Check planned coins plus anything held pre-trade — a position we hold
+    # but don't retarget can still close (e.g. stop-loss) during the cancel
+    # window, invalidating the equity snapshot. Coins appearing in mid_state
+    # only (never planned, never held) are deliberately ignored: that's
+    # outside activity, not our race.
+    coins_touched = set(plan.target_usd.keys()) | set(pre.keys())
     for coin in coins_touched:
         pre_notional = pre[coin].notional_usd if coin in pre else 0.0
         mid_notional = mid_state.positions[coin].notional_usd if coin in mid_state.positions else 0.0

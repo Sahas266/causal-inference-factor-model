@@ -59,9 +59,21 @@ def append(result: SubmitResult, log_dir: Path | None = None) -> Path:
 
 
 def read_log(date: str, log_dir: Path | None = None) -> list[dict]:
-    """Read all records for a given UTC date (YYYY-MM-DD)."""
+    """Read all records for a given UTC date (YYYY-MM-DD).
+
+    Malformed lines (e.g. a truncated write from a crash) are skipped with a
+    warning rather than poisoning the whole day's log.
+    """
     log_dir = log_dir or LOG_DIR
     path = log_dir / f"rebalance-{date}.jsonl"
     if not path.exists():
         return []
-    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    records = []
+    for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        if not line.strip():
+            continue
+        try:
+            records.append(json.loads(line))
+        except json.JSONDecodeError as e:
+            logger.warning("audit: skipping malformed line %d in %s: %s", lineno, path, e)
+    return records

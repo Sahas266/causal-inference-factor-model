@@ -88,7 +88,8 @@ def slice_metrics(result, returns_index, slice_start, slice_end) -> dict:
     port_values = np.cumprod(1 + r)
     return {
         "n_obs": int(mask.sum()),
-        "total_return": float(port_values[-1] / port_values[0] - 1),
+        # port_values[0] is already 1 + r[0]; start value is 1.0 by construction
+        "total_return": float(port_values[-1] - 1.0),
         "sharpe": float(sharpe_ratio(r)),
         "sortino": float(sortino_ratio(r)),
         "max_dd": float(max_drawdown(r)),

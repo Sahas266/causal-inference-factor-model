@@ -5,7 +5,7 @@ Provides SQLAlchemy engine, session management, and TimescaleDB utilities.
 
 from typing import Generator
 from contextlib import contextmanager
-from sqlalchemy import create_engine, event
+from sqlalchemy import create_engine, event, text
 from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.pool import QueuePool
 
@@ -151,7 +151,7 @@ def check_database_health() -> bool:
     """
     try:
         with get_db_session() as db:
-            db.execute("SELECT 1")
+            db.execute(text("SELECT 1"))
         return True
     except Exception as e:
         logger.error(f"Database health check failed: {e}")

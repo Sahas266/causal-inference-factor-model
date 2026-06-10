@@ -19,6 +19,9 @@ from .transformer import FredTransformer
 
 logger = logging.getLogger('backfill_system.fred')
 
+# Max consecutive retries for a single series before skipping it.
+MAX_SERIES_RETRIES = 5
+
 
 class FredProvider(DataProviderInterface):
     """
@@ -141,29 +144,37 @@ class FredProvider(DataProviderInterface):
         start_str = start_time.strftime('%Y-%m-%d')
         end_str = end_time.strftime('%Y-%m-%d')
 
-        for series_id in series_ids:
-            self.rate_limiter.acquire()
+        failed_series: List[str] = []
 
-            try:
-                raw = self.client.get_series_observations(
-                    series_id=series_id,
-                    observation_start=start_str,
-                    observation_end=end_str,
-                )
-            except Exception as e:
-                error_info = self.handle_error(e, {'series_id': series_id})
-                if error_info.get('retry'):
-                    wait = error_info.get('wait_seconds', 10)
-                    logger.warning(f"Retrying {series_id} after {wait}s...")
-                    time.sleep(wait)
+        for series_id in series_ids:
+            raw = None
+            retries = 0
+            while True:
+                self.rate_limiter.acquire()
+                try:
                     raw = self.client.get_series_observations(
                         series_id=series_id,
                         observation_start=start_str,
                         observation_end=end_str,
                     )
-                else:
+                    break
+                except Exception as e:
+                    error_info = self.handle_error(e, {'series_id': series_id})
+                    retries += 1
+                    if error_info.get('retry') and retries <= MAX_SERIES_RETRIES:
+                        # Linear backoff, capped at 4x the base wait.
+                        wait = error_info.get('wait_seconds', 10) * min(retries, 4)
+                        logger.warning(
+                            f"Retry {retries}/{MAX_SERIES_RETRIES} for {series_id} after {wait}s..."
+                        )
+                        time.sleep(wait)
+                        continue
                     logger.error(f"Skipping {series_id}: {e}")
-                    continue
+                    failed_series.append(series_id)
+                    break
+
+            if raw is None:
+                continue
 
             records = self.transformer.transform(
                 raw,
@@ -177,6 +188,16 @@ class FredProvider(DataProviderInterface):
             if records:
                 logger.info(f"FRED {series_id}: {len(records)} records [{start_str} -> {end_str}]")
                 yield records
+
+        # Raise after streaming the successful series so the orchestrator
+        # marks this endpoint failed (retryable) instead of completed.
+        # Already-yielded records are upserted idempotently, so a re-run
+        # is safe.
+        if failed_series:
+            raise RuntimeError(
+                f"FRED fetch failed for {len(failed_series)}/{len(series_ids)} "
+                f"series: {', '.join(failed_series)}"
+            )
 
     def get_rate_limiter(self) -> RateLimiterInterface:
         if not self._initialized:

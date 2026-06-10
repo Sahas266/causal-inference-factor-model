@@ -15,8 +15,9 @@ Then you can pipe it to the executor:
     python -m causal_portfolio.execution.cli execute \\
         --weights weights.json --live --testnet
 
-Both commands are designed to be safe to run daily — the no-trade band in
-the executor will skip rebalances when the regime label hasn't changed.
+Safe to run daily: when the regime label hasn't changed, the resulting
+deltas are near zero and the rebalancer skips sizes that round to nothing
+(there is no explicit no-trade band — tiny drift trades may still go out).
 
 Usage:
     python -m causal_portfolio.run_regime_weights
@@ -134,10 +135,15 @@ def compute_current_regime(
 
 
 def _stress_fallback(n_states: int, reason: str) -> dict:
-    """Conservative default when we can't tell the regime: go to stress (cash)."""
+    """Conservative default when we can't tell the regime: go to stress (cash).
+
+    States are sorted by stress (feature-0 mean) at fit time, so the
+    highest-index state is always the most stressed one.
+    """
+    stress = n_states - 1
     return {
-        "regime": 1,  # stress
-        "posterior": [0.0, 1.0] if n_states == 2 else [0.0, 0.0, 1.0][:n_states],
+        "regime": stress,
+        "posterior": [0.0] * stress + [1.0],
         "as_of": datetime.now(timezone.utc).date().isoformat(),
         "feature_columns": [],
         "hmm_window": 0,
@@ -204,7 +210,11 @@ def regime_to_weights(
     regime: int, assets: list[str],
     stress_state: int = 1, stress_allocation: float = 0.0,
 ) -> dict[str, float]:
-    """Convert a regime label to the executor's weights JSON shape."""
+    """Convert a regime label to the executor's weights JSON shape.
+
+    `stress_state` must be the highest-index state (n_states - 1) — states
+    are sorted by stress at fit time. The default of 1 matches n_states=2.
+    """
     n = len(assets)
     if regime == stress_state:
         per_asset = stress_allocation / n if n else 0.0
@@ -232,8 +242,10 @@ def main():
         assets=assets, end_date=args.end,
         hmm_window=args.hmm_window, n_states=args.n_states,
     )
+    stress_state = info.get("n_states", args.n_states) - 1
     weights = regime_to_weights(
         info["regime"], assets,
+        stress_state=stress_state,
         stress_allocation=args.stress_allocation,
     )
 
@@ -248,7 +260,9 @@ def main():
     }
 
     # Console summary
-    regime_name = "STRESS (cash)" if info["regime"] == 1 else "CALM (long basket)"
+    regime_name = (
+        "STRESS (cash)" if info["regime"] == stress_state else "CALM (long basket)"
+    )
     print(f"As of {info['as_of']}:")
     print(f"  Regime: {info['regime']} — {regime_name}")
     print(f"  Posterior: {[round(x, 3) for x in info['posterior']]}")

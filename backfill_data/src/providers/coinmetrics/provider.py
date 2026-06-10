@@ -18,6 +18,10 @@ from .transformer import CoinMetricsTransformer
 
 logger = logging.getLogger('backfill_system.coinmetrics')
 
+# Cap consecutive retries of a single page so transient-looking errors that
+# never resolve (or unknown errors classified as retryable) can't loop forever.
+MAX_PAGE_RETRIES = 5
+
 
 class CoinMetricsProvider(DataProviderInterface):
     """
@@ -257,13 +261,14 @@ class CoinMetricsProvider(DataProviderInterface):
         
         cursor = None
         page = 0
-        
+        retries = 0  # consecutive failures for the current page
+
         while True:
             page += 1
-            
+
             # Respect rate limits
             self.rate_limiter.acquire()
-            
+
             # Fetch batch
             try:
                 result = self.fetch_data_batch(
@@ -274,15 +279,22 @@ class CoinMetricsProvider(DataProviderInterface):
                 )
             except Exception as e:
                 error_info = self.handle_error(e, {'endpoint_config': endpoint_config})
-                if error_info.get('retry', False):
+                retries += 1
+                if error_info.get('retry', False) and retries <= MAX_PAGE_RETRIES:
                     import time
-                    wait_seconds = error_info.get('wait_seconds', 10)
-                    logger.warning(f"Error occurred, waiting {wait_seconds}s before retry")
+                    # Linear backoff on consecutive failures, capped at 4x
+                    wait_seconds = error_info.get('wait_seconds', 10) * min(retries, 4)
+                    logger.warning(
+                        f"Error occurred (attempt {retries}/{MAX_PAGE_RETRIES}), "
+                        f"waiting {wait_seconds}s before retry"
+                    )
                     time.sleep(wait_seconds)
+                    page -= 1  # same page, not a new one
                     continue
                 else:
                     raise
-            
+            retries = 0
+
             if result.data:
                 # Determine schema type
                 endpoint_type = endpoint_config.get('endpoint_type', '')
@@ -354,9 +366,9 @@ class CoinMetricsProvider(DataProviderInterface):
         Returns:
             Error handling instructions
         """
-        if isinstance(error, requests.HTTPError):
+        if isinstance(error, requests.HTTPError) and error.response is not None:
             status_code = error.response.status_code
-            
+
             if status_code == 429:
                 # Rate limit exceeded
                 retry_after = int(error.response.headers.get('Retry-After', 20))

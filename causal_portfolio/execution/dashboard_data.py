@@ -65,7 +65,9 @@ def run_strategy(strategy: str, assets: tuple[str, ...], start: str, end: str,
             "rebalances": len(strat.rebalance_dates),
         },
         "bh_metrics": {
-            "total": float(bh_curve[-1] / bh_curve[0] - 1),
+            # cumprod starts at 1+r[0]; dividing by bh_curve[0] would drop
+            # the first day's return (same convention as engine.from_returns).
+            "total": float(bh_curve[-1] - 1.0),
             "sharpe": bh.sharpe, "max_dd": bh.max_dd,
         },
         "target_weights": target_weights,

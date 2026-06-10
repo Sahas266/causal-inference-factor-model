@@ -129,6 +129,15 @@ class FillResult:
     def is_no_match(self) -> bool:
         return self.error is not None and "match" in self.error.lower()
 
+    @property
+    def is_ambiguous(self) -> bool:
+        """True when we couldn't tell whether the order filled (unparseable
+        or unknown response shape). Retrying blindly could double-fill."""
+        return self.error is not None and (
+            self.error.startswith("unparseable response")
+            or self.error.startswith("unknown status")
+        )
+
 
 def parse_fill_response(resp: dict) -> FillResult:
     """Extract fill size / avg price / error from an HL order response.

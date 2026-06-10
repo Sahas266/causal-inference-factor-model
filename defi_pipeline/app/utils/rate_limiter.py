@@ -107,7 +107,7 @@ class RateLimiter:
             if len(self.wait_times) > 100:
                 self.wait_times.pop(0)
 
-            logger.debug(".2f")
+            logger.debug(f"Rate limit reached, waiting {wait_time:.2f}s")
             await asyncio.sleep(wait_time)
 
         # Consume token

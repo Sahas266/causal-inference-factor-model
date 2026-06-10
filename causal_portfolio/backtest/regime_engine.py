@@ -15,11 +15,15 @@ This is research code — the comparable global backtester is CPCMBacktester
 which takes already-selected drivers and uses one global solver.
 
 Note on look-ahead: the in-window decode (step 2) uses Viterbi over the
-training window only, so it doesn't see future. The current regime label
-(step 4) is from forward filter — strictly causal. There's still a subtle
-relabeling drift between refit boundaries that we don't address yet (state 0
-may not point to the same true regime across refits — see the diagnostic
-results in driver_selection_regimes.md).
+training window only, so it doesn't see future. The day-t regime decision
+(step 4) uses ONLY data through day t-1: yesterday's filtered posterior
+pushed one step through the transition matrix, P(state_t | data <= t-1).
+The same-day filtered posterior conditions on day-t VIX and realized vol
+(which includes the day-t return we're about to earn) — using it would
+peek one day ahead. There's still a subtle relabeling drift between refit
+boundaries that we don't address yet (state 0 may not point to the same
+true regime across refits — see the diagnostic results in
+driver_selection_regimes.md).
 """
 
 from __future__ import annotations
@@ -163,6 +167,12 @@ class RegimeConditionalBacktester:
         # Global fallback (used before HMM is initialized and when a regime is empty)
         self._fit_global_fallback(R, F_panel, test_start)
 
+        # Filtered posterior as of the PREVIOUS close. The day-t decision may
+        # only use data through t-1: the same-day filtered posterior
+        # roller.posterior(t) conditions on day-t VIX and realized vol (which
+        # includes the day-t return we're about to earn) — a one-day peek.
+        prev_posterior: np.ndarray | None = None
+
         for t in range(test_start, T):
             idx = t - test_start
             should_rebalance = (idx % self.rebalance_freq == 0)
@@ -177,8 +187,16 @@ class RegimeConditionalBacktester:
                     feats.iloc[t - self.train_window : t],
                 )
 
-            # ── Current regime via forward filter (causal) ──────────
-            posterior = roller.posterior(t)
+            # ── Day-t regime decision (causal: data through t-1 only) ─
+            if prev_posterior is None:
+                # First test day: filter the window ending at t-1.
+                prev_posterior = roller.classifier.forward_filter(
+                    feats.iloc[t - self.hmm_window : t]
+                )[-1]
+            # One-step-ahead prediction P(state_t | data <= t-1). Across a
+            # refit boundary prev_posterior comes from the previous model;
+            # stress-sorted labels keep the state meaning consistent.
+            posterior = prev_posterior @ roller.classifier.transition_matrix()
             current_regime = int(posterior.argmax())
             regime_labels[idx] = current_regime
             posterior_history[idx] = posterior
@@ -205,6 +223,9 @@ class RegimeConditionalBacktester:
                     np.nansum(current_weights[valid] * day_return[valid])
                 )
             weights_history[idx] = current_weights
+
+            # Day-t filtered posterior becomes tomorrow's decision input.
+            prev_posterior = roller.posterior(t)
 
         # ── Metrics ──────────────────────────────────────────────────
         # coherence_score not computed here; could add via martingale_defect

@@ -14,6 +14,34 @@ from src.core.interfaces import DataProviderInterface
 
 logger = logging.getLogger('backfill_system.orchestrator')
 
+# Canonical metric-name normalization applied at write time. The warehouse
+# standardized the price metric to 'price' (2026-03 audit); some provider
+# transformers still emit their native names, so re-runs would otherwise
+# re-introduce legacy rows that shadow or fragment the 'price' series.
+METRIC_NORMALIZATION = {
+    'PriceUSD': 'price',
+    'price_usd': 'price',
+}
+
+# Canonical provider priorities — single source of truth, matching the
+# audited warehouse state (lower wins in asset_metrics_best). Committed
+# endpoint configs drifted over time; values stamped here override config
+# `priority` so re-runs cannot revert the audit. Unknown providers fall
+# back to the config value.
+PROVIDER_PRIORITY = {
+    'coinmetrics': 1,   # non-price metrics (price is special-cased to 3)
+    'fred': 1,
+    'artemis': 2,
+    'defillama': 2,
+    'coingecko': 3,
+    'hyperliquid': 3,
+    'dune': 4,
+    'allium': 4,
+    'derived': 99,
+}
+# Artemis is the authoritative price source; CoinMetrics price is a fallback.
+COINMETRICS_PRICE_PRIORITY = 3
+
 
 def _parse_date_range_bound(value: Optional[str], default_hour: int) -> Optional[datetime]:
     """
@@ -296,16 +324,10 @@ class BackfillOrchestrator:
         try:
             logger.info(f"Starting backfill: {endpoint_id}")
             
-            # Initialize progress tracking
-            self.progress_tracker.initialize_progress(
-                endpoint_id=endpoint_id,
-                provider=provider_name,
-                endpoint_type=provider_config.get('config', {}).get('endpoint_type', 'unknown'),
-                table_name=endpoint_config['table'],
-                config=provider_config
-            )
-            
-            # Check if already completed
+            # Check if already completed BEFORE initializing — the upsert in
+            # initialize_progress resets status to 'pending' and zeroes the
+            # counters, which would make this skip-check dead code and wipe
+            # the completed marker on every re-run.
             progress = self.progress_tracker.get_progress(endpoint_id)
             if progress and progress.get('status') == 'completed':
                 logger.info(f"Endpoint {endpoint_id} already completed, skipping")
@@ -316,7 +338,16 @@ class BackfillOrchestrator:
                     'records': 0,
                     'skipped': True
                 }
-            
+
+            # Initialize progress tracking
+            self.progress_tracker.initialize_progress(
+                endpoint_id=endpoint_id,
+                provider=provider_name,
+                endpoint_type=provider_config.get('config', {}).get('endpoint_type', 'unknown'),
+                table_name=endpoint_config['table'],
+                config=provider_config
+            )
+
             # Get date range
             start_time = provider_config.get('actual_start')
             end_time = provider_config.get('actual_end')
@@ -340,10 +371,22 @@ class BackfillOrchestrator:
                 if not data_chunk:
                     continue
                 
-                # Add provider metadata to each record
+                # Add provider metadata to each record. Metric names and
+                # priorities are normalized here (single chokepoint) so
+                # config drift cannot corrupt the warehouse — see
+                # METRIC_NORMALIZATION / PROVIDER_PRIORITY above.
                 for record in data_chunk:
                     record['provider'] = provider_name
-                    record['provider_priority'] = provider_config.get('priority', 999)
+                    metric = record.get('metric')
+                    if metric in METRIC_NORMALIZATION:
+                        metric = METRIC_NORMALIZATION[metric]
+                        record['metric'] = metric
+                    priority = PROVIDER_PRIORITY.get(
+                        provider_name, provider_config.get('priority', 999)
+                    )
+                    if provider_name == 'coinmetrics' and metric == 'price':
+                        priority = COINMETRICS_PRICE_PRIORITY
+                    record['provider_priority'] = priority
                 
                 # Write to database
                 self.db_writer.upsert_batch(

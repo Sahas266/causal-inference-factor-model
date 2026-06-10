@@ -41,7 +41,12 @@ def write_config(path, config, dry_run=False):
 
 
 def make_endpoint_config(endpoint_id, description, provider_name, priority, endpoint_type, params, date_range):
-    """Base builder for endpoint configs — handles shared boilerplate."""
+    """Base builder for endpoint configs — handles shared boilerplate.
+
+    Note: `priority` here is advisory. The orchestrator stamps the canonical
+    PROVIDER_PRIORITY (src/core/orchestrator.py) onto every record at write
+    time, so the values below just need to stay consistent with that map.
+    """
     return {
         "endpoint_id": endpoint_id,
         "description": description,
@@ -121,7 +126,7 @@ def make_chain_tvl(coin):
         endpoint_id=f"{t}_chain_tvl_defillama",
         description=f"{coin['display']} historical chain TVL from DefiLlama",
         provider_name="defillama",
-        priority=1,
+        priority=2,
         endpoint_type="chain/tvl",
         params={"schema_type": "chain_tvl", "chain": dl["chain"], "asset": t},
         date_range={"start": dr["start"], "end": dr["end"]},
@@ -136,7 +141,7 @@ def make_protocol_tvl(coin):
         endpoint_id=f"{t}_protocol_tvl_defillama",
         description=f"{coin['display']} protocol TVL from DefiLlama",
         provider_name="defillama",
-        priority=1,
+        priority=2,
         endpoint_type="protocol/tvl",
         params={"schema_type": "protocol_tvl", "protocol": dl["protocol"], "asset": t},
         date_range={"start": dr["start"], "end": dr["end"]},
