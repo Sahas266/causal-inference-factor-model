@@ -70,16 +70,71 @@ class ComboDriverSelector:
                 f"m={m} exceeds number of candidates ({n_candidates})"
             )
 
-        results: list[tuple[tuple[str, ...], float]] = []
-
-        for subset_idx in combinations(range(n_candidates), m):
-            subset_names = tuple(col_names[i] for i in subset_idx)
-            score = self._commonality_score(
-                R.values, C.values[:, list(subset_idx)]
-            )
-            results.append((subset_names, score))
+        if not np.isnan(C.values).any():
+            # No NaNs in candidates → every subset shares the same rows,
+            # so per-subset OLS reduces to selections from precomputed
+            # Gram/cross-product matrices (one pair of matmuls total).
+            results = self._rank_subsets_gram(R.values, C.values, col_names, m)
+        else:
+            # Per-subset NaN masks differ — fall back to per-subset OLS.
+            results = [
+                (
+                    tuple(col_names[i] for i in subset_idx),
+                    self._commonality_score(
+                        R.values, C.values[:, list(subset_idx)]
+                    ),
+                )
+                for subset_idx in combinations(range(n_candidates), m)
+            ]
 
         results.sort(key=lambda x: x[1])
+        return results
+
+    @staticmethod
+    def _rank_subsets_gram(
+        returns: np.ndarray,
+        candidates: np.ndarray,
+        col_names: list[str],
+        m: int,
+    ) -> list[tuple[tuple[str, ...], float]]:
+        """Score all m-subsets via precomputed cross-products.
+
+        For NaN-free candidates, the OLS residual second-moment matrix of any
+        subset S is S_RR - B_S' G_S^{-1} B_S (after centering, equivalent to
+        fitting an intercept), so each subset costs an m x m solve instead of
+        a full regression over T rows.
+        """
+        T, n_assets = returns.shape
+        n_candidates = candidates.shape[1]
+
+        if T < max(n_assets, m) + 5:
+            return [
+                (tuple(col_names[i] for i in subset_idx), float("inf"))
+                for subset_idx in combinations(range(n_candidates), m)
+            ]
+
+        Rc = returns - returns.mean(axis=0)
+        Cc = candidates - candidates.mean(axis=0)
+        G = Cc.T @ Cc        # (k, k) candidate Gram matrix
+        B = Cc.T @ Rc        # (k, n_assets) cross-products
+        S_RR = Rc.T @ Rc     # (n_assets, n_assets)
+
+        results: list[tuple[tuple[str, ...], float]] = []
+        for subset_idx in combinations(range(n_candidates), m):
+            idx = list(subset_idx)
+            G_s = G[np.ix_(idx, idx)]
+            B_s = B[idx]
+            # lstsq handles rank-deficient subsets (residuals are the unique
+            # projection regardless of which least-squares solution is used)
+            beta = np.linalg.lstsq(G_s, B_s, rcond=None)[0]
+            M = (S_RR - B_s.T @ beta) / T
+            std = np.sqrt(np.clip(np.diag(M), 0.0, None))
+            std = np.where(std < 1e-15, 1.0, std)
+            corr = M / std[:, None] / std[None, :]
+            eigenvalues = linalg.eigvalsh(corr)
+            results.append(
+                (tuple(col_names[i] for i in subset_idx), float(eigenvalues[-1]))
+            )
         return results
 
     @staticmethod

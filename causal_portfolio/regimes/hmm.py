@@ -278,6 +278,65 @@ def _logsumexp(a: np.ndarray, axis=None, keepdims: bool = False) -> np.ndarray:
 # ── rolling-window fit+decode (full causal pipeline) ─────────────────
 
 
+class RollingHMM:
+    """Rolling-window HMM refits with amortized daily forward filtering.
+
+    The naive causal pipeline re-runs an O(window) forward pass for EVERY
+    day between refits (the window slides one day at a time). Since the
+    fitted model is fixed between refits, we instead run ONE forward pass
+    per refit segment covering all of its days, then answer daily posterior
+    queries by lookup — ~refit_every× fewer forward recursions.
+
+    Day t's posterior is conditioned on observations from
+    (segment_start - window + 1) .. t: at least `window` days of history
+    (up to refit_every - 1 more than the sliding window gave). Strictly
+    causal — only past data, same fitted model; labels can differ slightly
+    from the per-day sliding window near segment ends because the filter
+    starts from an earlier (not later) observation.
+    """
+
+    def __init__(
+        self,
+        features: pd.DataFrame,
+        window: int,
+        refit_every: int = 21,
+        **classifier_kwargs,
+    ):
+        self.features = features
+        self.window = window
+        self.refit_every = refit_every
+        self.classifier_kwargs = classifier_kwargs
+        self.classifier: RegimeClassifier | None = None
+        self._last_refit_t = -1
+        self._seg_start = -1
+        self._seg_post: np.ndarray | None = None
+
+    def needs_refit(self, t: int) -> bool:
+        return (self.classifier is None
+                or (t - self._last_refit_t) >= self.refit_every)
+
+    def refit(self, t: int) -> RegimeClassifier:
+        """Refit on features[t-window : t] and forward-filter the upcoming
+        segment [t, t + refit_every) in a single pass."""
+        if t < self.window:
+            raise ValueError(f"need t >= window ({self.window}), got t={t}")
+        self.classifier = RegimeClassifier(**self.classifier_kwargs).fit(
+            self.features.iloc[t - self.window : t]
+        )
+        self._last_refit_t = t
+        seg_end = min(t + self.refit_every, len(self.features))
+        X = self.features.iloc[t - self.window + 1 : seg_end]
+        self._seg_start = t
+        self._seg_post = self.classifier.forward_filter(X)[self.window - 1 :]
+        return self.classifier
+
+    def posterior(self, t: int) -> np.ndarray:
+        """Causal filtered posterior P(state_t | data up to t) for day t."""
+        if self.needs_refit(t):
+            self.refit(t)
+        return self._seg_post[t - self._seg_start]
+
+
 def rolling_fit_decode(
     features: pd.DataFrame,
     window_size: int,
@@ -290,11 +349,10 @@ def rolling_fit_decode(
     """Fully causal regime labels via rolling-window fit + forward filter.
 
     For each timestep t >= window_size:
-      1. If t is a refit boundary (t % refit_every == 0 since first valid t),
-         refit the HMM on features[t - window_size : t].
-      2. Forward-filter the window and take the label at the last index.
-      3. (Optional) re-use the previously-fit model between refit boundaries
-         for speed — its parameters are still based only on past data.
+      1. If t is a refit boundary, refit the HMM on
+         features[t - window_size : t].
+      2. Take the argmax of the causal filtered posterior at t (computed in
+         one amortized forward pass per refit segment — see RollingHMM).
 
     Args:
         features: (T, D) DataFrame of regime features, datetime-indexed.
@@ -312,21 +370,13 @@ def rolling_fit_decode(
     if T < window_size:
         return pd.Series(labels, index=features.index, name="regime")
 
-    classifier: RegimeClassifier | None = None
-    last_refit = -np.inf
-
+    roller = RollingHMM(
+        features, window_size, refit_every,
+        n_states=n_states, random_state=random_state,
+        covariance_type=covariance_type, n_restarts=n_restarts,
+    )
     for t in range(window_size, T):
-        if classifier is None or (t - last_refit) >= refit_every:
-            window = features.iloc[t - window_size : t]
-            classifier = RegimeClassifier(
-                n_states=n_states, random_state=random_state,
-                covariance_type=covariance_type, n_restarts=n_restarts,
-            ).fit(window)
-            last_refit = t
-
-        # Forward-filter the most recent `window_size` observations
-        window = features.iloc[t - window_size + 1 : t + 1]
-        labels[t] = classifier.predict_forward(window)[-1]
+        labels[t] = roller.posterior(t).argmax()
 
     return pd.Series(labels, index=features.index, name="regime").astype("Int64")
 

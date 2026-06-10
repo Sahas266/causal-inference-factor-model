@@ -104,6 +104,7 @@ class HLAdapter:
         self._exchange: Any = None
         self._Account = Account
         self._Exchange = Exchange
+        self._meta_cache: dict[str, AssetMeta] | None = None
 
     def _ensure_exchange(self) -> Any:
         if self._exchange is None:
@@ -149,8 +150,15 @@ class HLAdapter:
         raw = self.info.all_mids()
         return {coin: float(px) for coin, px in raw.items()}
 
-    def fetch_meta(self) -> dict[str, AssetMeta]:
-        """Pull per-coin metadata (size decimals, max leverage)."""
+    def fetch_meta(self, refresh: bool = False) -> dict[str, AssetMeta]:
+        """Pull per-coin metadata (size decimals, max leverage).
+
+        Memoized — asset metadata is effectively static for the life of an
+        adapter, and book-aware execution would otherwise re-fetch it on
+        every IOC slice. Pass refresh=True to force a re-fetch.
+        """
+        if self._meta_cache is not None and not refresh:
+            return self._meta_cache
         raw = self.info.meta()
         meta: dict[str, AssetMeta] = {}
         for asset_info in raw.get("universe", []):
@@ -163,6 +171,7 @@ class HLAdapter:
                 coin=coin, sz_decimals=sz_dec,
                 max_leverage=max_lev, min_size=10 ** -sz_dec,
             )
+        self._meta_cache = meta
         return meta
 
     def fetch_open_order_ids(self) -> list[int]:
@@ -186,16 +195,13 @@ class HLAdapter:
 
     def cancel_all_open(self) -> dict[str, Any] | None:
         """Cancel every open order on this account. Best-effort."""
-        oids = self.fetch_open_order_ids()
-        if not oids:
-            return None
-        ex = self._ensure_exchange()
-        # SDK signature: bulk_cancel(list of {coin, oid}) — needs coin per oid.
-        # Easier path: query frontend_open_orders which includes coin, then cancel.
+        # SDK signature: bulk_cancel(list of {coin, oid}) — needs coin per oid,
+        # so query frontend_open_orders (which includes coin) in one call.
         raw = self.info.frontend_open_orders(self.address)
         requests = [{"coin": o["coin"], "oid": int(o["oid"])} for o in raw if "oid" in o]
         if not requests:
             return None
+        ex = self._ensure_exchange()
         return ex.bulk_cancel(requests)
 
     def submit_orders(self, orders: list[Order]) -> dict[str, Any]:

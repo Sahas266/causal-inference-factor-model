@@ -40,6 +40,9 @@ DEFAULT_ASSETS = ("btc", "eth", "sol")
 
 # Cache the expensive backtest + data load
 run_strategy = st.cache_data(show_spinner="Running backtest…", ttl=3600)(dd.run_strategy)
+# Cache live account reads briefly so every widget interaction doesn't
+# re-hit the Hyperliquid API (3 network calls per rerun otherwise).
+fetch_live_account = st.cache_data(show_spinner=False, ttl=30)(dd.fetch_live_account)
 
 
 st.title("⚡ CPCM Execution Dashboard")
@@ -111,7 +114,7 @@ with wc2:
 # ── Live account ────────────────────────────────────────────────────
 
 st.subheader(f"💰 Live {network.title()} Account")
-state, mids, err = dd.fetch_live_account(testnet=(network == "testnet"))
+state, mids, err = fetch_live_account(testnet=(network == "testnet"))
 if err:
     st.warning(f"Could not reach Hyperliquid ({network}): {err}")
 elif state is not None:

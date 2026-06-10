@@ -35,7 +35,11 @@ from causal_portfolio.backtest.engine import BacktestResult
 from causal_portfolio.factors.combo_selector import ComboDriverSelector
 from causal_portfolio.filters.ekf import CPCMKalmanFilter
 from causal_portfolio.optimizer.manifold import ManifoldOptimizer, estimate_covariance
-from causal_portfolio.regimes.hmm import RegimeClassifier, build_regime_features
+from causal_portfolio.regimes.hmm import (
+    RegimeClassifier,
+    RollingHMM,
+    build_regime_features,
+)
 from causal_portfolio.solvers.v1_linear import V1LinearSolver
 
 logger = logging.getLogger("cpcm.backtest.regime")
@@ -149,9 +153,11 @@ class RegimeConditionalBacktester:
         rebalance_dates: list = []
         per_regime_rebal: dict[int, int] = {k: 0 for k in range(self.n_states)}
 
-        # HMM refit state
-        classifier: Optional[RegimeClassifier] = None
-        last_hmm_refit_t = -np.inf
+        # HMM refit state (amortized daily forward filter — see RollingHMM)
+        roller = RollingHMM(
+            feats, self.hmm_window, self.hmm_refit_every,
+            n_states=self.n_states, n_restarts=self.hmm_n_restarts,
+        )
         regime_models: dict[int, _RegimeModel] = {}
 
         # Global fallback (used before HMM is initialized and when a regime is empty)
@@ -162,22 +168,17 @@ class RegimeConditionalBacktester:
             should_rebalance = (idx % self.rebalance_freq == 0)
 
             # ── HMM refit ────────────────────────────────────────────
-            if classifier is None or (t - last_hmm_refit_t) >= self.hmm_refit_every:
-                window_feats = feats.iloc[t - self.hmm_window : t]
-                classifier = RegimeClassifier(
-                    n_states=self.n_states, n_restarts=self.hmm_n_restarts,
-                ).fit(window_feats)
+            if roller.needs_refit(t):
+                classifier = roller.refit(t)
                 # Per-regime models fit on training window (last `train_window` days)
                 regime_models = self._fit_regime_models(
                     classifier, R.iloc[t - self.train_window : t],
                     F_panel.iloc[t - self.train_window : t],
                     feats.iloc[t - self.train_window : t],
                 )
-                last_hmm_refit_t = t
 
             # ── Current regime via forward filter (causal) ──────────
-            window_feats = feats.iloc[t - self.hmm_window + 1 : t + 1]
-            posterior = classifier.forward_filter(window_feats)[-1]
+            posterior = roller.posterior(t)
             current_regime = int(posterior.argmax())
             regime_labels[idx] = current_regime
             posterior_history[idx] = posterior

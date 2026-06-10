@@ -938,12 +938,12 @@ with t_backtest:
         roll_window = 63
         if len(result.returns_series) > roll_window:
             from causal_portfolio.backtest.metrics import ANNUALIZATION
-            roll_sharpe = [
-                result.returns_series[i - roll_window:i].mean() /
-                max(result.returns_series[i - roll_window:i].std(), 1e-10)
+            # Trailing window ending at i-1, population std (ddof=0)
+            roll = pd.Series(result.returns_series).rolling(roll_window)
+            roll_sharpe = (
+                roll.mean() / roll.std(ddof=0).clip(lower=1e-10)
                 * np.sqrt(ANNUALIZATION)
-                for i in range(roll_window, len(result.returns_series))
-            ]
+            ).to_numpy()[roll_window - 1 : -1]
             fig_rs = go.Figure()
             fig_rs.add_trace(go.Scatter(
                 x=port_cum_series.index[roll_window:], y=roll_sharpe,
@@ -1099,9 +1099,12 @@ with t_regimes:
 
     if st.button("Analyze Regimes", type="primary"):
         from causal_portfolio.regimes.dashboard_panel import analyze_regimes
+        # Cache on params so re-clicking (e.g. toggling causal/non-causal back
+        # and forth) doesn't refit the whole rolling HMM from scratch.
+        analyze_regimes_cached = st.cache_data(show_spinner=False, ttl=3600)(analyze_regimes)
         with st.spinner("Fitting HMM + per-regime driver selection…"):
             try:
-                st.session_state.regime_result = analyze_regimes(
+                st.session_state.regime_result = analyze_regimes_cached(
                     assets=selected_assets,
                     start=str(start_date), end=str(end_date),
                     n_states=regime_n_states, hmm_window=regime_window,

@@ -28,7 +28,7 @@ import pandas as pd
 
 from causal_portfolio.backtest.metrics import slice_metrics
 from causal_portfolio.backtest.strategies import (
-    buy_and_hold, regime_gated_long_only,
+    buy_and_hold, precompute_regime_posteriors, regime_gated_long_only,
 )
 from causal_portfolio.data import load_returns_and_macro
 
@@ -41,7 +41,7 @@ class SweepRow:
     metric: dict
 
 
-def run_sweep_posterior_gate(returns, macro, oos_start, oos_end):
+def run_sweep_posterior_gate(returns, macro, oos_start, oos_end, posteriors=None):
     universe = {"btc": 1.0, "eth": 1.0, "sol": 1.0}
     base_kwargs = dict(
         hmm_window=504, hmm_refit_every=63, n_states=2, n_restarts=5,
@@ -53,13 +53,14 @@ def run_sweep_posterior_gate(returns, macro, oos_start, oos_end):
         logger.info("posterior gate = %.2f", gate)
         r = regime_gated_long_only(
             returns, macro, **base_kwargs, min_posterior_to_switch=gate,
+            posteriors=posteriors,
         )
         m = slice_metrics(r, returns.index, oos_start, oos_end)
         rows.append(SweepRow(f"gate={gate:.2f}", m))
     return rows
 
 
-def run_sweep_stop_loss(returns, macro, oos_start, oos_end):
+def run_sweep_stop_loss(returns, macro, oos_start, oos_end, posteriors=None):
     universe = {"btc": 1.0, "eth": 1.0, "sol": 1.0}
     base_kwargs = dict(
         hmm_window=504, hmm_refit_every=63, n_states=2, n_restarts=5,
@@ -72,13 +73,14 @@ def run_sweep_stop_loss(returns, macro, oos_start, oos_end):
         logger.info("stop-loss = %s", label)
         r = regime_gated_long_only(
             returns, macro, **base_kwargs, stop_loss_pct=stop,
+            posteriors=posteriors,
         )
         m = slice_metrics(r, returns.index, oos_start, oos_end)
         rows.append(SweepRow(label, m))
     return rows
 
 
-def run_sweep_cost(returns, macro, oos_start, oos_end):
+def run_sweep_cost(returns, macro, oos_start, oos_end, posteriors=None):
     universe = {"btc": 1.0, "eth": 1.0, "sol": 1.0}
     rows: list[SweepRow] = []
     for fee, slip in [(0, 0), (5, 5), (10, 10), (20, 20), (5, 30), (30, 30)]:
@@ -89,6 +91,7 @@ def run_sweep_cost(returns, macro, oos_start, oos_end):
             hmm_window=504, hmm_refit_every=63, n_states=2, n_restarts=5,
             threshold_l1=0.10,
             fee_bps=float(fee), slippage_bps=float(slip),
+            posteriors=posteriors,
         )
         m = slice_metrics(r, returns.index, oos_start, oos_end)
         rows.append(SweepRow(f"fee={fee} slip={slip}", m))
@@ -158,18 +161,23 @@ def main():
     print(f"\nBH_BTC OOS baseline ({args.oos_start} to {args.oos_end}):")
     print(f"  total {bh_oos['total_return']:+.1%}  Sharpe {bh_oos['sharpe']:.3f}  MaxDD {bh_oos['max_dd']:+.1%}")
 
+    # All sweeps share the same HMM params — fit the rolling HMM once.
+    posteriors = precompute_regime_posteriors(
+        returns, macro, hmm_window=504, hmm_refit_every=63,
+    )
+
     print("\n--- Sweep A: posterior gating ---")
-    rows_a = run_sweep_posterior_gate(returns, macro, oos_s, oos_e)
+    rows_a = run_sweep_posterior_gate(returns, macro, oos_s, oos_e, posteriors=posteriors)
     for r in rows_a:
         print(f"  {r.label:<20} total {r.metric.get('total_return',0):+.1%}  Sharpe {r.metric.get('sharpe',0):.3f}  MaxDD {r.metric.get('max_dd',0):+.1%}")
 
     print("\n--- Sweep B: stop-loss ---")
-    rows_b = run_sweep_stop_loss(returns, macro, oos_s, oos_e)
+    rows_b = run_sweep_stop_loss(returns, macro, oos_s, oos_e, posteriors=posteriors)
     for r in rows_b:
         print(f"  {r.label:<20} total {r.metric.get('total_return',0):+.1%}  Sharpe {r.metric.get('sharpe',0):.3f}  MaxDD {r.metric.get('max_dd',0):+.1%}")
 
     print("\n--- Sweep C: cost sensitivity ---")
-    rows_c = run_sweep_cost(returns, macro, oos_s, oos_e)
+    rows_c = run_sweep_cost(returns, macro, oos_s, oos_e, posteriors=posteriors)
     for r in rows_c:
         print(f"  {r.label:<20} total {r.metric.get('total_return',0):+.1%}  Sharpe {r.metric.get('sharpe',0):.3f}  MaxDD {r.metric.get('max_dd',0):+.1%}")
 

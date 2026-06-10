@@ -26,7 +26,7 @@ from causal_portfolio.backtest.costs import cost_drag_return
 from causal_portfolio.backtest.engine import BacktestResult
 from causal_portfolio.backtest.threshold import should_rebalance
 from causal_portfolio.regimes.hmm import (
-    RegimeClassifier,
+    RollingHMM,
     build_regime_features,
 )
 
@@ -251,6 +251,36 @@ class RegimeGatedResult(BacktestResult):
     regime_labels: np.ndarray = field(default_factory=lambda: np.array([]))
 
 
+def precompute_regime_posteriors(
+    returns: pd.DataFrame,
+    macro: pd.DataFrame,
+    *,
+    hmm_window: int = 504,
+    hmm_refit_every: int = 63,
+    n_states: int = 2,
+    n_restarts: int = 5,
+) -> pd.DataFrame:
+    """Causal filtered regime posteriors, computed once.
+
+    Runs the same rolling fit + forward filter that regime_gated_long_only
+    would, so several variants of the strategy (different targets, costs,
+    thresholds, stops) can share one set of expensive HMM fits via its
+    `posteriors=` parameter. Rows before the first refit (t < hmm_window)
+    are NaN.
+    """
+    feats_full = build_regime_features(macro, returns)
+    common = returns.index.intersection(feats_full.index)
+    feats = feats_full.loc[common]
+    roller = RollingHMM(
+        feats, hmm_window, hmm_refit_every,
+        n_states=n_states, n_restarts=n_restarts,
+    )
+    post = np.full((len(feats), n_states), np.nan)
+    for t in range(hmm_window, len(feats)):
+        post[t] = roller.posterior(t)
+    return pd.DataFrame(post, index=common)
+
+
 def regime_gated_long_only(
     returns: pd.DataFrame,
     macro: pd.DataFrame,
@@ -268,6 +298,7 @@ def regime_gated_long_only(
     min_posterior_to_switch: float = 0.0,
     stop_loss_pct: float | None = None,
     stop_reset_pct: float | None = None,
+    posteriors: pd.DataFrame | None = None,
 ) -> RegimeGatedResult:
     """Use HMM to detect regime; allocate long during calm, cash during stress.
 
@@ -304,6 +335,10 @@ def regime_gated_long_only(
             means resume when current_dd ≤ 10%. Defaults to half of
             stop_loss_pct (more conservative re-entry than exit). Ignored
             if stop_loss_pct is None.
+        posteriors: optional precomputed causal posteriors from
+            `precompute_regime_posteriors` (same returns/macro/HMM params!).
+            Lets several strategy variants share one set of expensive
+            rolling HMM fits instead of refitting per variant.
 
     Returns:
         RegimeGatedResult with regime_labels populated.
@@ -332,8 +367,15 @@ def regime_gated_long_only(
         raise ValueError(f"Need T > {start_idx + 30}, got T={T}")
 
     regime_labels = np.full(T, -1, dtype=int)
-    classifier: RegimeClassifier | None = None
-    last_refit_t = -np.inf
+    if posteriors is not None:
+        post_arr = posteriors.reindex(common).values
+        roller = None
+    else:
+        post_arr = None
+        roller = RollingHMM(
+            feats, hmm_window, hmm_refit_every,
+            n_states=n_states, n_restarts=n_restarts,
+        )
     current_regime: int | None = None  # for posterior-gating hysteresis
 
     def regime_target_fn(t: int):
@@ -342,19 +384,11 @@ def regime_gated_long_only(
         Updates current_regime via posterior gating. Stop-loss is applied
         inside the walk loop where running equity is known.
         """
-        nonlocal classifier, last_refit_t, current_regime
+        nonlocal current_regime
         if t < start_idx:
             return None
 
-        if classifier is None or (t - last_refit_t) >= hmm_refit_every:
-            window = feats.iloc[t - hmm_window : t]
-            classifier = RegimeClassifier(
-                n_states=n_states, n_restarts=n_restarts,
-            ).fit(window)
-            last_refit_t = t
-
-        window = feats.iloc[t - hmm_window + 1 : t + 1]
-        post = classifier.forward_filter(window)[-1]
+        post = post_arr[t] if post_arr is not None else roller.posterior(t)
         proposed_label = int(post.argmax())
 
         # Posterior-confidence gate: only switch if confident

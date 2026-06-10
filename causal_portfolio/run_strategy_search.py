@@ -36,6 +36,7 @@ from causal_portfolio.backtest.engine import BacktestResult
 from causal_portfolio.backtest.strategies import (
     buy_and_hold,
     equal_weight_basket,
+    precompute_regime_posteriors,
     regime_gated_long_only,
 )
 from causal_portfolio.data import get_loader
@@ -98,13 +99,20 @@ def run_search(
     r = equal_weight_basket(returns, rebalance_freq=21, **cost_kwargs)
     metrics.append(StrategyMetrics.from_result("EW_BASKET", r))
 
+    # All regime-gated variants (3-6) use the same HMM — fit it once.
+    posteriors = precompute_regime_posteriors(
+        returns, macro, hmm_window=hmm_window, hmm_refit_every=hmm_refit_every,
+    )
+    regime_kwargs = dict(
+        hmm_window=hmm_window, hmm_refit_every=hmm_refit_every,
+        posteriors=posteriors, **cost_kwargs,
+    )
+
     # 3. Regime-gated 100% BTC
     if "btc_return" in returns.columns:
         r = regime_gated_long_only(
             returns, macro, universe_weights={"btc": 1.0},
-            hmm_window=hmm_window, hmm_refit_every=hmm_refit_every,
-            stress_allocation=0.0,
-            **cost_kwargs,
+            stress_allocation=0.0, **regime_kwargs,
         )
         metrics.append(StrategyMetrics.from_result("REGIME_BTC", r))
 
@@ -113,9 +121,7 @@ def run_search(
     if universe:
         r = regime_gated_long_only(
             returns, macro, universe_weights=universe,
-            hmm_window=hmm_window, hmm_refit_every=hmm_refit_every,
-            stress_allocation=0.0,
-            **cost_kwargs,
+            stress_allocation=0.0, **regime_kwargs,
         )
         metrics.append(StrategyMetrics.from_result("REGIME_EW", r))
 
@@ -123,10 +129,7 @@ def run_search(
     if "btc_return" in returns.columns:
         r = regime_gated_long_only(
             returns, macro, universe_weights={"btc": 1.0},
-            hmm_window=hmm_window, hmm_refit_every=hmm_refit_every,
-            stress_allocation=0.0,
-            threshold_l1=threshold_l1,
-            **cost_kwargs,
+            stress_allocation=0.0, threshold_l1=threshold_l1, **regime_kwargs,
         )
         metrics.append(StrategyMetrics.from_result(
             f"REGIME_BTC_T{int(threshold_l1*100)}", r,
@@ -136,9 +139,7 @@ def run_search(
     if "btc_return" in returns.columns:
         r = regime_gated_long_only(
             returns, macro, universe_weights={"btc": 1.0},
-            hmm_window=hmm_window, hmm_refit_every=hmm_refit_every,
-            stress_allocation=0.5,
-            **cost_kwargs,
+            stress_allocation=0.5, **regime_kwargs,
         )
         metrics.append(StrategyMetrics.from_result("REGIME_BTC_50", r))
 
