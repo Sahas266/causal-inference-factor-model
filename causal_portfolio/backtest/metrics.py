@@ -69,3 +69,29 @@ def average_turnover(weights_history: np.ndarray) -> float:
         return 0.0
     diffs = np.abs(np.diff(weights_history, axis=0))
     return float(np.mean(np.sum(diffs, axis=1)))
+
+
+def slice_metrics(result, returns_index, slice_start, slice_end) -> dict:
+    """Recompute metrics over the slice [slice_start, slice_end) of a result.
+
+    `result` is any BacktestResult-like object. Its returns_series is aligned
+    with the LAST len(returns_series) rows of `returns_index` (the warmup eats
+    the head). Returns {"n_obs": 0} when the slice is empty.
+    """
+    n_returns = len(result.returns_series)
+    aligned_index = returns_index[-n_returns:]
+    mask = (aligned_index >= slice_start) & (aligned_index < slice_end)
+    if mask.sum() == 0:
+        return {"n_obs": 0}
+    r = result.returns_series[mask]
+    w = result.weights_history[mask]
+    port_values = np.cumprod(1 + r)
+    return {
+        "n_obs": int(mask.sum()),
+        "total_return": float(port_values[-1] / port_values[0] - 1),
+        "sharpe": float(sharpe_ratio(r)),
+        "sortino": float(sortino_ratio(r)),
+        "max_dd": float(max_drawdown(r)),
+        "calmar": float(calmar_ratio(r)),
+        "avg_turnover": float(average_turnover(w)),
+    }

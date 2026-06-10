@@ -32,13 +32,6 @@ import numpy as np
 import pandas as pd
 
 from causal_portfolio.backtest.engine import BacktestResult
-from causal_portfolio.backtest.metrics import (
-    average_turnover,
-    calmar_ratio,
-    max_drawdown,
-    sharpe_ratio,
-    sortino_ratio,
-)
 from causal_portfolio.factors.combo_selector import ComboDriverSelector
 from causal_portfolio.filters.ekf import CPCMKalmanFilter
 from causal_portfolio.optimizer.manifold import ManifoldOptimizer, estimate_covariance
@@ -213,18 +206,9 @@ class RegimeConditionalBacktester:
             weights_history[idx] = current_weights
 
         # ── Metrics ──────────────────────────────────────────────────
-        port_values = np.cumprod(1 + portfolio_returns)
-        result = RegimeBacktestResult(
-            total_return=float(port_values[-1] / port_values[0] - 1),
-            sharpe=sharpe_ratio(portfolio_returns),
-            sortino=sortino_ratio(portfolio_returns),
-            max_dd=max_drawdown(portfolio_returns),
-            calmar=calmar_ratio(portfolio_returns),
-            avg_turnover=average_turnover(weights_history),
-            coherence_score=0.0,  # not computed here; could add via martingale_defect
-            returns_series=portfolio_returns,
-            weights_history=weights_history,
-            rebalance_dates=rebalance_dates,
+        # coherence_score not computed here; could add via martingale_defect
+        result = RegimeBacktestResult.from_returns(
+            portfolio_returns, weights_history, rebalance_dates,
             regime_labels=regime_labels,
             posterior_history=posterior_history,
             per_regime_n_rebalances=per_regime_rebal,
@@ -328,11 +312,12 @@ class RegimeConditionalBacktester:
             # Last resort: use global fallback
             if self._global_solver is None:
                 raise RuntimeError("No regime models and no global fallback")
-            return self._optimize_with(
-                self._global_solver, self._global_drivers,
-                factor_panel_tr, estimate_covariance(
-                    factor_panel_tr.values
-                ),
+            F_global, _ = self._current_filtered_state(
+                self._global_drivers, factor_panel_tr,
+            )
+            return self.optimizer.optimize(
+                self._global_solver, F_global,
+                estimate_covariance(factor_panel_tr.values),
             )
 
         # Compute current driver vector + filtered state for primary regime
@@ -341,7 +326,9 @@ class RegimeConditionalBacktester:
         )
 
         if self.mode == "hard":
-            return self._call_optimizer(primary.solver, F_primary, primary.covariance)
+            return self.optimizer.optimize(
+                primary.solver, F_primary, primary.covariance,
+            )
 
         # ── MoE mode: blend mu across regimes ──────────────────────
         n_assets = primary.covariance.shape[0]
@@ -359,7 +346,7 @@ class RegimeConditionalBacktester:
             mu_blend /= total_weight  # renormalize if some posterior fell below tolerance
 
         # Use primary regime's J + cov for the projection
-        return self._call_optimizer_with_mu(
+        return self.optimizer.optimize(
             primary.solver, F_primary, primary.covariance, mu_override=mu_blend,
         )
 
@@ -376,58 +363,3 @@ class RegimeConditionalBacktester:
         ekf.fit_dynamics(D_tr)
         filtered, _ = ekf.filter(D_tr)
         return filtered[-1], D_tr
-
-    def _call_optimizer(
-        self, solver: V1LinearSolver, F_current: np.ndarray, cov: np.ndarray,
-    ) -> np.ndarray:
-        return self.optimizer.optimize(solver, F_current, cov)
-
-    def _call_optimizer_with_mu(
-        self, solver: V1LinearSolver, F_current: np.ndarray,
-        cov: np.ndarray, mu_override: np.ndarray,
-    ) -> np.ndarray:
-        """Run the optimizer with an externally-provided mu vector.
-
-        The standard ManifoldOptimizer.optimize internally calls solver.predict
-        to get mu. For MoE we need to supply our own blended mu. We replicate
-        the optimize() logic here with that one substitution.
-        """
-        opt = self.optimizer
-        # Jacobian-based tangent space (from primary regime's solver)
-        J = solver.jacobian(F_current)
-        projector = self._tangent_projector(J)
-
-        # Mean-variance solution with overridden mu
-        n = len(mu_override)
-        cov_reg = cov + np.eye(n) * 1e-6
-        cov_inv = np.linalg.inv(cov_reg)
-        w_mv = (1.0 / opt.risk_aversion) * cov_inv @ mu_override
-
-        # Project onto tangent space
-        w_manifold = projector @ w_mv
-
-        # Apply constraints
-        return self._apply_constraints(w_manifold)
-
-    @staticmethod
-    def _tangent_projector(J: np.ndarray) -> np.ndarray:
-        U, S, _ = np.linalg.svd(J, full_matrices=False)
-        k = int(np.sum(S > 1e-10 * S[0]))
-        return U[:, :k] @ U[:, :k].T
-
-    def _apply_constraints(self, w: np.ndarray) -> np.ndarray:
-        opt = self.optimizer
-        if opt.long_only:
-            w = np.maximum(w, 0.0)
-        w = np.clip(w, -opt.max_weight, opt.max_weight)
-        w_sum = np.sum(np.abs(w))
-        if w_sum > 1e-10:
-            w = w / w_sum
-        return w
-
-    def _optimize_with(
-        self, solver: V1LinearSolver, drivers: list[str],
-        factor_panel_tr: pd.DataFrame, cov: np.ndarray,
-    ) -> np.ndarray:
-        F_current, _ = self._current_filtered_state(drivers, factor_panel_tr)
-        return self.optimizer.optimize(solver, F_current, cov)

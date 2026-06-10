@@ -43,6 +43,7 @@ class ManifoldOptimizer:
         solver: CPCMSolver,
         F_current: np.ndarray,
         cov: np.ndarray,
+        mu_override: np.ndarray | None = None,
     ) -> np.ndarray:
         """Compute optimal weights at current driver state.
 
@@ -57,12 +58,16 @@ class ManifoldOptimizer:
             solver: Fitted CPCM solver.
             F_current: (m,) current driver state.
             cov: (n_assets, n_assets) return covariance matrix.
+            mu_override: optional (n_assets,) expected-return vector to use
+                instead of solver.predict — e.g. an MoE posterior blend. The
+                solver still supplies the Jacobian for the tangent projection.
 
         Returns:
             (n_assets,) optimal portfolio weights.
         """
         # Expected returns
-        mu = solver.predict(F_current).flatten()
+        mu = (mu_override if mu_override is not None
+              else solver.predict(F_current)).flatten()
         n = len(mu)
 
         # Jacobian-based tangent space

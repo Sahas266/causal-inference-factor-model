@@ -29,49 +29,19 @@ import numpy as np
 import pandas as pd
 
 from causal_portfolio.backtest.engine import BacktestResult
-from causal_portfolio.backtest.metrics import (
-    average_turnover, calmar_ratio, max_drawdown, sharpe_ratio, sortino_ratio,
-)
+from causal_portfolio.backtest.metrics import slice_metrics
 from causal_portfolio.backtest.strategies import (
     buy_and_hold, regime_gated_long_only,
 )
-from causal_portfolio.data import get_loader
+from causal_portfolio.data import load_returns_and_macro
 
 logger = logging.getLogger("cpcm.oos")
 
 
-def _load(assets, start, end):
-    loader = get_loader()
-    returns = loader.load_returns(assets, start, end)
-    macro = loader.load_macro(["VIXCLS"], start, end)
-    common = returns.index.intersection(macro.index)
-    return returns.loc[common], macro.loc[common].ffill()
-
-
 def _slice_metrics(result: BacktestResult, returns_index, slice_start, slice_end) -> dict:
-    """Recompute metrics over the slice [slice_start, slice_end) of result."""
-    # result.returns_series is aligned with the LAST len(returns_series) rows
-    # of returns_index (the warmup eats the head).
-    n_returns = len(result.returns_series)
-    aligned_index = returns_index[-n_returns:]
-    mask = (aligned_index >= slice_start) & (aligned_index < slice_end)
-    if mask.sum() == 0:
-        return {"slice_start": str(slice_start), "slice_end": str(slice_end),
-                "n_obs": 0}
-    r = result.returns_series[mask]
-    w = result.weights_history[mask]
-    port_values = np.cumprod(1 + r)
-    return {
-        "slice_start": str(slice_start),
-        "slice_end": str(slice_end),
-        "n_obs": int(mask.sum()),
-        "total_return": float(port_values[-1] / port_values[0] - 1),
-        "sharpe": float(sharpe_ratio(r)),
-        "sortino": float(sortino_ratio(r)),
-        "max_dd": float(max_drawdown(r)),
-        "calmar": float(calmar_ratio(r)),
-        "avg_turnover": float(average_turnover(w)),
-    }
+    """slice_metrics + the slice bounds, for the structured output dict."""
+    return {"slice_start": str(slice_start), "slice_end": str(slice_end),
+            **slice_metrics(result, returns_index, slice_start, slice_end)}
 
 
 def run_oos(
@@ -91,7 +61,7 @@ def run_oos(
         ("full", full_start, "2026-01-01"),  # sanity
     ]
 
-    returns, macro = _load(assets, full_start, full_end)
+    returns, macro = load_returns_and_macro(assets, full_start, full_end)
 
     # Run REGIME_EW once over the full sample with locked hyperparameters
     universe = {a: 1.0 for a in assets if f"{a}_return" in returns.columns}

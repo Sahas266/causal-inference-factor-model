@@ -57,6 +57,35 @@ class BacktestResult:
             f"Coherence: {self.coherence_score:.4f}"
         )
 
+    @classmethod
+    def from_returns(
+        cls,
+        portfolio_returns: np.ndarray,
+        weights_history: np.ndarray,
+        rebalance_dates: list,
+        coherence_score: float = 0.0,
+        **extra,
+    ):
+        """Build a result (metrics included) from a realized return path.
+
+        `extra` forwards subclass-only fields (e.g. regime_labels) so
+        subclasses can call `RegimeBacktestResult.from_returns(...)` directly.
+        """
+        port_values = np.cumprod(1 + portfolio_returns)
+        return cls(
+            total_return=float(port_values[-1] / port_values[0] - 1),
+            sharpe=sharpe_ratio(portfolio_returns),
+            sortino=sortino_ratio(portfolio_returns),
+            max_dd=max_drawdown(portfolio_returns),
+            calmar=calmar_ratio(portfolio_returns),
+            avg_turnover=average_turnover(weights_history),
+            coherence_score=coherence_score,
+            returns_series=portfolio_returns,
+            weights_history=weights_history,
+            rebalance_dates=rebalance_dates,
+            **extra,
+        )
+
 
 class CPCMBacktester:
     """Walk-forward backtest engine."""
@@ -140,12 +169,11 @@ class CPCMBacktester:
             weights_history[idx] = current_weights
 
         # ── Compute metrics ──
-        port_values = np.cumprod(1 + portfolio_returns)
-
         # Martingale defect (if EKF was used)
         coherence = 0.0
         if self.use_ekf and len(portfolio_returns) > 10:
             try:
+                port_values = np.cumprod(1 + portfolio_returns)
                 ekf = CPCMKalmanFilter(m=m)
                 ekf.fit_dynamics(drivers[test_start:])
                 filtered, _ = ekf.filter(drivers[test_start:])
@@ -154,17 +182,9 @@ class CPCMBacktester:
             except Exception:
                 pass
 
-        result = BacktestResult(
-            total_return=float(port_values[-1] / port_values[0] - 1),
-            sharpe=sharpe_ratio(portfolio_returns),
-            sortino=sortino_ratio(portfolio_returns),
-            max_dd=max_drawdown(portfolio_returns),
-            calmar=calmar_ratio(portfolio_returns),
-            avg_turnover=average_turnover(weights_history),
+        result = BacktestResult.from_returns(
+            portfolio_returns, weights_history, rebalance_dates,
             coherence_score=coherence,
-            returns_series=portfolio_returns,
-            weights_history=weights_history,
-            rebalance_dates=rebalance_dates,
         )
 
         logger.info(f"Backtest complete: {result.summary()}")

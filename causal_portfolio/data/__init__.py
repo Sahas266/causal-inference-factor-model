@@ -53,3 +53,16 @@ def get_loader(env_path: Optional[str] = None):
         "python -m causal_portfolio.data.snapshot"
     )
     return CPCMDataLoader(env_path=env_path)
+
+
+def load_returns_and_macro(assets, start, end, macro_series=("VIXCLS",)):
+    """Returns + macro aligned on their common dates (macro forward-filled).
+
+    The common pull for HMM-gated strategy runs, which only need VIX from
+    the macro side by default.
+    """
+    loader = get_loader()
+    returns = loader.load_returns(list(assets), start, end)
+    macro = loader.load_macro(list(macro_series), start, end)
+    common = returns.index.intersection(macro.index)
+    return returns.loc[common], macro.loc[common].ffill()

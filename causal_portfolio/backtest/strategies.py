@@ -24,13 +24,6 @@ import pandas as pd
 
 from causal_portfolio.backtest.costs import cost_drag_return
 from causal_portfolio.backtest.engine import BacktestResult
-from causal_portfolio.backtest.metrics import (
-    average_turnover,
-    calmar_ratio,
-    max_drawdown,
-    sharpe_ratio,
-    sortino_ratio,
-)
 from causal_portfolio.backtest.threshold import should_rebalance
 from causal_portfolio.regimes.hmm import (
     RegimeClassifier,
@@ -43,6 +36,29 @@ logger = logging.getLogger("cpcm.backtest.strategies")
 # ── helpers ──────────────────────────────────────────────────────────
 
 
+def _resolve_target_weights(
+    weights: dict[str, float],
+    columns,
+) -> np.ndarray:
+    """Map a {ticker: weight} dict onto a "_return"-column target vector.
+
+    Weights are renormalized to sum to 1. Tickers with no matching
+    "{ticker}_return" column are skipped with a warning.
+    """
+    cols = list(columns)
+    target = np.zeros(len(cols))
+    total = float(sum(weights.values()))
+    if total <= 0:
+        raise ValueError("target weights must sum to > 0")
+    for ticker, w in weights.items():
+        col = f"{ticker}_return"
+        if col not in cols:
+            logger.warning("Skipping %s — not in returns columns", ticker)
+            continue
+        target[cols.index(col)] = w / total
+    return target
+
+
 def _walk(
     returns: pd.DataFrame,
     weight_fn,
@@ -52,19 +68,35 @@ def _walk(
     slippage_bps: float = 5.0,
     threshold_l1: float = 0.0,
     start_idx: int = 0,
+    stop_loss_pct: float | None = None,
+    stop_reset_pct: float | None = None,
 ) -> BacktestResult:
-    """Generic walk-forward loop with costs and no-trade band.
+    """Generic walk-forward loop with costs, no-trade band, and optional
+    trailing-stop overlay.
 
-    weight_fn(t) -> target_weights at time t. Returns NaN-prefixed where
-    the strategy has no opinion yet.
+    weight_fn(t) -> target_weights at time t. Returns None/NaN where the
+    strategy has no opinion yet (abstain — hold previous weights).
+
+    If `stop_loss_pct` is set, tracks running equity (cumulative product of
+    net returns); whenever drawdown from the running peak exceeds
+    `stop_loss_pct`, forces the target to zero (full cash) until drawdown
+    recovers below `stop_reset_pct` (default: stop_loss_pct / 2 — more
+    conservative re-entry than exit).
     """
     T, n_assets = returns.shape
     R = returns.values
     portfolio_returns = np.zeros(T - start_idx)
     weights_history = np.zeros((T - start_idx, n_assets))
     rebalance_dates: list = []
-    current_w = (initial_weights if initial_weights is not None
+    current_w = (initial_weights.copy() if initial_weights is not None
                  else np.zeros(n_assets))
+
+    use_stop = stop_loss_pct is not None
+    stop_reset = (stop_reset_pct if stop_reset_pct is not None
+                  else (stop_loss_pct or 0.0) * 0.5)
+    equity = 1.0
+    peak = 1.0
+    stop_active = False
 
     for t in range(start_idx, T):
         idx = t - start_idx
@@ -75,17 +107,31 @@ def _walk(
 
         # Get target weights for next period (decision uses info up to t)
         target = weight_fn(t)
-        if target is None or np.isnan(target).any():
+        abstained = target is None or np.isnan(target).any()
+        if abstained and not use_stop:
             # Strategy abstains — hold previous weights
             weights_history[idx] = current_w
             portfolio_returns[idx] = gross_r
             continue
+        if abstained:
+            # With a stop overlay we can't short-circuit: the stop may still
+            # force the held weights to cash.
+            target = current_w
+
+        # Trailing-stop overlay BEFORE the rebalance decision
+        if use_stop:
+            drawdown = 1.0 - (equity / peak) if peak > 0 else 0.0
+            if not stop_active and drawdown >= stop_loss_pct:
+                stop_active = True
+            elif stop_active and drawdown <= stop_reset:
+                stop_active = False
+            if stop_active:
+                target = np.zeros(n_assets)
 
         # Decide whether to rebalance
         if should_rebalance(current_w, target, threshold_l1):
-            equity_proxy = 1.0  # we track returns; equity is normalized
             drag = cost_drag_return(
-                current_w, target, equity_proxy,
+                current_w, target, equity_usd=1.0,  # we track returns; equity is normalized
                 fee_bps=fee_bps, slippage_bps=slippage_bps,
             )
             net_r = gross_r - drag
@@ -97,97 +143,13 @@ def _walk(
         weights_history[idx] = current_w
         portfolio_returns[idx] = net_r
 
-    port_values = np.cumprod(1 + portfolio_returns)
-    return BacktestResult(
-        total_return=float(port_values[-1] / port_values[0] - 1),
-        sharpe=sharpe_ratio(portfolio_returns),
-        sortino=sortino_ratio(portfolio_returns),
-        max_dd=max_drawdown(portfolio_returns),
-        calmar=calmar_ratio(portfolio_returns),
-        avg_turnover=average_turnover(weights_history),
-        coherence_score=0.0,
-        returns_series=portfolio_returns,
-        weights_history=weights_history,
-        rebalance_dates=rebalance_dates,
-    )
+        if use_stop:
+            equity *= (1.0 + net_r)
+            if equity > peak:
+                peak = equity
 
-
-def _walk_with_stop_loss(
-    returns: pd.DataFrame, weight_fn, *, initial_weights, fee_bps, slippage_bps,
-    threshold_l1, start_idx, stop_loss_pct: float, stop_reset_pct: float, n_assets: int,
-) -> BacktestResult:
-    """Like _walk, but with a trailing-stop overlay.
-
-    Tracks running equity = cumulative product of net returns. Whenever
-    drawdown from the running peak exceeds `stop_loss_pct`, forces the
-    target weights to zero (full cash) until the drawdown recovers below
-    `stop_reset_pct`.
-    """
-    T = len(returns)
-    R = returns.values
-    portfolio_returns = np.zeros(T - start_idx)
-    weights_history = np.zeros((T - start_idx, n_assets))
-    rebalance_dates: list = []
-    current_w = initial_weights.copy()
-
-    equity = 1.0
-    peak = 1.0
-    stop_active = False
-
-    for t in range(start_idx, T):
-        idx = t - start_idx
-        day_r = R[t]
-        valid = ~np.isnan(day_r)
-        gross_r = float(np.nansum(current_w[valid] * day_r[valid])) if valid.any() else 0.0
-
-        # Compute target from regime
-        regime_target = weight_fn(t)
-        if regime_target is None or np.isnan(regime_target).any():
-            target = current_w
-        else:
-            target = regime_target
-
-        # Apply stop-loss overlay BEFORE the rebalance decision
-        drawdown = 1.0 - (equity / peak) if peak > 0 else 0.0
-        if not stop_active and drawdown >= stop_loss_pct:
-            stop_active = True
-        elif stop_active and drawdown <= stop_reset_pct:
-            stop_active = False
-        if stop_active:
-            target = np.zeros(n_assets)
-
-        # Rebalance decision
-        if should_rebalance(current_w, target, threshold_l1):
-            drag = cost_drag_return(
-                current_w, target, equity_usd=1.0,
-                fee_bps=fee_bps, slippage_bps=slippage_bps,
-            )
-            net_r = gross_r - drag
-            current_w = target.copy()
-            rebalance_dates.append(returns.index[t])
-        else:
-            net_r = gross_r
-
-        weights_history[idx] = current_w
-        portfolio_returns[idx] = net_r
-
-        # Update equity tracker
-        equity *= (1.0 + net_r)
-        if equity > peak:
-            peak = equity
-
-    port_values = np.cumprod(1 + portfolio_returns)
-    return BacktestResult(
-        total_return=float(port_values[-1] / port_values[0] - 1),
-        sharpe=sharpe_ratio(portfolio_returns),
-        sortino=sortino_ratio(portfolio_returns),
-        max_dd=max_drawdown(portfolio_returns),
-        calmar=calmar_ratio(portfolio_returns),
-        avg_turnover=average_turnover(weights_history),
-        coherence_score=0.0,
-        returns_series=portfolio_returns,
-        weights_history=weights_history,
-        rebalance_dates=rebalance_dates,
+    return BacktestResult.from_returns(
+        portfolio_returns, weights_history, rebalance_dates,
     )
 
 
@@ -268,16 +230,7 @@ def fixed_weight_portfolio(
         if not target_weights:
             target_weights = {c.replace("_return", ""): 1.0 / n for c in cols}
 
-    target = np.zeros(n)
-    total = float(sum(target_weights.values()))
-    if total <= 0:
-        raise ValueError("target_weights must sum to > 0")
-    for ticker, w in target_weights.items():
-        col = f"{ticker}_return"
-        if col not in cols:
-            logger.warning("Skipping %s — not in returns columns", ticker)
-            continue
-        target[cols.index(col)] = w / total
+    target = _resolve_target_weights(target_weights, cols)
 
     def weight_fn(t):
         if t % rebalance_freq == 0:
@@ -364,17 +317,7 @@ def regime_gated_long_only(
         else:
             universe_weights = {a: 1.0 / n_assets for a in asset_names}
 
-    calm_target = np.zeros(n_assets)
-    total = float(sum(universe_weights.values()))
-    if total <= 0:
-        raise ValueError("universe_weights must sum to > 0")
-    for ticker, w in universe_weights.items():
-        col = f"{ticker}_return"
-        if col not in returns.columns:
-            logger.warning("Skipping %s — not in returns columns", ticker)
-            continue
-        calm_target[returns.columns.get_loc(col)] = w / total
-
+    calm_target = _resolve_target_weights(universe_weights, returns.columns)
     stress_target = calm_target * stress_allocation
 
     # Build regime features (uses VIX + BTC realized vol — 21d warmup)
@@ -392,11 +335,6 @@ def regime_gated_long_only(
     classifier: RegimeClassifier | None = None
     last_refit_t = -np.inf
     current_regime: int | None = None  # for posterior-gating hysteresis
-
-    # Stop-loss defaults: half the trigger for re-entry (more conservative)
-    stop_reset = stop_reset_pct if stop_reset_pct is not None else (
-        (stop_loss_pct or 0.0) * 0.5
-    )
 
     def regime_target_fn(t: int):
         """Return regime-target weights at time t, ignoring stop-loss.
@@ -430,28 +368,11 @@ def regime_gated_long_only(
         regime_labels[t] = current_regime
         return stress_target if current_regime == stress_state else calm_target
 
-    if stop_loss_pct is None:
-        base = _walk(
-            R, regime_target_fn,
-            initial_weights=np.zeros(n_assets),
-            fee_bps=fee_bps, slippage_bps=slippage_bps,
-            threshold_l1=threshold_l1, start_idx=start_idx,
-        )
-    else:
-        base = _walk_with_stop_loss(
-            R, regime_target_fn,
-            initial_weights=np.zeros(n_assets),
-            fee_bps=fee_bps, slippage_bps=slippage_bps,
-            threshold_l1=threshold_l1, start_idx=start_idx,
-            stop_loss_pct=stop_loss_pct, stop_reset_pct=stop_reset,
-            n_assets=n_assets,
-        )
-    return RegimeGatedResult(
-        total_return=base.total_return, sharpe=base.sharpe,
-        sortino=base.sortino, max_dd=base.max_dd, calmar=base.calmar,
-        avg_turnover=base.avg_turnover, coherence_score=base.coherence_score,
-        returns_series=base.returns_series,
-        weights_history=base.weights_history,
-        rebalance_dates=base.rebalance_dates,
-        regime_labels=regime_labels[start_idx:],
+    base = _walk(
+        R, regime_target_fn,
+        initial_weights=np.zeros(n_assets),
+        fee_bps=fee_bps, slippage_bps=slippage_bps,
+        threshold_l1=threshold_l1, start_idx=start_idx,
+        stop_loss_pct=stop_loss_pct, stop_reset_pct=stop_reset_pct,
     )
+    return RegimeGatedResult(**vars(base), regime_labels=regime_labels[start_idx:])
