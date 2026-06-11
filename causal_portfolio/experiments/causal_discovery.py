@@ -189,6 +189,10 @@ def main() -> None:
     p.add_argument("--end", default="2025-12-31")
     p.add_argument("--alpha", type=float, default=0.05)
     p.add_argument("--thresh", type=float, default=0.05)
+    p.add_argument("--innovations", action="store_true",
+                   help="Use AR(1) innovations of the factors (kills the "
+                        "persistence that poisons Fisher-Z / LiNGAM on "
+                        "levels) and include macro innovations too.")
     p.add_argument("--out", default="causal_portfolio/docs/causal_discovery.md")
     args = p.parse_args()
     assets = args.assets.split(",")
@@ -199,11 +203,17 @@ def main() -> None:
     macro = loader.load_macro(MACRO_SERIES, args.start, args.end)
     returns = loader.load_returns(assets, args.start, args.end)
     factors = build_all_factors(panel, macro).dropna(axis=1, how="all")
-    # Keep the global factors for discovery (macro are slow-moving levels —
-    # nonstationary, poison for Fisher-Z/LiNGAM); difference is handled by
-    # the factor construction (most are diffs/z-scores already).
-    gf = [f for f in GLOBAL_FACTORS if f in factors.columns]
-    factors = factors[gf]
+    if args.innovations:
+        from causal_portfolio.factors.builder import innovation_factors
+        # Innovations are stationary, so macro becomes admissible too.
+        keep = [f for f in factors.columns
+                if f in GLOBAL_FACTORS or f in ("vixcls", "dgs10", "dtwexbgs")]
+        factors = innovation_factors(factors[keep]).dropna(axis=1, how="all")
+    else:
+        # Keep the global factors for discovery (macro are slow-moving
+        # levels — nonstationary, poison for Fisher-Z/LiNGAM).
+        gf = [f for f in GLOBAL_FACTORS if f in factors.columns]
+        factors = factors[gf]
 
     (f1, r1), (f2, r2) = _halves(factors, returns)
 

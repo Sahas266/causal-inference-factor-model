@@ -217,6 +217,31 @@ def _compute_cex_dex_flow(panel: pd.DataFrame) -> pd.Series:
     return pd.Series(np.nan, index=panel.index)
 
 
+def innovation_factors(factors: pd.DataFrame, min_obs: int = 60) -> pd.DataFrame:
+    """AR(1) innovations of each factor, z-scored.
+
+    Most CPCM factors are z-scored LEVELS of persistent series (gas price,
+    funding, APR): near-random-walks. Regressions and CI tests on levels are
+    dominated by persistence (spurious-regression risk) and the information
+    is mostly "where the level already is", not "what just changed". The
+    innovation e_t = s_t - (a + rho * s_{t-1}) isolates the day's NEWS.
+    Factors that are already diffs (liq_flow, stable_flow) come out nearly
+    unchanged (rho ~ 0).
+    """
+    out = {}
+    for c in factors.columns:
+        s = factors[c]
+        lag = s.shift(1)
+        ok = s.notna() & lag.notna()
+        if ok.sum() < min_obs:
+            continue
+        x, y = lag[ok], s[ok]
+        rho = x.cov(y) / (x.var() + 1e-15)
+        a = y.mean() - rho * x.mean()
+        out[c] = z_score(s - (a + rho * lag))
+    return pd.DataFrame(out, index=factors.index)
+
+
 # ── Helpers ─────────────────────────────────────────────────────────
 
 def z_score(s: pd.Series) -> pd.Series:

@@ -126,6 +126,76 @@ def build_cpcm_dag(
     return G
 
 
+def build_discovered_dag(assets: list[str]) -> nx.DiGraph:
+    """DAG v2 — the structure the DATA supports (2026-06 discovery program).
+
+    Differences from the hand-drawn star DAG (build_cpcm_dag):
+      - Factors are AR(1) INNOVATIONS (factors/builder.py::innovation_factors),
+        not z-scored levels.
+      - The dominant causal direction is returns → on-chain factors, not the
+        reverse: ``ew_return(t-1) → liq_flow(t)`` replicated across sample
+        halves in both level and innovation space (VAR-LiNGAM), and
+        ``btc_return(t) → stable_flow(t)`` appears contemporaneously (full
+        sample + half 2).
+      - Exactly ONE candidate factor→return edge survives orthogonalized
+        estimation (DML), the innovation transform, and a circular-shift
+        placebo (p=0.01): ``chain_congestion(t-1) → btc_return(t)``,
+        ~+39 bps/σ. It is half-2-concentrated (2024–25) and was selected on
+        this sample — edge attribute stability="candidate" until it
+        validates on data after 2025-12-31.
+      - No instruments: with returns upstream, lag does the purging, and the
+        IV search showed even strong instruments only hurt (no confounding
+        to remove at lag 1).
+
+    Evidence: docs/causal_discovery*.md, docs/dml_effects*.md, docs/dag_v2.md.
+    """
+    G = nx.DiGraph()
+    mkt = "btc_return"
+    basket = "ew_return"
+    G.add_node(mkt, kind=NodeKind.ASSET_RETURN, asset="btc")
+    G.add_node(basket, kind=NodeKind.ASSET_RETURN, asset=None)
+    G.add_edge(mkt, basket, kind=EdgeKind.CAUSAL, lag=0,
+               stability="stable", evidence="VAR-LiNGAM B0, all runs")
+
+    for f in GLOBAL_FACTORS:
+        G.add_node(f, kind=NodeKind.GLOBAL_FACTOR, asset=None,
+                   transform="ar1_innovation")
+
+    # Returns drive on-chain state (the replicated direction).
+    G.add_edge(basket, "liq_flow", kind=EdgeKind.CAUSAL, lag=1,
+               stability="stable",
+               evidence="VAR-LiNGAM B1, both halves, levels AND innovations")
+    G.add_edge(mkt, "stable_flow", kind=EdgeKind.CAUSAL, lag=0,
+               stability="semi-stable",
+               evidence="VAR-LiNGAM B0, full sample + half 2")
+
+    # The one surviving candidate factor→return edge.
+    G.add_edge("chain_congestion", mkt, kind=EdgeKind.CAUSAL, lag=1,
+               stability="candidate",
+               evidence="DML +39bps/σ (innovations), timing placebo p=0.01; "
+                        "half-2 only — needs post-2025 forward validation")
+
+    # Per-asset returns: market beta + own shock (no factor edges claimed).
+    for asset in assets:
+        if asset == "btc":
+            continue
+        r = f"{asset}_return"
+        G.add_node(r, kind=NodeKind.ASSET_RETURN, asset=asset)
+        G.add_edge(mkt, r, kind=EdgeKind.CAUSAL, lag=0,
+                   stability="stable", evidence="market beta")
+        shock = f"{asset}_shock"
+        G.add_node(shock, kind=NodeKind.UNOBSERVED_SHOCK, asset=asset)
+        G.add_edge(shock, r, kind=EdgeKind.CAUSAL, lag=0,
+                   stability="stable", evidence="idiosyncratic")
+    btc_shock = "btc_shock"
+    G.add_node(btc_shock, kind=NodeKind.UNOBSERVED_SHOCK, asset="btc")
+    G.add_edge(btc_shock, mkt, kind=EdgeKind.CAUSAL, lag=0,
+               stability="stable", evidence="idiosyncratic")
+
+    assert nx.is_directed_acyclic_graph(G), "discovered DAG has a cycle!"
+    return G
+
+
 def summarize_dag(G: nx.DiGraph) -> dict:
     """Summary statistics for the DAG."""
     def count_kind(kind: NodeKind) -> int:
