@@ -120,7 +120,25 @@ Two independent results explain *why* even strong instruments hurt:
 
 ---
 
-## Follow-up IV search (fan-out)
+## Follow-up IV search (fan-out, 2026-06-17)
 
-*(Results appended after the agent fan-out — see the per-experiment docs and
-the summary table at the end of this section.)*
+Four parallel agents attacked the angles the original purely-statistical
+warehouse search left open. Each has its own module + doc. Summary:
+
+| Angle | Experiment / doc | Result |
+|---|---|---|
+| Economically-motivated (exclusion story) | `iv_economic` | **Null.** The exclusion-clean families (mining/hashrate, issuance schedule, stablecoin mechanics, macro surprise) are all **irrelevant** (first-stage F≈0); the only relevant ones (ETF native flows F=23–34, validator queue F=80–88) carry exclusion risk and **fail the per-window gate** (mean F 0.8–3.9), so 2SLS collapses to OLS. 2/20 candidates clean, 0 help OOS. |
+| IVs for the surviving edges | `iv_surviving_edges` | **Unidentified (inconclusive, not refuted).** For `chain_congestion→btc_return` the best instruments (eth_new_users F=7.8, sol_tx_count F=5.8, blob_size F=4.6) **never clear F≥10**, in any regime incl. post-Dencun. For `congestion→funding` the most-relevant instrument (blob_size F=6.0) **trips the direct-path exclusion flag** (t=2.85). No valid strong instrument exists to corroborate either edge; the DML/placebo evidence stands but IV can't confirm causality. |
+| Richer construction + over-id (Sargan) | `iv_construction` | Richer transforms (ar1_innov, event, sign, qbucket, cumchg7) surface **many more** strong clean candidates (4,591 relevant / 2,366 clean across 7 transforms), and **3/3 over-identified sets are NOT rejected by Sargan** (cex_dex_flow, funding_basis, liq_flow). But the OOS A/B is the decisive test, and it is the **strongest refutation yet**: where the gate truly engaged with a Sargan-valid strong instrument, **2SLS was worse OOS** — `cex_dex_flow ← eth_total_economic_activity[ar1_innov]` (gate 108/108, meanF 81) OLS medSharpe 0.831 → **2SLS 0.398**; `liq_flow ← sol_chain_median_txn_fee[ar1_innov]` (gate 90/108) 0.831 → **0.031**. Sargan-validity + strength + richer construction still does not make 2SLS beat OLS. |
+| Cross-asset instruments | `iv_cross_asset` | **Null.** Only 2/12 cross-asset candidates were strong+clean (`sol_dex_volume→cex_dex_flow` for BTC F=18, clean direct-path; `bnb_dex_volume→cex_dex_flow` for ETH F=16). Both engaged the gate but on **full-window** OOS Sharpe 2SLS = OLS (0.148 vs 0.140) or **worse** (0.052 vs 0.140) — the median-Sharpe "win" was a 4-fold artifact. Cross-asset exclusion buys nothing. |
+
+**Net:** the follow-up reproduces and *strengthens* the original conclusion under
+four better framings. An economic exclusion story doesn't help (the clean
+instruments are irrelevant); the relationships that DID survive (congestion→BTC,
+congestion→funding) **cannot be instrumented** (no strong valid Z exists), so
+they remain predictive-not-proven-causal; richer construction finds more strong
+candidates and even passes over-identification, yet still doesn't make 2SLS beat
+OLS OOS; and cross-asset exclusion produces clean strong instruments that still
+don't help. Every angle lands on the same structural truth from the section
+above: **there is no factor→return endogeneity in this data for an instrument to
+exploit.**
