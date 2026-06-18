@@ -555,4 +555,4 @@ async fn run_pipeline(config: &Config) -> Result<PipelineResult> {
 - `causal_portfolio/scm/estimation.py` — Python 2SLS template to reimplement
 - `backfill_data/src/schemas/asset_metrics.py` — Row schema the Rust data layer must mirror
 - `backfill_data/scripts/compute_derived_metrics.py` — Factor computation patterns to port
-- `Causal PDE-Control Models for Portfolio Optimization.md` — DAG structure, factor defs, IV specs
+- `docs/Causal PDE-Control Models for Portfolio Optimization.md` — DAG structure, factor defs, IV specs

@@ -220,7 +220,7 @@ Key files:
 - `causal_portfolio/solvers/v4_pinn.py`
 - `causal_portfolio/dashboard.py`
 
-This layer implements the CPCM pipeline described in `Causal PDE-Control Models for Portfolio Optimization.md`.
+This layer implements the CPCM pipeline described in `docs/Causal PDE-Control Models for Portfolio Optimization.md`.
 
 Important runtime behavior:
 
@@ -268,7 +268,7 @@ Important mismatch:
 
 ## CPCM Roadmap Alignment
 
-The roadmap lives in `Causal PDE-Control Models for Portfolio Optimization.md`.
+The roadmap lives in `docs/Causal PDE-Control Models for Portfolio Optimization.md`.
 
 Current warehouse coverage against the roadmap:
 

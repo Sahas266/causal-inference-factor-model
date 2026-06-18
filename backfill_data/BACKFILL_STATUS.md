@@ -50,7 +50,7 @@ Notes:
 
 ## Roadmap Factor Coverage
 
-This section maps the live warehouse to the roadmap in [Causal PDE-Control Models for Portfolio Optimization.md](../Causal%20PDE-Control%20Models%20for%20Portfolio%20Optimization.md).
+This section maps the live warehouse to the roadmap in [Causal PDE-Control Models for Portfolio Optimization.md](../docs/Causal%20PDE-Control%20Models%20for%20Portfolio%20Optimization.md).
 
 | Roadmap Factor | Live Coverage | Current Sources | Status |
 |---|---|---|---|
