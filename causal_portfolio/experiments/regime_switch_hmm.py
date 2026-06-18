@@ -57,8 +57,9 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from causal_portfolio.backtest.metrics import (
-    ANNUALIZATION, calmar_ratio, max_drawdown, sharpe_ratio, sortino_ratio,
+from causal_portfolio.backtest.metrics import sharpe_ratio
+from causal_portfolio.experiments.regime_rotation import (
+    RotResult, backtest_rule,
 )
 from causal_portfolio.regimes.hmm import (
     RegimeClassifier, build_regime_features, dwell_stats, rolling_fit_decode,
@@ -128,40 +129,21 @@ MIDDLE_RULE = "vol_target"    # intermediate state -> vol-scaled exposure
 # ── backtest a realized exposure path ────────────────────────────────
 
 
-@dataclass
-class PerfResult:
-    name: str
-    ann_return: float
-    sharpe: float
-    sortino: float
-    max_dd: float
-    calmar: float
-    pct_in_market: float
-    n_switches: int
-    daily: pd.Series
+# The exposure backtest is the shared single-asset harness; reuse it rather
+# than re-implement the lag/cost/metrics math. `PerfResult` is kept as an
+# alias of the shared `RotResult` so the rest of this module reads unchanged.
+PerfResult = RotResult
 
 
 def backtest_exposure(
     btc: pd.Series, exposure: pd.Series, *, fee_bps_oneway: float = 5.0,
     name: str = "",
 ) -> PerfResult:
-    """Apply an exposure path to BTC with a one-day lag and switching cost."""
-    e = exposure.reindex(btc.index).shift(1).fillna(0.0).clip(0.0, 1.0)
-    strat = e * btc.fillna(0.0)
-    turn = e.diff().abs().fillna(e.abs())
-    strat = strat - turn * (fee_bps_oneway / 1e4)
-    daily = strat.dropna()
-    return PerfResult(
-        name=name,
-        ann_return=float(daily.mean() * ANNUALIZATION),
-        sharpe=float(sharpe_ratio(daily.values)),
-        sortino=float(sortino_ratio(daily.values)),
-        max_dd=float(max_drawdown(daily.values)),
-        calmar=float(calmar_ratio(daily.values)),
-        pct_in_market=float((e > 0.01).mean()),
-        n_switches=int((e.diff().abs() > 0.01).sum()),
-        daily=daily,
-    )
+    """Apply an exposure path to BTC (one-day lag + switching cost). Thin
+    wrapper over `regime_rotation.backtest_rule` that just labels the result."""
+    r = backtest_rule(btc, exposure, fee_bps_oneway=fee_bps_oneway)
+    r.name = name
+    return r
 
 
 # ── mappings: HMM state -> per-state rule -> realized exposure ────────

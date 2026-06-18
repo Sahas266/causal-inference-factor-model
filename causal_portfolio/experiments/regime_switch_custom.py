@@ -58,9 +58,7 @@ from dataclasses import dataclass, replace
 import numpy as np
 import pandas as pd
 
-from causal_portfolio.backtest.metrics import (
-    ANNUALIZATION, calmar_ratio, max_drawdown, sharpe_ratio, sortino_ratio,
-)
+from causal_portfolio.backtest.metrics import sharpe_ratio
 from causal_portfolio.experiments.regime_rotation import backtest_rule
 
 logger = logging.getLogger("cpcm.experiments.regime_switch_custom")
