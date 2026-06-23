@@ -170,7 +170,7 @@ hmmlearn==0.3.3
 # ── Hyperliquid execution layer ──────────────────────────────────────
 # Optional at runtime: only needed to hit the live API (the pure rebalancer
 # and order-book pricing are SDK-free). Pinned here for reproducible deploys.
-hyperliquid-python-sdk==0.23.0
+hyperliquid-python-sdk==0.24.0
 eth-account==0.13.7
 
 # ── V4 PINN solver (torch) ───────────────────────────────────────────
