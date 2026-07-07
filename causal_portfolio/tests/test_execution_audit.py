@@ -95,30 +95,30 @@ def test_cli_execute_refuses_without_live_flag(tmp_path, capsys):
         main(["execute", "--weights", str(weights_file)])
 
 
-def test_cli_load_weights_rejects_non_dict(tmp_path):
+def test_target_loader_rejects_non_dict(tmp_path):
     weights_file = tmp_path / "bad.json"
     weights_file.write_text(json.dumps([0.3, 0.4]))
 
-    from causal_portfolio.execution.cli import _load_weights
+    from causal_portfolio.execution.targets import load_target_snapshot
     with pytest.raises(ValueError, match="JSON object"):
-        _load_weights(str(weights_file))
+        load_target_snapshot(str(weights_file))
 
 
-def test_cli_load_weights_rejects_non_numeric(tmp_path):
+def test_target_loader_rejects_non_numeric(tmp_path):
     weights_file = tmp_path / "bad.json"
     weights_file.write_text(json.dumps({"btc": "thirty percent"}))
 
-    from causal_portfolio.execution.cli import _load_weights
+    from causal_portfolio.execution.targets import load_target_snapshot
     with pytest.raises(ValueError, match="numeric"):
-        _load_weights(str(weights_file))
+        load_target_snapshot(str(weights_file))
 
 
-def test_cli_load_weights_lowercases_keys(tmp_path):
+def test_target_loader_lowercases_keys(tmp_path):
     weights_file = tmp_path / "w.json"
     weights_file.write_text(json.dumps({"BTC": 0.3, "ETH": 0.2}))
 
-    from causal_portfolio.execution.cli import _load_weights
-    weights = _load_weights(str(weights_file))
+    from causal_portfolio.execution.targets import load_target_snapshot
+    weights = load_target_snapshot(str(weights_file)).weights
     assert "btc" in weights and "eth" in weights
     assert weights["btc"] == 0.3
 

@@ -20,42 +20,27 @@ JSON file format:
       "sol": -0.10,
       ...
     }
+
+The --weights path may also be a rebalance-history CSV with a
+`rebalance_date` column and one asset-weight column per ticker. The latest
+dated row is selected.
 """
 
 from __future__ import annotations
 
 import argparse
-import json
 import logging
 import sys
-from pathlib import Path
 
 from datetime import datetime, timezone
 
 from causal_portfolio.execution.audit import LOG_DIR, read_log
 from causal_portfolio.execution.config import ExecutionConfig
 from causal_portfolio.execution.rebalancer import plan_rebalance
+from causal_portfolio.execution.targets import load_target_snapshot
 from causal_portfolio.execution.types import AccountState, AssetMeta
 
 logger = logging.getLogger("cpcm.execution.cli")
-
-
-def _load_weights(path: str) -> dict[str, float]:
-    """Load and validate a weights JSON file.
-
-    Keys prefixed with `_` are treated as metadata and ignored. The CPCM
-    pipeline writes a `_meta` field with provenance info (solver, date,
-    selected drivers, etc.) that the executor doesn't need.
-    """
-    raw = json.loads(Path(path).read_text())
-    if not isinstance(raw, dict):
-        raise ValueError(f"Weights file must be a JSON object, got {type(raw).__name__}")
-    for k, v in raw.items():
-        if k.startswith("_"):
-            continue  # metadata, skip
-        if not isinstance(v, (int, float)):
-            raise ValueError(f"Weight for {k!r} must be numeric, got {type(v).__name__}")
-    return {k.lower(): float(v) for k, v in raw.items() if not k.startswith("_")}
 
 
 def _stub_state_and_market(equity: float = 10_000.0) -> tuple[AccountState, dict, dict]:
@@ -110,7 +95,7 @@ def _confirm_mainnet(plan) -> bool:
 
 
 def cmd_plan(args) -> int:
-    weights = _load_weights(args.weights)
+    target = load_target_snapshot(args.weights)
     cfg = ExecutionConfig(testnet=not args.mainnet, dry_run=True)
 
     if args.live_state:
@@ -122,7 +107,7 @@ def cmd_plan(args) -> int:
     else:
         state, mids, meta = _stub_state_and_market(equity=args.equity)
 
-    plan = plan_rebalance(weights, state, mids, meta, cfg)
+    plan = plan_rebalance(target, state, mids, meta, cfg)
     _print_plan(plan, verbose=args.verbose)
     return 0
 
@@ -132,10 +117,15 @@ def cmd_execute(args) -> int:
         print("Refusing to submit without --live. Use 'plan' for dry-runs.", file=sys.stderr)
         return 1
 
-    weights = _load_weights(args.weights)
+    target = load_target_snapshot(args.weights)
     cfg_kwargs = dict(testnet=not args.mainnet, dry_run=False)
     if args.slippage_bps is not None:
         cfg_kwargs["slippage_bps"] = args.slippage_bps
+    cfg_kwargs["max_signal_age_hours"] = args.max_signal_age_hours
+    cfg_kwargs["allow_stale_signal"] = args.allow_stale_signal
+    cfg_kwargs["twap_minutes"] = args.twap_minutes
+    cfg_kwargs["twap_slices"] = args.twap_slices
+    cfg_kwargs["smart_execution"] = not args.no_smart_execution
     cfg = ExecutionConfig(**cfg_kwargs)
 
     from causal_portfolio.execution.hyperliquid import HLAdapter, execute_plan
@@ -144,7 +134,7 @@ def cmd_execute(args) -> int:
     state = adapter.fetch_state()
     mids = adapter.fetch_mids()
     meta = adapter.fetch_meta()
-    plan = plan_rebalance(weights, state, mids, meta, cfg)
+    plan = plan_rebalance(target, state, mids, meta, cfg)
     _print_plan(plan, verbose=True)
 
     if not plan.orders:
@@ -229,7 +219,16 @@ def cmd_logs(args) -> int:
         else:
             status = "DRY-RUN"
         print(f"\n[{i}] {rec.get('ts_utc', '?')}  status={status}")
-        print(f"     equity=${equity:,.2f}  orders={n_orders}  skipped={n_skipped}  gross=${gross:,.2f}")
+        provenance = ""
+        if rec.get("network") or rec.get("target_id"):
+            provenance = (
+                f"  network={rec.get('network') or '?'}"
+                f"  target={rec.get('target_id') or '?'}"
+            )
+        print(
+            f"     equity=${equity:,.2f}  orders={n_orders}  "
+            f"skipped={n_skipped}  gross=${gross:,.2f}{provenance}"
+        )
         if rec.get("error"):
             print(f"     error: {rec['error']}")
         if args.verbose:
@@ -250,7 +249,7 @@ def main(argv: list[str] | None = None) -> int:
     sub = p.add_subparsers(dest="cmd", required=True)
 
     p_plan = sub.add_parser("plan", help="Compute and print a rebalance plan (dry-run)")
-    p_plan.add_argument("--weights", required=True, help="Path to weights JSON file")
+    p_plan.add_argument("--weights", required=True, help="Target JSON or dated CSV file")
     p_plan.add_argument("--live-state", action="store_true",
                         help="Pull current state/mids/meta from Hyperliquid (read-only)")
     p_plan.add_argument("--mainnet", action="store_true", help="Use mainnet for state read")
@@ -272,15 +271,30 @@ def main(argv: list[str] | None = None) -> int:
     p_logs.set_defaults(func=cmd_logs)
 
     p_exec = sub.add_parser("execute", help="Submit a rebalance plan to Hyperliquid")
-    p_exec.add_argument("--weights", required=True)
+    p_exec.add_argument("--weights", required=True,
+                        help="Target JSON or dated rebalance-history CSV")
     p_exec.add_argument("--live", action="store_true", required=True,
                         help="Required to actually submit (safety gate)")
-    p_exec.add_argument("--mainnet", action="store_true",
-                        help="Hit mainnet instead of testnet (requires confirmation)")
+    exec_network = p_exec.add_mutually_exclusive_group()
+    exec_network.add_argument("--mainnet", action="store_true",
+                              help="Hit mainnet instead of testnet (requires confirmation)")
+    exec_network.add_argument("--testnet", action="store_false", dest="mainnet",
+                              help="Use testnet (the default; accepted for explicit scripts)")
+    p_exec.set_defaults(mainnet=False)
     p_exec.add_argument("--slippage-bps", type=int, default=None,
                         help="Override ExecutionConfig.slippage_bps for this run. "
                              "HL may reject orders priced too far from oracle; "
                              "10 bps is a safe default for liquid perps.")
+    p_exec.add_argument("--max-signal-age-hours", type=float, default=72.0,
+                        help="Reject older dated targets (default: 72 hours)")
+    p_exec.add_argument("--allow-stale-signal", action="store_true",
+                        help="Explicitly bypass missing/stale target-date checks")
+    p_exec.add_argument("--twap-minutes", type=float, default=0.0,
+                        help="Client-side TWAP duration in minutes (default: off)")
+    p_exec.add_argument("--twap-slices", type=int, default=5,
+                        help="Number of TWAP child batches when --twap-minutes > 0")
+    p_exec.add_argument("--no-smart-execution", action="store_true",
+                        help="Disable book-aware IOC slicing; use parent limit prices")
     p_exec.set_defaults(func=cmd_execute)
 
     args = p.parse_args(argv)

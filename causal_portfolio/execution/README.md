@@ -14,7 +14,7 @@ target weights (w)
   RebalancePlan
         │
         ▼
-  hyperliquid.py ◄── Thin SDK wrapper. Reads state, submits bulk_orders.
+  hyperliquid.py ◄── Thin SDK wrapper. Reads state, submits book-aware IOC orders.
         │              Lazy-imports hyperliquid-python-sdk.
         ▼
   Hyperliquid (testnet by default)
@@ -26,7 +26,7 @@ target weights (w)
 ## Quick start
 
 ```bash
-# 1. Write a weights file
+# 1. Write a weights file (fine for planning; live execution requires a date)
 echo '{"btc": 0.3, "eth": 0.2, "sol": -0.1}' > weights.json
 
 # 2. Dry-run (no network) — print the plan
@@ -42,7 +42,44 @@ python -m causal_portfolio.execution.cli execute --weights weights.json --live -
 
 # 5. Mainnet (requires confirmation prompt)
 python -m causal_portfolio.execution.cli execute --weights weights.json --live --mainnet
+
+# Optional: slice a live rebalance into deterministic child IOC batches
+python -m causal_portfolio.execution.cli execute --weights weights.json --live --testnet --twap-minutes 10 --twap-slices 5
 ```
+
+## Daily local RP-PCA runner
+
+Generate an RP-PCA target from the local DuckDB snapshot or a wide price CSV:
+
+```bash
+python -m causal_portfolio.execution.rppca_daily --target-out tmp/rppca_daily_target.json
+```
+
+Run locally every 24 hours and execute on Hyperliquid testnet:
+
+```bash
+python -m causal_portfolio.execution.rppca_daily --loop --every-hours 24 --execute --target-out tmp/rppca_daily_target.json
+```
+
+Mainnet is non-interactive for scheduling, so it requires both explicit flags:
+
+```bash
+python -m causal_portfolio.execution.rppca_daily --loop --execute --mainnet --ack-mainnet
+```
+
+The runner forward-fills local daily prices but stamps the target with the
+latest real data date. If the warehouse is stale, execution is blocked by the
+normal `max_signal_age_hours` check unless `--allow-stale-signal` is passed.
+
+For live submission, use a model-produced JSON containing `_meta.as_of` or
+`_meta.rebalance_date`. The CLI also accepts the RP-PCA-style asset-weight CSV
+contract: `rebalance_date` plus one column per asset. When a CSV contains a
+rebalance history, the executor selects the latest dated row. Targets older
+than 72 hours, future-dated targets, and targets without a date are blocked;
+`--allow-stale-signal` is an explicit operator override.
+Programmatic live execution follows the same rule: pass a `TargetSnapshot`
+from `load_target_snapshot()`. Bare dict targets are accepted for dry-run
+planning, but live writes reject them unless `allow_stale_signal=True`.
 
 ## Required environment variables for network calls
 
@@ -56,7 +93,7 @@ Reads work without a private key; writes require it. Never commit either to a `.
 The network adapter requires `hyperliquid-python-sdk`:
 
 ```bash
-pip install hyperliquid-python-sdk eth-account
+pip install "hyperliquid-python-sdk==0.24.0" "eth-account==0.13.7"
 ```
 
 Not in `requirements.txt` because the pure rebalancer is useful without it (planning, testing, paper-trading). Only install when you're ready to hit testnet.
@@ -70,10 +107,21 @@ Not in `requirements.txt` because the pure rebalancer is useful without it (plan
 | `leverage` | 1.0 | No implicit leverage |
 | `max_position_pct` | 0.30 | Cap any single asset at 30% of equity |
 | `max_single_trade_pct` | 0.10 | One trade can't move more than 10% of equity |
-| `min_trade_usd` | $25 | Filter dust below this |
+| `min_order_notional_usd` | $10 | Surface sub-minimum sleeves before exchange reject |
 | `slippage_bps` | 30 | IOC limit at mid ± 30bps |
+| `max_signal_age_hours` | 72 | Block stale model targets before live writes |
+| `smart_execution` | True | Reprice IOC slices against the live L2 book |
+| `twap_minutes` | 0 | Disabled unless an operator requests client-side slicing |
+| `max_twap_minutes` | 30 | Cap synchronous client-side TWAP windows |
 
 To override, construct `ExecutionConfig` directly in Python or edit defaults in `config.py`.
+Every plan is also tagged `testnet` or `mainnet`; execution refuses a plan
+built for the other network.
+Target exposures are pre-filtered against each market's Hyperliquid
+`max_leverage`; same-side reduce-only orders are still allowed when they lower
+an already over-limit position.
+Non-reducing orders below `min_order_notional_usd` are skipped in the dry-run
+plan; full reduce-only closes are allowed so cleanup can flatten tiny residuals.
 
 ## Audit log format
 
@@ -82,6 +130,8 @@ Each rebalance appends one JSON record to `logs/rebalance-YYYY-MM-DD.jsonl`:
 ```json
 {
   "ts_utc": "2026-05-04T13:48:51.547000+00:00",
+  "network": "testnet",
+  "target_id": "9f51a4bd24d7c2b1",
   "submitted": true,
   "error": null,
   "plan": {
@@ -98,22 +148,18 @@ Never auto-rotated. Debugging old fills requires the raw record.
 
 ## Known limitations / future work
 
-- **Plans don't record their origin network.** A plan built against testnet
-  mids could in principle be re-executed against a mainnet adapter (the
-  prices would be stale but mainnet would still try to fill them). Currently
-  the operator's responsibility to use one adapter per plan; could be made
-  type-safe by tagging plans with `network` and refusing mismatches.
-- **No TWAP execution.** `ExecutionConfig.twap_minutes` is reserved but
-  unimplemented; setting it to a non-zero value raises NotImplementedError.
-- **No reduce-only orders.** All orders are placed as flat IOC limits; can't
-  currently constrain "only close, never open."
-- **No per-asset leverage check.** If `config.leverage` exceeds a coin's
-  HL `max_leverage`, the order will be rejected by the exchange rather than
-  pre-filtered locally.
+- **No iceberg execution.** TWAP is client-side time slicing only; it does not
+  use hidden liquidity or exchange-native algos.
+- **No fill-aware intra-TWAP replanning.** Child slices use the original target
+  and current L2 book. Re-run `plan` after a partial execution if the market or
+  account state changed materially.
+- **TWAP is not crash-atomic.** Normal errors are audited, but a hard process
+  crash during the sleep/submission window may leave partial real fills before
+  the final audit record is written.
 
 ## What this layer does NOT do
 
-- TWAP / iceberg execution (single batch, all-or-nothing)
+- Iceberg / hidden-liquidity execution
 - Funding rate optimization
 - Stop-loss / take-profit overlays
 - Cross-exchange routing

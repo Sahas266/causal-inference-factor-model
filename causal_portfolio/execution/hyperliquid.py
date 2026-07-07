@@ -7,7 +7,7 @@ Wraps the official `hyperliquid-python-sdk` to:
   - Cancel open orders before placing a new batch (clean-slate rebalance).
 
 Lazy-imports the SDK so the rest of the execution layer is testable without
-it. Install with: `pip install hyperliquid-python-sdk`.
+it. Install with: `pip install hyperliquid-python-sdk==0.24.0`.
 
 Default base URL is testnet. Mainnet only when ExecutionConfig.testnet=False
 AND ExecutionConfig.dry_run=False (caller's responsibility to gate).
@@ -15,10 +15,10 @@ AND ExecutionConfig.dry_run=False (caller's responsibility to gate).
 
 from __future__ import annotations
 
-import hashlib
 import logging
 import os
 import time
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -29,7 +29,7 @@ from causal_portfolio.execution.orderbook import (
     marketable_price,
     parse_fill_response,
 )
-from causal_portfolio.execution.rebalancer import _round_price
+from causal_portfolio.execution.precision import round_price as _round_price, round_size
 from causal_portfolio.execution.types import (
     AccountState,
     AssetMeta,
@@ -37,6 +37,7 @@ from causal_portfolio.execution.types import (
     Position,
     RebalancePlan,
     SubmitResult,
+    make_cloid,
 )
 
 logger = logging.getLogger("cpcm.execution.hl")
@@ -81,7 +82,7 @@ class HLAdapter:
         except ImportError as e:
             raise ImportError(
                 "hyperliquid-python-sdk not installed. Run: "
-                "pip install hyperliquid-python-sdk eth-account"
+                "pip install hyperliquid-python-sdk==0.24.0 eth-account==0.13.7"
             ) from e
 
         _load_dotenv_once()
@@ -293,9 +294,7 @@ class HLAdapter:
                 # Per-slice deterministic cloid derived from the plan order's
                 # cloid + attempt index — a network-level retry of the same
                 # slice gets the same cloid and HL rejects the duplicate.
-                slice_cloid = "0x" + hashlib.sha256(
-                    f"{o.cloid}:{attempt}".encode()
-                ).hexdigest()[:32]
+                slice_cloid = make_cloid(f"{o.cloid}:{attempt}")
                 resp = self._submit_single_ioc(
                     o.coin, o.is_buy, size_r, px, o.reduce_only,
                     cloid=slice_cloid,
@@ -342,10 +341,7 @@ class HLAdapter:
 
     @staticmethod
     def _round_size_down(size: float, sz_decimals: int) -> float:
-        if size <= 0:
-            return 0.0
-        factor = 10 ** sz_decimals
-        return int(size * factor) / factor
+        return round_size(size, sz_decimals) if size > 0 else 0.0
 
 
 def execute_plan(
@@ -363,11 +359,17 @@ def execute_plan(
        Refuses to execute otherwise. Prevents cross-account misfires when
        multiple adapters/plans coexist in one process.
 
-    2. Mainnet acknowledgement: live mainnet writes require an explicit
+    2. Network binding: plans produced for testnet cannot be submitted through
+       a mainnet adapter, or vice versa.
+
+    3. Signal freshness: dated model targets must be recent unless the config
+       explicitly opts into stale-signal execution.
+
+    4. Mainnet acknowledgement: live mainnet writes require an explicit
        `acknowledge_mainnet=True` kwarg. The CLI sets it after a confirmation
        prompt; programmatic callers must opt in deliberately.
 
-    3. Audit write: every result is appended to the rotating JSONL log unless
+    5. Audit write: every result is appended to the rotating JSONL log unless
        `write_audit=False`. Test code disables this; production never should.
     """
     result = _execute_plan_inner(adapter, plan, acknowledge_mainnet=acknowledge_mainnet)
@@ -391,11 +393,44 @@ def _execute_plan_inner(
                    f"but adapter writes from {adapter.address!r}"),
         )
 
+    adapter_network = "testnet" if adapter.config.testnet else "mainnet"
+    if plan.network is not None and plan.network != adapter_network:
+        return SubmitResult(
+            plan=plan,
+            submitted=False,
+            error=(f"network mismatch: plan built for {plan.network!r} "
+                   f"but adapter is on {adapter_network!r}"),
+        )
+
     if adapter.config.dry_run:
         logger.info("DRY RUN — not submitting %d orders", len(plan.orders))
         return SubmitResult(plan=plan, submitted=False)
 
-    # Gate 2: mainnet writes need explicit acknowledgement
+    if not adapter.config.allow_stale_signal:
+        if plan.target_snapshot is None:
+            freshness_error = (
+                "target is missing provenance; live execution requires a "
+                "TargetSnapshot loaded from JSON/CSV"
+            )
+        else:
+            freshness_error = plan.target_snapshot.freshness_error(
+                adapter.config.max_signal_age_hours
+            )
+        if freshness_error is not None:
+            target_id = (
+                plan.target_snapshot.target_id
+                if plan.target_snapshot is not None
+                else "unversioned"
+            )
+            return SubmitResult(
+                plan=plan,
+                submitted=False,
+                error=(f"signal freshness check failed for target "
+                       f"{target_id}: {freshness_error}. "
+                       f"Set allow_stale_signal=True only for an intentional override."),
+            )
+
+    # Gate 4: mainnet writes need explicit acknowledgement
     if adapter.config.is_live_mainnet() and not acknowledge_mainnet:
         return SubmitResult(
             plan=plan, submitted=False,
@@ -423,13 +458,19 @@ def _execute_plan_inner(
                 error="cancel-race detected: positions moved between cancel and submit",
             )
 
-        if adapter.config.smart_execution:
+        if adapter.config.twap_minutes > 0:
+            response = _submit_orders_twap(adapter, plan.orders)
+        elif adapter.config.smart_execution:
             response = adapter.submit_orders_book_aware(plan.orders)
         else:
             response = adapter.submit_orders(plan.orders)
         post = adapter.fetch_state()
         from causal_portfolio.execution.reconcile import format_drift_summary, reconcile
-        drifts = reconcile(plan, post)
+        drifts = reconcile(
+            plan,
+            post,
+            tolerance_usd=adapter.config.min_order_notional_usd,
+        )
         logger.info(format_drift_summary(drifts))
         return SubmitResult(plan=plan, submitted=True,
                             response=response, post_state=post, drifts=drifts)
@@ -469,3 +510,180 @@ def _detect_cancel_race(plan, mid_state, tolerance_usd: float = 25.0) -> bool:
             )
             return True
     return False
+
+
+def _child_cloid(parent_cloid: str, slice_index: int) -> str:
+    return make_cloid(f"{parent_cloid}:twap:{slice_index}")
+
+
+def _slice_order_units(
+    order: Order,
+    *,
+    requested_slices: int,
+    effective_slices: int,
+    sz_decimals: int,
+) -> list[tuple[int, Order]]:
+    """Split `order` into `effective_slices` spread over `requested_slices` slots."""
+    factor = 10 ** sz_decimals
+    total_units = int(round(order.size * factor))
+    if total_units <= 0:
+        return []
+
+    children: list[tuple[int, Order]] = []
+    previous_cumulative_units = 0
+    for idx in range(effective_slices):
+        cumulative_units = (total_units * (idx + 1)) // effective_slices
+        units = cumulative_units - previous_cumulative_units
+        previous_cumulative_units = cumulative_units
+        if units <= 0:
+            continue
+        child_size = units / factor
+        requested_idx = (
+            (requested_slices * (idx + 1)) // effective_slices
+        ) - 1
+        children.append((
+            max(0, requested_idx),
+            replace(
+                order,
+                size=child_size,
+                cloid=_child_cloid(order.cloid, max(0, requested_idx)),
+            ),
+        ))
+    return children
+
+
+def _slice_order(
+    order: Order,
+    *,
+    slices: int,
+    sz_decimals: int,
+    min_child_notional_usd: float = 0.0,
+) -> list[tuple[int, Order]]:
+    """Split an order into deterministic TWAP child orders.
+
+    Sizes are split in integer exchange size-units so child orders add exactly
+    to the parent size at the market's precision. Tiny orders may not appear
+    in every slice, but total child size never exceeds the parent order size.
+
+    When `min_child_notional_usd` is set, the effective slice count is capped
+    so no child is sent below the exchange's minimum order value. If the parent
+    itself is below the floor (for example a reduce-only dust close), it is sent
+    as one child rather than being subdivided into guaranteed rejects.
+    """
+    factor = 10 ** sz_decimals
+    total_units = int(round(order.size * factor))
+    if total_units <= 0:
+        return []
+    requested_slices = max(1, slices)
+    min_child_notional_usd = max(0.0, min_child_notional_usd)
+    if min_child_notional_usd == 0:
+        return _slice_order_units(
+            order,
+            requested_slices=requested_slices,
+            effective_slices=requested_slices,
+            sz_decimals=sz_decimals,
+        )
+
+    max_effective_slices = min(requested_slices, total_units)
+    for effective_slices in range(max_effective_slices, 0, -1):
+        children = _slice_order_units(
+            order,
+            requested_slices=requested_slices,
+            effective_slices=effective_slices,
+            sz_decimals=sz_decimals,
+        )
+        if len(children) <= 1 or all(
+            child.size * child.limit_px >= min_child_notional_usd
+            for _, child in children
+        ):
+            return children
+    return []
+
+
+def _submit_orders_twap(adapter: HLAdapter, orders: list[Order]) -> dict[str, Any]:
+    """Submit a plan as client-side TWAP child orders.
+
+    The adapter still owns pricing. With smart_execution=True each child slice
+    is repriced against the live L2 book; otherwise each child inherits the
+    parent IOC limit price.
+    """
+    cfg = adapter.config
+    if not orders:
+        return {"status": "ok", "response": {"type": "twap", "data": {"slices": []}}}
+
+    meta = adapter.fetch_meta()
+    child_orders_by_slice: list[list[Order]] = [[] for _ in range(cfg.twap_slices)]
+    child_plan: list[dict[str, Any]] = []
+    # HL enforces the minimum at the actual execution price, not our parent
+    # limit. Keep a small buffer so a child that is barely $10 at plan time
+    # does not become a live reject after book-aware repricing/slippage.
+    min_child_notional_usd = cfg.min_order_notional_usd * 1.05
+    for order in orders:
+        sz_decimals = meta[order.coin].sz_decimals if order.coin in meta else 4
+        children = _slice_order(
+            order,
+            slices=cfg.twap_slices,
+            sz_decimals=sz_decimals,
+            min_child_notional_usd=min_child_notional_usd,
+        )
+        parent_notional = order.size * order.limit_px
+        child_plan.append({
+            "parent_cloid": order.cloid,
+            "coin": order.coin,
+            "side": "buy" if order.is_buy else "sell",
+            "parent_size": order.size,
+            "parent_limit_px": order.limit_px,
+            "parent_notional_usd": parent_notional,
+            "requested_slices": cfg.twap_slices,
+            "effective_slices": len(children),
+            "min_child_notional_usd": min_child_notional_usd,
+            "children": [
+                {
+                    "slice": idx + 1,
+                    "cloid": child.cloid,
+                    "size": child.size,
+                    "limit_px": child.limit_px,
+                    "notional_usd": child.size * child.limit_px,
+                    "reduce_only": child.reduce_only,
+                    "tif": child.tif,
+                }
+                for idx, child in children
+            ],
+        })
+        for idx, child in children:
+            child_orders_by_slice[idx].append(child)
+
+    interval_seconds = (
+        (cfg.twap_minutes * 60.0) / max(cfg.twap_slices - 1, 1)
+        if cfg.twap_slices > 1
+        else 0.0
+    )
+    slice_responses: list[dict[str, Any]] = []
+    for idx, child_orders in enumerate(child_orders_by_slice):
+        if child_orders:
+            if cfg.smart_execution:
+                response = adapter.submit_orders_book_aware(child_orders)
+            else:
+                response = adapter.submit_orders(child_orders)
+        else:
+            response = {"status": "ok", "response": {"data": {"statuses": []}}}
+        slice_responses.append({
+            "slice": idx + 1,
+            "orders": len(child_orders),
+            "response": response,
+        })
+        if idx < len(child_orders_by_slice) - 1 and interval_seconds > 0:
+            time.sleep(interval_seconds)
+
+    return {
+        "status": "ok",
+        "response": {
+            "type": "twap",
+            "data": {
+                "slices": slice_responses,
+                "twap_minutes": cfg.twap_minutes,
+                "twap_slices": cfg.twap_slices,
+                "child_plan": child_plan,
+            },
+        },
+    }

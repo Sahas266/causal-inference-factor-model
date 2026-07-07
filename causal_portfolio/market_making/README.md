@@ -1,16 +1,17 @@
 # Market-Making Engine
 
-This package implements the Avellaneda-Stoikov (AS) and Easley PIN research plan without modifying the portfolio rebalancer. It is safe by default: the live runner starts on testnet in dry-run mode, submits only post-only `Alo` orders, and cancels only strategy-owned CLOIDs.
+This package implements the Avellaneda-Stoikov (AS) and Easley PIN research plan without modifying the portfolio rebalancer. It is safe by default: the live runner starts on testnet in dry-run mode, submits only post-only `Alo` orders, and cancels only strategy-owned CLOIDs. Benchmark harnesses in this package may deliberately use IOC taker orders for comparison arms.
 
 ## Components
 
 - `avellaneda_stoikov.py`: finite-horizon approximation, stationary reservation prices, and a bounded-inventory numerical HJB benchmark.
-- `pin.py`: stable three-state Poisson-mixture likelihood, multi-start MLE, posteriors, and rolling estimates.
+- `pin.py`: stable symmetric-uninformed-intensity three-state Poisson-mixture likelihood, multi-start MLE, posteriors, and rolling estimates.
 - `calibration.py` / `toxicity.py`: EWMA volatility, exponential fill intensity, realized-markout curves, and four quote policies.
 - `simulator.py`: deterministic event replay with latency, conservative queue position, partial fills, maker fees, funding, and 1/5/30-second markouts.
 - `engine.py`: inventory, stale-book, margin, loss, volatility, spread, and toxicity gates.
 - `hyperliquid.py`: WebSockets, `Alo` placement, targeted cancel-by-CLOID, persisted ownership, and an opt-in dead-man switch.
 - `recorder.py`: deduplicated raw `trades`, `l2Book`, and `bbo` capture in DuckDB.
+- `strategy_execution_benchmark.py` / `testnet_execution_benchmark.py`: identical-signal IOC versus target-relative AS+PIN execution bounds and minimal-size testnet trials.
 
 ## Data Capture
 

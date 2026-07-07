@@ -58,6 +58,7 @@ class ExecutionConfig:
     max_position_pct: float = 0.30        # cap per-asset weight magnitude
     max_single_trade_pct: float = 0.10    # cap any single trade as % of equity
     max_single_trade_usd: float | None = None  # absolute cap, None = use pct only
+    min_order_notional_usd: float = 10.0  # HL perp minimum; full reduce-only close exempt
 
     # ── Slippage ────────────────────────────────────────────────────────
     slippage_bps: int = 30         # IOC limit at mid ± slippage_bps/10000
@@ -80,14 +81,16 @@ class ExecutionConfig:
 
     # ── Safety ──────────────────────────────────────────────────────────
     dry_run: bool = True           # default OFF — must opt-in to live trading
+    max_signal_age_hours: float = 72.0
+    allow_stale_signal: bool = False
 
-    # ── TWAP (placeholder — not implemented) ────────────────────────────
-    # When set, would split orders into batches over `twap_minutes`. Not yet
-    # supported because the installed hyperliquid SDK has no native TWAP write
-    # helper, and the client-side alternative (time-spaced batches) needs a
-    # design call on whether to refresh mids between batches. Setting this to
-    # any non-zero value raises NotImplementedError at config-validate time.
+    # ── TWAP ────────────────────────────────────────────────────────────
+    # Optional client-side time slicing. The plan still computes one economic
+    # order per coin; execute_plan splits those orders into deterministic
+    # child CLOIDs and submits them over the requested window.
     twap_minutes: float = 0.0
+    twap_slices: int = 5
+    max_twap_minutes: float = 30.0
 
     def __post_init__(self):
         # Light validation. Don't catch every bad combination — just the obvious
@@ -98,6 +101,14 @@ class ExecutionConfig:
             raise ValueError(f"max_position_pct must be in (0, 1], got {self.max_position_pct}")
         if not (0 < self.max_single_trade_pct <= 1.0):
             raise ValueError(f"max_single_trade_pct must be in (0, 1], got {self.max_single_trade_pct}")
+        if self.max_single_trade_usd is not None and self.max_single_trade_usd <= 0:
+            raise ValueError(
+                f"max_single_trade_usd must be > 0 when set, got {self.max_single_trade_usd}"
+            )
+        if self.min_order_notional_usd < 0:
+            raise ValueError(
+                f"min_order_notional_usd must be >= 0, got {self.min_order_notional_usd}"
+            )
         if self.slippage_bps < 0:
             raise ValueError(f"slippage_bps must be >= 0, got {self.slippage_bps}")
         if self.smart_max_attempts < 1:
@@ -106,10 +117,22 @@ class ExecutionConfig:
             raise ValueError(f"smart_poll_seconds must be >= 0, got {self.smart_poll_seconds}")
         if self.smart_max_band_bps <= 0:
             raise ValueError(f"smart_max_band_bps must be > 0, got {self.smart_max_band_bps}")
-        if self.twap_minutes != 0.0:
-            raise NotImplementedError(
-                "TWAP execution is not yet implemented — set twap_minutes=0. "
-                "Tracked in issue: HL SDK lacks a native TWAP write helper."
+        if self.max_signal_age_hours <= 0:
+            raise ValueError(
+                f"max_signal_age_hours must be > 0, got {self.max_signal_age_hours}"
+            )
+        if self.twap_minutes < 0:
+            raise ValueError(f"twap_minutes must be >= 0, got {self.twap_minutes}")
+        if self.twap_slices < 1:
+            raise ValueError(f"twap_slices must be >= 1, got {self.twap_slices}")
+        if self.max_twap_minutes <= 0:
+            raise ValueError(
+                f"max_twap_minutes must be > 0, got {self.max_twap_minutes}"
+            )
+        if self.twap_minutes > self.max_twap_minutes:
+            raise ValueError(
+                f"twap_minutes={self.twap_minutes} exceeds max_twap_minutes="
+                f"{self.max_twap_minutes}"
             )
 
     def slippage_factor(self, is_buy: bool) -> float:

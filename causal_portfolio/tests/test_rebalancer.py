@@ -159,19 +159,60 @@ def test_unlisted_coin_skipped(basic_meta, basic_mids):
 
 def test_tiny_weight_fires_order_no_dust_filter(basic_meta, basic_mids):
     """Without a dust filter, even a tiny weight should fire an order
-    (subject only to single-trade cap and minimum tick size)."""
+    (subject to single-trade cap, exchange minimum notional, and tick size)."""
     cfg = ExecutionConfig(dry_run=True)
     plan = plan_rebalance(
-        target_weights={"btc": 0.001},  # $10 on 10k equity — would have been dust
+        target_weights={"btc": 0.0015},  # $15 on 10k equity, safely above min notional
         state=_state(10_000),
         mids=basic_mids,
         meta=basic_meta,
         config=cfg,
         timestamp_ms=1000,
     )
-    # No dust filter → the trade goes out (well within single-trade cap of 10%)
+    # No arbitrary dust filter: the trade goes out once exchange floors are met.
     assert len(plan.orders) == 1
     assert plan.orders[0].coin == "BTC"
+
+
+def test_below_min_notional_is_skipped_before_exchange_reject(basic_meta, basic_mids):
+    """Small non-reducing sleeves should be visible in dry-run as skips."""
+    cfg = ExecutionConfig(dry_run=True, min_order_notional_usd=10.0)
+    plan = plan_rebalance(
+        target_weights={"eth": 0.0005},  # $5 on $10k equity
+        state=_state(10_000),
+        mids=basic_mids,
+        meta=basic_meta,
+        config=cfg,
+        timestamp_ms=1000,
+    )
+
+    assert plan.orders == []
+    assert ("ETH", SkipReason.BELOW_MIN_NOTIONAL) in {
+        (coin, reason) for coin, reason, _ in plan.skipped
+    }
+
+
+def test_full_reduce_close_allowed_below_min_notional(basic_meta, basic_mids):
+    """Tiny full closes are allowed so cleanup can flatten dust positions."""
+    cfg = ExecutionConfig(
+        dry_run=True,
+        min_order_notional_usd=10.0,
+        max_single_trade_pct=1.0,
+    )
+    state = _state(10_000, positions={"ETH": _pos("ETH", size=0.001, px=3_000)})
+    plan = plan_rebalance(
+        target_weights={"eth": 0.0},
+        state=state,
+        mids=basic_mids,
+        meta=basic_meta,
+        config=cfg,
+        timestamp_ms=1000,
+    )
+
+    eth_order = next(o for o in plan.orders if o.coin == "ETH")
+    assert not eth_order.is_buy
+    assert eth_order.reduce_only
+    assert eth_order.size == pytest.approx(0.001)
 
 
 def test_long_only_zeros_negative_weights(basic_meta, basic_mids):
@@ -411,6 +452,78 @@ def test_leverage_multiplies_notional(basic_meta, basic_mids):
     assert btc_order.size == pytest.approx(0.16666, abs=1e-4)
 
 
+def test_asset_leverage_limit_blocks_risk_increase(basic_mids):
+    """Do not submit an order whose target exposure exceeds HL's asset cap."""
+    meta = {"BTC": AssetMeta("BTC", sz_decimals=5, max_leverage=2, min_size=1e-5)}
+    cfg = ExecutionConfig(
+        dry_run=True,
+        leverage=5.0,
+        max_position_pct=1.0,
+        max_single_trade_pct=1.0,
+    )
+    plan = plan_rebalance(
+        target_weights={"btc": 0.8},  # $40k target on $10k equity = 4x
+        state=_state(10_000),
+        mids=basic_mids,
+        meta=meta,
+        config=cfg,
+        timestamp_ms=1000,
+    )
+
+    assert plan.orders == []
+    assert ("BTC", SkipReason.EXCEEDS_LEVERAGE_LIMIT) in {
+        (coin, reason) for coin, reason, _ in plan.skipped
+    }
+
+
+def test_asset_leverage_limit_allows_reduce_only_deleveraging(basic_mids):
+    """Existing over-limit exposure can still be reduced with reduce-only orders."""
+    meta = {"BTC": AssetMeta("BTC", sz_decimals=5, max_leverage=2, min_size=1e-5)}
+    state = _state(
+        10_000,
+        positions={"BTC": _pos("BTC", size=0.5, px=60_000)},  # $30k = 3x
+    )
+    cfg = ExecutionConfig(
+        dry_run=True,
+        leverage=5.0,
+        max_position_pct=1.0,
+        max_single_trade_pct=1.0,
+    )
+    plan = plan_rebalance(
+        target_weights={"btc": 0.5},  # $25k = 2.5x, still above cap but lower risk
+        state=state,
+        mids=basic_mids,
+        meta=meta,
+        config=cfg,
+        timestamp_ms=1000,
+    )
+
+    btc_order = next(o for o in plan.orders if o.coin == "BTC")
+    assert not btc_order.is_buy
+    assert btc_order.reduce_only
+    assert not any(reason == SkipReason.EXCEEDS_LEVERAGE_LIMIT for _, reason, _ in plan.skipped)
+
+
+def test_closing_position_without_asset_meta_is_skipped_not_crashed(basic_mids):
+    """A stale/unsupported held coin should surface as skipped, not KeyError."""
+    cfg = ExecutionConfig(dry_run=True, max_single_trade_pct=1.0)
+    state = _state(10_000, positions={"DOGE": _pos("DOGE", size=100.0, px=0.1)})
+    mids = {**basic_mids, "DOGE": 0.1}
+    plan = plan_rebalance(
+        target_weights={},
+        state=state,
+        mids=mids,
+        meta={},
+        config=cfg,
+        timestamp_ms=1000,
+    )
+
+    assert plan.orders == []
+    assert ("DOGE", SkipReason.NOT_LISTED) in {
+        (coin, reason) for coin, reason, _ in plan.skipped
+    }
+
+
 def test_plan_summary_string(basic_meta, basic_mids):
     cfg = ExecutionConfig(dry_run=True)
     plan = plan_rebalance(
@@ -433,13 +546,18 @@ def test_config_validation():
         ExecutionConfig(max_position_pct=1.5)
     with pytest.raises(ValueError, match="slippage_bps"):
         ExecutionConfig(slippage_bps=-1)
+    with pytest.raises(ValueError, match="min_order_notional_usd"):
+        ExecutionConfig(min_order_notional_usd=-1)
 
 
-def test_twap_minutes_not_implemented():
-    with pytest.raises(NotImplementedError, match="TWAP"):
-        ExecutionConfig(twap_minutes=5.0)
-    # 0.0 (default) must not raise
-    ExecutionConfig(twap_minutes=0.0)
+def test_twap_config_validation():
+    ExecutionConfig(twap_minutes=5.0, twap_slices=3)
+    with pytest.raises(ValueError, match="twap_minutes"):
+        ExecutionConfig(twap_minutes=-1.0)
+    with pytest.raises(ValueError, match="twap_slices"):
+        ExecutionConfig(twap_slices=0)
+    with pytest.raises(ValueError, match="max_twap_minutes"):
+        ExecutionConfig(twap_minutes=31.0)
 
 
 def test_is_live_mainnet_gate():

@@ -15,6 +15,7 @@ Public entry points:
 from causal_portfolio.execution.config import ExecutionConfig
 from causal_portfolio.execution.rebalancer import plan_rebalance
 from causal_portfolio.execution.reconcile import reconcile
+from causal_portfolio.execution.targets import load_target_snapshot
 from causal_portfolio.execution.types import (
     AccountState,
     AssetMeta,
@@ -24,6 +25,7 @@ from causal_portfolio.execution.types import (
     ReconcileDrift,
     SkipReason,
     SubmitResult,
+    TargetSnapshot,
 )
 
 __all__ = [
@@ -36,6 +38,8 @@ __all__ = [
     "ReconcileDrift",
     "SkipReason",
     "SubmitResult",
+    "TargetSnapshot",
+    "load_target_snapshot",
     "plan_rebalance",
     "reconcile",
 ]

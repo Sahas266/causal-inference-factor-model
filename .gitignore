@@ -67,3 +67,4 @@ causal_portfolio/execution/logs/
 
 # Reference papers (PDFs kept locally, not in git)
 references/
+causal_portfolio/data/cache/*.parquet

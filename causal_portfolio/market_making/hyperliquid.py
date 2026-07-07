@@ -18,11 +18,20 @@ from causal_portfolio.execution.hyperliquid import (
     _load_dotenv_once,
     _read_env_chain,
 )
-from causal_portfolio.execution.rebalancer import _round_price
+from causal_portfolio.execution.precision import round_price as _round_price
 from causal_portfolio.market_making.engine import QuoteDecision
 from causal_portfolio.market_making.types import BookLevel, BookSnapshot, Quote, QuotePair
 
 logger = logging.getLogger("cpcm.market_making.hl")
+
+
+class PostOnlyWouldCrossError(ValueError):
+    """A post-only quote would cross the live opposite touch.
+
+    Raised instead of submitting, because HL would either reject the Alo
+    order or (worse) a retry at the same price would keep failing. Callers
+    that reprice-and-retry catch this type rather than matching message text.
+    """
 
 
 @dataclass(frozen=True)
@@ -34,10 +43,14 @@ class HLMarketMakerConfig:
     dead_man_timeout_seconds: int = 30
     state_path: Path | None = None
 
+    def is_live_mainnet(self) -> bool:
+        """The dangerous combination — mirrors ExecutionConfig.is_live_mainnet."""
+        return (not self.dry_run) and (not self.testnet)
+
     def __post_init__(self) -> None:
         if self.dead_man_timeout_seconds < 5:
             raise ValueError("dead_man_timeout_seconds must be >= 5")
-        if not self.testnet and not self.dry_run and not self.allow_mainnet:
+        if self.is_live_mainnet() and not self.allow_mainnet:
             raise ValueError("live mainnet requires allow_mainnet=True")
 
 
@@ -76,6 +89,7 @@ class HLMarketMakerAdapter:
         self._exchange: Any = None
         self._owned: dict[str, str] = {}
         self._subscriptions: list[tuple[dict[str, str], int]] = []
+        self._sz_decimals_cache: dict[str, int] = {}
         self._load_state()
 
     def _ensure_exchange(self) -> Any:
@@ -219,7 +233,7 @@ class HLMarketMakerAdapter:
         *,
         acknowledge_mainnet: bool = False,
     ) -> dict[str, Any]:
-        if not self.config.testnet and not self.config.dry_run and not acknowledge_mainnet:
+        if self.config.is_live_mainnet() and not acknowledge_mainnet:
             raise PermissionError("live mainnet maker write requires acknowledge_mainnet=True")
         quotes = self._quotes(pair)
         if self.config.dry_run:
@@ -250,13 +264,17 @@ class HLMarketMakerAdapter:
                 and live_book.best_ask is not None
                 and quote.price >= live_book.best_ask
             ):
-                raise ValueError("bid would cross live ask; refusing post-only submission")
+                raise PostOnlyWouldCrossError(
+                    "bid would cross live ask; refusing post-only submission"
+                )
             if (
                 not quote.is_buy
                 and live_book.best_bid is not None
                 and quote.price <= live_book.best_bid
             ):
-                raise ValueError("ask would cross live bid; refusing post-only submission")
+                raise PostOnlyWouldCrossError(
+                    "ask would cross live bid; refusing post-only submission"
+                )
         requests = [
             {
                 "coin": coin,
@@ -278,9 +296,16 @@ class HLMarketMakerAdapter:
         return response
 
     def _size_decimals(self, coin: str) -> int:
+        # Asset metadata is static for the life of an adapter; without the
+        # cache every quote replacement pays a full-universe meta() fetch.
+        cached = self._sz_decimals_cache.get(coin)
+        if cached is not None:
+            return cached
         for item in self.info.meta().get("universe", []):
             if item.get("name") == coin:
-                return int(item.get("szDecimals", 4))
+                value = int(item.get("szDecimals", 4))
+                self._sz_decimals_cache[coin] = value
+                return value
         raise ValueError(f"coin is not listed on Hyperliquid: {coin}")
 
     def apply_decision(

@@ -131,6 +131,8 @@ signal worth **combining** with the trend filter rather than the vol rules.
 
 ## Deployment path
 
+Execution A/B results are documented in `trend_rotation_execution_benchmark.md`. The historical proxy favored immediate IOC; the single testnet AS+PIN round trip was cheaper but confounded by sequential market movement and only one maker-filled leg. Keep IOC as the production fallback until event-level replay and repeated paired testnet trials pass.
+
 1. Pick the variant: **`trend_on_basket`** (50d MA on the 1/N basket of majors)
    for the best risk-adjusted profile, or **`dual_confirm`** on BTC for the
    tightest single-asset drawdown.

@@ -46,11 +46,18 @@ def append(result: SubmitResult, log_dir: Path | None = None) -> Path:
 
     record = {
         "ts_utc": datetime.now(timezone.utc).isoformat(),
+        "network": result.plan.network,
+        "target_id": (
+            result.plan.target_snapshot.target_id
+            if result.plan.target_snapshot is not None
+            else None
+        ),
         "submitted": result.submitted,
         "error": result.error,
         "plan": _serialize(result.plan),
         "response": result.response,
         "post_state": _serialize(result.post_state) if result.post_state else None,
+        "drifts": _serialize(result.drifts),
     }
     with path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(record, default=str) + "\n")

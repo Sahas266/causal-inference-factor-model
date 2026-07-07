@@ -17,59 +17,30 @@ Algorithm:
 
 from __future__ import annotations
 
-import hashlib
 import logging
 import time
-from typing import Iterable
 
 from causal_portfolio.execution.config import ExecutionConfig
+from causal_portfolio.execution.precision import (
+    round_price as _round_price,
+    round_size as _round_size,
+)
 from causal_portfolio.execution.types import (
     AccountState,
     AssetMeta,
     Order,
-    Position,
     RebalancePlan,
     SkipReason,
+    TargetSnapshot,
+    make_cloid,
 )
 
 logger = logging.getLogger("cpcm.execution.rebalancer")
 
 
 def _make_cloid(timestamp_ms: int, coin: str, is_buy: bool, size: float) -> str:
-    """Deterministic 16-char hex cloid so retries don't double-trade.
-
-    HL accepts 16-byte (32-char) hex client order IDs. We hash the immutable
-    parts of the order so two identical submissions in the same millisecond
-    get the same cloid; HL will reject the duplicate.
-    """
-    raw = f"{timestamp_ms}:{coin}:{is_buy}:{size:.10f}".encode()
-    return "0x" + hashlib.sha256(raw).hexdigest()[:32]
-
-
-def _round_size(size: float, sz_decimals: int) -> float:
-    """Round a size to the asset's allowed precision, toward zero."""
-    if size == 0:
-        return 0.0
-    factor = 10 ** sz_decimals
-    sign = 1.0 if size > 0 else -1.0
-    return sign * (int(abs(size) * factor)) / factor
-
-
-def _round_price(px: float, sz_decimals: int, is_spot: bool = False) -> float:
-    """Round a price to HL's tick rules.
-
-    Mirrors `hyperliquid.exchange.Exchange._slippage_price`:
-      - 5 significant figures total
-      - Then at most (6 - sz_decimals) decimal places for perps,
-        (8 - sz_decimals) for spot.
-
-    Without this, HL rejects orders with "Order has invalid price".
-    """
-    if px <= 0:
-        return px
-    five_sig = float(f"{px:.5g}")
-    max_decimals = (8 if is_spot else 6) - sz_decimals
-    return round(five_sig, max_decimals)
+    """Deterministic cloid from the immutable parts of a plan order."""
+    return make_cloid(f"{timestamp_ms}:{coin}:{is_buy}:{size:.10f}")
 
 
 def _apply_position_caps(
@@ -86,8 +57,20 @@ def _apply_position_caps(
     return capped, hit_cap
 
 
+def _is_same_side_reduce(current_notional: float, target_notional: float) -> bool:
+    """True when moving from current to target only lowers existing risk."""
+    return (
+        current_notional != 0
+        and abs(target_notional) < abs(current_notional)
+        and (
+            target_notional == 0
+            or (current_notional > 0) == (target_notional > 0)
+        )
+    )
+
+
 def plan_rebalance(
-    target_weights: dict[str, float],
+    target_weights: dict[str, float] | TargetSnapshot,
     state: AccountState,
     mids: dict[str, float],
     meta: dict[str, AssetMeta],
@@ -97,9 +80,9 @@ def plan_rebalance(
     """Compute the orders needed to move from `state` to `target_weights`.
 
     Args:
-        target_weights: CPCM ticker (lowercase) → signed weight in [-1, 1].
-            Need not sum to 1; whatever they sum to in absolute value is the
-            target gross exposure (clipped to leverage).
+        target_weights: CPCM ticker (lowercase) → signed weight in [-1, 1],
+            or a TargetSnapshot retaining model provenance. Weights need not
+            sum to 1; their absolute sum is the target gross exposure.
         state: current account snapshot.
         mids: HL coin name → mid price (USD).
         meta: HL coin name → AssetMeta (sz_decimals, max_leverage, min_size).
@@ -113,10 +96,15 @@ def plan_rebalance(
     ts = timestamp_ms if timestamp_ms is not None else int(time.time() * 1000)
     notes: list[str] = []
     skipped: list[tuple[str, SkipReason, str]] = []
+    target_snapshot = target_weights if isinstance(target_weights, TargetSnapshot) else None
+    weights = target_snapshot.weights if target_snapshot is not None else target_weights
+    if target_snapshot is not None:
+        as_of = target_snapshot.as_of.isoformat() if target_snapshot.as_of else "missing"
+        notes.append(f"target {target_snapshot.target_id} as_of={as_of}")
 
     # ── 1. Map tickers, drop unlisted ────────────────────────────────
     mapped: dict[str, float] = {}
-    for ticker, w in target_weights.items():
+    for ticker, w in weights.items():
         hl_coin = config.asset_map.get(ticker.lower())
         if hl_coin is None or hl_coin not in meta:
             skipped.append((
@@ -164,6 +152,37 @@ def plan_rebalance(
 
     # ── 5. Deltas ────────────────────────────────────────────────────
     current_usd = {c: p.notional_usd for c, p in state.positions.items()}
+
+    # Hyperliquid exposes a max leverage per market. Pre-filter orders that
+    # would increase risk beyond that limit; allow same-side reductions even
+    # when the current position is already above the limit, because those are
+    # risk-reducing reduce-only orders.
+    if state.account_value_usd > 0:
+        for coin, target_notional in list(target_usd.items()):
+            asset_meta = meta.get(coin)
+            if asset_meta is None:
+                continue
+            max_abs_notional = state.account_value_usd * asset_meta.max_leverage
+            if abs(target_notional) <= max_abs_notional:
+                continue
+            current_notional = current_usd.get(coin, 0.0)
+            same_side_reduce = _is_same_side_reduce(current_notional, target_notional)
+            if same_side_reduce:
+                notes.append(
+                    f"{coin} target remains above {asset_meta.max_leverage}x "
+                    "asset leverage limit but order reduces existing exposure"
+                )
+                continue
+            skipped.append((
+                coin,
+                SkipReason.EXCEEDS_LEVERAGE_LIMIT,
+                (
+                    f"|target|=${abs(target_notional):,.2f} exceeds "
+                    f"{asset_meta.max_leverage}x asset cap "
+                    f"${max_abs_notional:,.2f}"
+                ),
+            ))
+            target_usd[coin] = current_notional
     deltas_usd = {
         coin: target_usd.get(coin, 0.0) - current_usd.get(coin, 0.0)
         for coin in set(target_usd) | set(current_usd)
@@ -191,6 +210,9 @@ def plan_rebalance(
         if mid is None or mid <= 0:
             skipped.append((coin, SkipReason.NOT_LISTED, f"no mid price for {coin}"))
             continue
+        if coin not in meta:
+            skipped.append((coin, SkipReason.NOT_LISTED, f"no asset metadata for {coin}"))
+            continue
 
         is_buy = delta > 0
         raw_size = abs(delta) / mid
@@ -205,39 +227,44 @@ def plan_rebalance(
             continue
 
         rounded_notional = size * mid
+        # reduce_only=True when the order makes the absolute position SMALLER
+        # without flipping sign (target == 0, a full close, always qualifies).
+        # HL allows wider price bands for reduce-only orders — they can't
+        # accidentally open new exposure.
+        current_notional = current_usd.get(coin, 0.0)
+        target_notional = target_usd.get(coin, 0.0)
+        is_reduce_only = _is_same_side_reduce(current_notional, target_notional)
+        is_full_reduce_close = is_reduce_only and target_notional == 0
+
+        if (
+            rounded_notional < config.min_order_notional_usd
+            and not is_full_reduce_close
+        ):
+            skipped.append((
+                coin,
+                SkipReason.BELOW_MIN_NOTIONAL,
+                (
+                    f"rounded notional=${rounded_notional:.2f} below minimum "
+                    f"${config.min_order_notional_usd:.2f}"
+                ),
+            ))
+            continue
 
         # Precision-loss warning: if rounding shrank the trade noticeably
         # (>10% off the intended notional), surface it. Trade still goes out,
         # but the operator should know precision is tight on this asset.
-        target_notional = abs(delta)
-        shrink_pct = (target_notional - rounded_notional) / target_notional
+        intended_notional = abs(delta)
+        shrink_pct = (intended_notional - rounded_notional) / intended_notional
         if shrink_pct > 0.10:
             notes.append(
                 f"precision warning {coin}: rounded ${rounded_notional:.2f} "
-                f"is {shrink_pct:.1%} below target ${target_notional:.2f} "
+                f"is {shrink_pct:.1%} below target ${intended_notional:.2f} "
                 f"(sz_decimals={m.sz_decimals})"
             )
 
         raw_limit_px = mid * config.slippage_factor(is_buy)
         limit_px = _round_price(raw_limit_px, m.sz_decimals)
         cloid = _make_cloid(ts, coin, is_buy, size)
-
-        # reduce_only=True when the order makes the absolute position SMALLER
-        # without flipping sign. HL allows wider price bands for reduce-only
-        # orders (they can't accidentally open new exposure).
-        current_notional = current_usd.get(coin, 0.0)
-        target_notional = target_usd.get(coin, 0.0)
-        # Pure reduce: position shrinks toward (or to) zero without flipping
-        # sign. target == 0 (full close) is always a reduce, whichever side
-        # the current position is on.
-        is_reduce_only = (
-            current_notional != 0
-            and abs(target_notional) < abs(current_notional)
-            and (
-                target_notional == 0
-                or (current_notional > 0) == (target_notional > 0)
-            )
-        )
 
         orders.append(Order(
             coin=coin, is_buy=is_buy, size=size,
@@ -246,7 +273,7 @@ def plan_rebalance(
 
     plan = RebalancePlan(
         timestamp_ms=ts,
-        target_weights=dict(target_weights),
+        target_weights=dict(weights),
         current_state=state,
         target_usd=target_usd,
         deltas_usd=deltas_usd,
@@ -254,6 +281,8 @@ def plan_rebalance(
         skipped=skipped,
         equity_used=equity_used,
         notes=notes,
+        network="testnet" if config.testnet else "mainnet",
+        target_snapshot=target_snapshot,
     )
     logger.info(plan.summary())
     return plan

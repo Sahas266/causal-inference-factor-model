@@ -6,15 +6,34 @@ rebalancer can be tested without importing it.
 
 from __future__ import annotations
 
+import hashlib
+import json
+import math
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from enum import Enum
+from typing import Any
+
+
+def make_cloid(seed: str) -> str:
+    """Deterministic Hyperliquid client order id from a seed string.
+
+    HL accepts 16-byte (32-char) hex cloids. Hashing the seed keeps retries
+    idempotent: the same seed always yields the same cloid, so HL rejects an
+    accidental duplicate submission. Every order path (plan orders, IOC
+    slices, TWAP children, maker quotes) derives its cloid here; idempotency
+    is only as strong as the seed the caller constructs.
+    """
+    return "0x" + hashlib.sha256(seed.encode()).hexdigest()[:32]
 
 
 class SkipReason(str, Enum):
     """Why a coin was excluded from the order list."""
     NOT_LISTED = "not_listed_on_hl"
     BELOW_MIN_SIZE = "size_rounded_to_zero"
+    BELOW_MIN_NOTIONAL = "below_min_order_notional"
     EXCEEDS_TRADE_CAP = "single_trade_cap_exceeded"
+    EXCEEDS_LEVERAGE_LIMIT = "asset_leverage_limit_exceeded"
     LONG_ONLY_VIOLATION = "negative_weight_with_long_only"
 
 
@@ -58,6 +77,72 @@ class AccountState:
 
 
 @dataclass(frozen=True)
+class TargetSnapshot:
+    """Model target weights plus the provenance needed for safe execution."""
+
+    weights: dict[str, float]
+    as_of: datetime | None = None
+    generated_at: datetime | None = None
+    strategy: str | None = None
+    source: str | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        normalized: dict[str, float] = {}
+        for raw_ticker, raw_weight in self.weights.items():
+            ticker = raw_ticker.strip().lower()
+            if not ticker:
+                raise ValueError("Target ticker names cannot be empty")
+            if ticker in normalized:
+                raise ValueError(f"Duplicate target ticker after normalization: {ticker!r}")
+            if isinstance(raw_weight, bool) or not isinstance(raw_weight, (int, float)):
+                raise ValueError(f"Weight for {raw_ticker!r} must be numeric")
+            weight = float(raw_weight)
+            if not math.isfinite(weight):
+                raise ValueError(f"Weight for {raw_ticker!r} must be finite")
+            normalized[ticker] = weight
+        object.__setattr__(self, "weights", normalized)
+        object.__setattr__(self, "metadata", dict(self.metadata))
+        for field_name in ("as_of", "generated_at"):
+            value = getattr(self, field_name)
+            if value is not None:
+                if value.tzinfo is None:
+                    value = value.replace(tzinfo=timezone.utc)
+                object.__setattr__(self, field_name, value.astimezone(timezone.utc))
+
+    @property
+    def target_id(self) -> str:
+        """Stable identifier for the economic target, independent of file path."""
+        payload = {
+            "weights": sorted(self.weights.items()),
+            "as_of": self.as_of.isoformat() if self.as_of else None,
+            "strategy": self.strategy,
+        }
+        raw = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()
+        return hashlib.sha256(raw).hexdigest()[:16]
+
+    def freshness_error(
+        self,
+        max_age_hours: float,
+        *,
+        now: datetime | None = None,
+        future_tolerance_minutes: float = 5.0,
+    ) -> str | None:
+        """Return a blocking freshness error, or None when the target is current."""
+        if self.as_of is None:
+            return "target is missing as_of/rebalance_date provenance"
+        current = now or datetime.now(timezone.utc)
+        if current.tzinfo is None:
+            current = current.replace(tzinfo=timezone.utc)
+        age_hours = (current.astimezone(timezone.utc) - self.as_of).total_seconds() / 3600
+        if age_hours < -(future_tolerance_minutes / 60):
+            return f"target as_of is {abs(age_hours):.1f}h in the future"
+        if age_hours > max_age_hours:
+            return f"target is stale: {age_hours:.1f}h old (limit {max_age_hours:.1f}h)"
+        return None
+
+
+@dataclass(frozen=True)
 class Order:
     """A single order to submit. Maps directly to HL's order action."""
     coin: str           # HL coin name
@@ -84,6 +169,8 @@ class RebalancePlan:
     skipped: list[tuple[str, SkipReason, str]]  # (coin, reason, detail)
     equity_used: float                  # equity * leverage (the scale factor)
     notes: list[str] = field(default_factory=list)
+    network: str | None = None
+    target_snapshot: TargetSnapshot | None = None
 
     def summary(self) -> str:
         n_orders = len(self.orders)

@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-import hashlib
 import math
 from dataclasses import dataclass, field
 
+from causal_portfolio.execution.precision import floor_size
+from causal_portfolio.execution.types import make_cloid
 from causal_portfolio.market_making.avellaneda_stoikov import (
     ASModelParams,
     finite_horizon_quotes,
@@ -111,15 +112,13 @@ class MarketMakerEngine:
         return math.ceil((value - 1e-12) / tick) * tick
 
     def _size(self, scale: float) -> float:
-        factor = 10**self.config.size_decimals
-        return math.floor(self.config.order_size * scale * factor + 1e-12) / factor
+        return floor_size(self.config.order_size * scale, self.config.size_decimals)
 
     def _cloid(self, generation: int, side: str, price: float, size: float) -> str:
-        raw = (
+        return make_cloid(
             f"{self.config.strategy_id}|{self.config.coin}|{generation}|"
             f"{side}|{price:.12g}|{size:.12g}"
-        ).encode()
-        return "0x" + hashlib.sha256(raw).hexdigest()[:32]
+        )
 
     def _needs_refresh(self, desired: QuotePair, now_ms: int) -> bool:
         active = self._active

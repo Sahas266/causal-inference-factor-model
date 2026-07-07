@@ -96,12 +96,12 @@ def test_dump_weights_handles_length_mismatch(tmp_path, caplog):
     assert not out.exists()  # skipped due to mismatch
 
 
-# ── CLI _load_weights now strips _meta ──────────────────────────────
+# ── target loader strips _meta ──────────────────────────────────────
 
 
-def test_cli_load_weights_skips_meta_field(tmp_path):
+def test_target_loader_skips_meta_field(tmp_path):
     """The CLI loader must accept dumper output (which includes _meta)."""
-    from causal_portfolio.execution.cli import _load_weights
+    from causal_portfolio.execution.targets import load_target_snapshot
 
     payload = {
         "btc": 0.3, "eth": 0.2,
@@ -109,25 +109,25 @@ def test_cli_load_weights_skips_meta_field(tmp_path):
     }
     f = tmp_path / "w.json"
     f.write_text(json.dumps(payload))
-    weights = _load_weights(str(f))
+    weights = load_target_snapshot(str(f)).weights
     assert weights == {"btc": 0.3, "eth": 0.2}
     assert "_meta" not in weights
 
 
-def test_cli_load_weights_still_rejects_non_numeric_real_keys(tmp_path):
+def test_target_loader_still_rejects_non_numeric_real_keys(tmp_path):
     """Only underscore-prefixed keys are exempt from numeric validation."""
-    from causal_portfolio.execution.cli import _load_weights
+    from causal_portfolio.execution.targets import load_target_snapshot
 
     payload = {"btc": "not a number"}
     f = tmp_path / "w.json"
     f.write_text(json.dumps(payload))
     with pytest.raises(ValueError, match="numeric"):
-        _load_weights(str(f))
+        load_target_snapshot(str(f))
 
 
-def test_cli_load_weights_dumper_roundtrip(tmp_path):
+def test_target_loader_dumper_roundtrip(tmp_path):
     """The CLI loader can consume what _dump_weights writes."""
-    from causal_portfolio.execution.cli import _load_weights
+    from causal_portfolio.execution.targets import load_target_snapshot
     from causal_portfolio.run_backtest import _dump_weights
 
     result = FakeResult(
@@ -139,5 +139,5 @@ def test_cli_load_weights_dumper_roundtrip(tmp_path):
                   returns_cols=["btc_return", "eth_return", "sol_return"],
                   out_path=str(out), metadata={"solver": "v1"})
 
-    weights = _load_weights(str(out))
+    weights = load_target_snapshot(str(out)).weights
     assert weights == {"btc": 0.3, "eth": 0.2, "sol": -0.1}

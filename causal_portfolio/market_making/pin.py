@@ -1,4 +1,8 @@
-"""Stable estimation of the Easley-Kiefer-O'Hara-Paperman PIN model."""
+"""Stable estimation of the Easley-Kiefer-O'Hara-Paperman PIN model.
+
+This module implements the common symmetric-uninformed-intensity variant:
+uninformed buy and sell arrivals share one epsilon parameter.
+"""
 
 from __future__ import annotations
 
@@ -61,6 +65,16 @@ def _counts(values: Sequence[int] | np.ndarray, name: str) -> np.ndarray:
     return arr
 
 
+def _validated_pair(
+    buys: Sequence[int] | np.ndarray, sells: Sequence[int] | np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
+    b = _counts(buys, "buys")
+    s = _counts(sells, "sells")
+    if b.shape != s.shape:
+        raise ValueError("buys and sells must have the same length")
+    return b, s
+
+
 def _unpack(theta: np.ndarray) -> tuple[float, float, float, float]:
     return (
         float(expit(theta[0])),
@@ -111,10 +125,7 @@ def pin_log_likelihood(
     epsilon: float,
 ) -> float:
     """Evaluate the log-sum-exp three-state Poisson-mixture likelihood."""
-    b = _counts(buys, "buys")
-    s = _counts(sells, "sells")
-    if b.shape != s.shape:
-        raise ValueError("buys and sells must have the same length")
+    b, s = _validated_pair(buys, sells)
     if not (0 < alpha < 1 and 0 < delta < 1 and mu > 0 and epsilon > 0):
         raise ValueError("alpha/delta must be in (0,1); rates must be > 0")
     return float(logsumexp(_component_logs(b, s, alpha, delta, mu, epsilon), axis=1).sum())
@@ -151,10 +162,7 @@ def fit_pin(
     seed: int = 0,
 ) -> PINFit:
     """Fit PIN by deterministic multi-start L-BFGS-B in transformed space."""
-    b = _counts(buys, "buys")
-    s = _counts(sells, "sells")
-    if b.shape != s.shape:
-        raise ValueError("buys and sells must have the same length")
+    b, s = _validated_pair(buys, sells)
     if b.size < min_days:
         raise ValueError(f"PIN requires at least {min_days} days, got {b.size}")
     if n_starts < 1:
@@ -238,10 +246,7 @@ def pin_posteriors(
     fit: PINFit,
 ) -> list[PINPosterior]:
     """Posterior probabilities of no-news, informed-buy, informed-sell days."""
-    b = _counts(buys, "buys")
-    s = _counts(sells, "sells")
-    if b.shape != s.shape:
-        raise ValueError("buys and sells must have the same length")
+    b, s = _validated_pair(buys, sells)
     logs = _component_logs(b, s, fit.alpha, fit.delta, fit.mu, fit.epsilon)
     probabilities = np.exp(logs - logsumexp(logs, axis=1, keepdims=True))
     return [PINPosterior(*map(float, row)) for row in probabilities]
@@ -256,10 +261,7 @@ def rolling_pin(
     seed: int = 0,
 ) -> list[PINFit | None]:
     """Walk-forward PIN estimates; each output uses data through that day."""
-    b = _counts(buys, "buys")
-    s = _counts(sells, "sells")
-    if b.shape != s.shape:
-        raise ValueError("buys and sells must have the same length")
+    b, s = _validated_pair(buys, sells)
     if window < 20:
         raise ValueError("window must be >= 20")
     output: list[PINFit | None] = [None] * len(b)
