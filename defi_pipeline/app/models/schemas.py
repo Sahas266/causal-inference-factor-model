@@ -151,7 +151,7 @@ class APIResponse(BaseModel):
     """Standardized API response format."""
 
     success: bool = Field(..., description="Whether the request was successful")
-    data: List[Dict[str, Any]] = Field(..., description="Response data")
+    data: Any = Field(..., description="Response data")
     metadata: MetricMetadata = Field(..., description="Response metadata")
     error: Optional[str] = Field(default=None, description="Error message if any")
 

@@ -12,22 +12,31 @@ Usage:
 
 import argparse
 import sys
-import os
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 import json
 from datetime import datetime
 
+BACKFILL_DIR = Path(__file__).resolve().parent
+
 # Add src to path
-sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(BACKFILL_DIR))
 
 from src.core.orchestrator import BackfillOrchestrator
 from src.core.utils.logger import setup_logger
 from src.core.utils.config_loader import ConfigLoader
 from dotenv import load_dotenv
 
-# Load environment variables
-load_dotenv()
+
+def load_environment() -> None:
+    """
+    Load CLI environment files without causing import-time test side effects.
+
+    The operational backfill env lives next to this script. A second default
+    load preserves the previous cwd-based fallback for local overrides.
+    """
+    load_dotenv(BACKFILL_DIR / '.env')
+    load_dotenv()
 
 
 def parse_args():
@@ -66,8 +75,8 @@ Examples:
     parser.add_argument(
         '--config-dir',
         type=str,
-        default='config',
-        help='Path to config directory (default: config/)'
+        default=None,
+        help='Path to config directory (default: backfill_data/config/)'
     )
     
     parser.add_argument(
@@ -130,6 +139,33 @@ Examples:
     return parser.parse_args()
 
 
+def resolve_cli_path(path_str: str) -> Path:
+    """
+    Resolve CLI paths from either the current directory or backfill_data/.
+
+    The documented repo-root invocation is ``python backfill_data/backfill.py``;
+    the script's examples use paths relative to backfill_data/. Supporting both
+    keeps existing operator muscle memory intact.
+    """
+    path = Path(path_str)
+    if path.is_absolute() or path.exists():
+        return path
+
+    script_relative = BACKFILL_DIR / path
+    if script_relative.exists():
+        return script_relative
+
+    return path
+
+
+def resolve_config_dir(config_dir: Optional[str]) -> Optional[str]:
+    """Resolve a config directory argument while preserving ConfigLoader defaults."""
+    if config_dir is None:
+        return None
+
+    return str(resolve_cli_path(config_dir))
+
+
 def load_endpoint_configs(config_path: str, config_loader: ConfigLoader, recursive: bool = False) -> List[dict]:
     """
     Load endpoint configurations from file or directory.
@@ -142,7 +178,7 @@ def load_endpoint_configs(config_path: str, config_loader: ConfigLoader, recursi
     Returns:
         List of endpoint configurations
     """
-    path = Path(config_path)
+    path = resolve_cli_path(config_path)
 
     if path.is_file():
         # Single config file
@@ -198,6 +234,7 @@ def print_results(results: dict):
 def main():
     """Main CLI entry point"""
     args = parse_args()
+    load_environment()
     
     # Setup logging
     global logger
@@ -210,7 +247,8 @@ def main():
     try:
         # Initialize orchestrator
         logger.info("Initializing backfill orchestrator...")
-        orchestrator = BackfillOrchestrator(config_dir=args.config_dir)
+        config_dir = resolve_config_dir(args.config_dir)
+        orchestrator = BackfillOrchestrator(config_dir=config_dir)
         
         # Handle different commands
         if args.list_providers:
@@ -219,7 +257,7 @@ def main():
             print("\nAvailable Providers:")
             print("-" * 40)
             for provider in providers:
-                print(f"  • {provider}")
+                print(f"  - {provider}")
             print()
             return 0
         
@@ -256,7 +294,7 @@ def main():
             return 1
         
         logger.info(f"Loading endpoint configurations from: {args.config}")
-        config_loader = ConfigLoader(args.config_dir)
+        config_loader = ConfigLoader(config_dir)
         endpoint_configs = load_endpoint_configs(args.config, config_loader, recursive=args.recursive)
         
         if not endpoint_configs:

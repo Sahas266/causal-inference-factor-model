@@ -4,23 +4,22 @@ Tests the FastAPI endpoints and their responses.
 """
 
 import pytest
-from httpx import AsyncClient
-from fastapi.testclient import TestClient
+from httpx import ASGITransport, AsyncClient
 
 from app.main import app
-from app.config import settings
 
 
-@pytest.fixture
-def client():
-    """Create a test client for the FastAPI app."""
-    return TestClient(app)
-
+def make_async_client() -> AsyncClient:
+    """Create an async in-process ASGI client for the FastAPI app."""
+    return AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://testserver",
+    )
 
 @pytest.mark.asyncio
 async def test_health_endpoint():
     """Test the health check endpoint."""
-    async with AsyncClient(app=app, base_url="http://testserver") as client:
+    async with make_async_client() as client:
         response = await client.get("/health")
 
         assert response.status_code == 200
@@ -34,7 +33,7 @@ async def test_health_endpoint():
 @pytest.mark.asyncio
 async def test_detailed_health_endpoint():
     """Test the detailed health check endpoint."""
-    async with AsyncClient(app=app, base_url="http://testserver") as client:
+    async with make_async_client() as client:
         response = await client.get("/health/detailed")
 
         assert response.status_code == 200
@@ -49,7 +48,7 @@ async def test_detailed_health_endpoint():
 @pytest.mark.asyncio
 async def test_root_endpoint():
     """Test the root endpoint."""
-    async with AsyncClient(app=app, base_url="http://testserver") as client:
+    async with make_async_client() as client:
         response = await client.get("/")
 
         assert response.status_code == 200
@@ -73,7 +72,7 @@ async def test_api_placeholder_endpoints():
         "/api/v1/cex-dex-flow"
     ]
 
-    async with AsyncClient(app=app, base_url="http://testserver") as client:
+    async with make_async_client() as client:
         for endpoint in endpoints:
             response = await client.get(endpoint)
 
@@ -83,13 +82,14 @@ async def test_api_placeholder_endpoints():
             assert data["success"] is True
             assert "data" in data
             assert "metadata" in data
-            assert "placeholder" in data["data"]["message"].lower()
+            assert data["metadata"]["source"] == "placeholder"
+            assert "implementation pending" in data["data"]["message"].lower()
 
 
 @pytest.mark.asyncio
 async def test_dashboard_endpoint():
     """Test the dashboard endpoint."""
-    async with AsyncClient(app=app, base_url="http://testserver") as client:
+    async with make_async_client() as client:
         response = await client.get("/api/v1/dashboard")
 
         assert response.status_code == 200
@@ -103,7 +103,7 @@ async def test_dashboard_endpoint():
 @pytest.mark.asyncio
 async def test_historical_endpoint():
     """Test the historical data endpoint."""
-    async with AsyncClient(app=app, base_url="http://testserver") as client:
+    async with make_async_client() as client:
         response = await client.get("/api/v1/historical?metrics=liq_flow")
 
         assert response.status_code == 200
@@ -117,7 +117,7 @@ async def test_historical_endpoint():
 @pytest.mark.asyncio
 async def test_invalid_metric_request():
     """Test handling of invalid metric requests."""
-    async with AsyncClient(app=app, base_url="http://testserver") as client:
+    async with make_async_client() as client:
         response = await client.get("/api/v1/historical?metrics=invalid_metric")
 
         # Should still return 200 with empty data for invalid metrics
@@ -133,7 +133,7 @@ async def test_rate_limiting():
     """Test that rate limiting is applied."""
     # This test would need to be adjusted based on actual rate limiting implementation
     # For now, just verify the endpoint exists and responds
-    async with AsyncClient(app=app, base_url="http://testserver") as client:
+    async with make_async_client() as client:
         response = await client.get("/api/v1/liq-flow")
 
         assert response.status_code == 200
@@ -144,7 +144,7 @@ async def test_rate_limiting():
 @pytest.mark.asyncio
 async def test_openapi_docs():
     """Test that OpenAPI documentation is accessible."""
-    async with AsyncClient(app=app, base_url="http://testserver") as client:
+    async with make_async_client() as client:
         response = await client.get("/docs")
 
         # Should redirect or serve docs
@@ -154,8 +154,14 @@ async def test_openapi_docs():
 @pytest.mark.asyncio
 async def test_cors_headers():
     """Test CORS headers are present."""
-    async with AsyncClient(app=app, base_url="http://testserver") as client:
-        response = await client.options("/api/v1/liq-flow")
+    async with make_async_client() as client:
+        response = await client.options(
+            "/api/v1/liq-flow",
+            headers={
+                "Origin": "http://localhost:3000",
+                "Access-Control-Request-Method": "GET",
+            },
+        )
 
         # Check for CORS headers
         assert "access-control-allow-origin" in response.headers
