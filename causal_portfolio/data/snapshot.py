@@ -58,6 +58,54 @@ def _local_max_time(loader: DuckDBCPCMDataLoader) -> str | None:
     return None
 
 
+def _last_sync_time(loader: DuckDBCPCMDataLoader) -> str | None:
+    loader._con.execute(
+        "CREATE TABLE IF NOT EXISTS snapshot_meta(key TEXT PRIMARY KEY, value TEXT)"
+    )
+    row = loader._con.execute(
+        "SELECT value FROM snapshot_meta WHERE key = 'last_sync_utc'"
+    ).fetchone()
+    return row[0] if row else None
+
+
+def _record_sync_time(loader: DuckDBCPCMDataLoader, when: datetime) -> None:
+    loader._con.execute(
+        "CREATE TABLE IF NOT EXISTS snapshot_meta(key TEXT PRIMARY KEY, value TEXT)"
+    )
+    loader._con.execute(
+        "INSERT OR REPLACE INTO snapshot_meta VALUES ('last_sync_utc', ?)",
+        [when.isoformat()],
+    )
+
+
+def _fetch_backfilled(client, created_since: str, time_before: datetime,
+                      assets: list[str] | None) -> list[dict]:
+    """Rows INSERTED after the previous snapshot but STAMPED before the resume
+    cursor — the resume-by-MAX(time) cursor alone silently misses these when a
+    backfill adds historical rows, and the local DB diverges from the
+    warehouse forever."""
+    rows: list[dict] = []
+    offset = 0
+    while True:
+        q = client.table("asset_metrics").select(
+            "provider,provider_priority,asset,metric,time,value,frequency,metadata"
+        )
+        if assets:
+            q = q.in_("asset", assets)
+        q = q.gte("created_at", created_since).lt("time", time_before.isoformat())
+        q = q.order("created_at").order("time").order("provider")
+        q = q.range(offset, offset + PAGE_SIZE - 1)
+        result = q.execute()
+        page = result.data or []
+        if not page:
+            break
+        rows.extend(page)
+        if len(page) < PAGE_SIZE:
+            break
+        offset += PAGE_SIZE
+    return rows
+
+
 def _fetch_window(client, win_start: datetime, win_end: datetime,
                   assets: list[str] | None) -> list[dict]:
     """Pull every row whose time is in [win_start, win_end) via offset pagination."""
@@ -107,8 +155,12 @@ def snapshot(
         loader._con.execute("DELETE FROM asset_metrics")
         logger.info("Truncated existing asset_metrics")
 
-    cursor_start = start or _local_max_time(loader) or "2021-01-01"
+    sync_started = datetime.now(timezone.utc)
+    local_max = _local_max_time(loader)
+    cursor_start = start or local_max or "2021-01-01"
     win_start = _parse_iso(cursor_start)
+    resume_cursor = win_start  # for the late-backfill sweep below
+    is_resume = start is None and not truncate and local_max is not None
     final_end = _parse_iso(end or DEFAULT_END)
     logger.info("Snapshotting %s → %s in %d-day windows",
                 win_start.date(), final_end.date(), WINDOW_DAYS)
@@ -133,6 +185,23 @@ def snapshot(
             total / max(elapsed, 1e-3),
         )
         win_start = win_end
+
+    # Late-backfill sweep: on resume, also pull rows inserted since the last
+    # snapshot run whose timestamps fall BEFORE the resume cursor.
+    prev_sync = _last_sync_time(loader)
+    if is_resume and prev_sync:
+        try:
+            late = _fetch_backfilled(client, prev_sync, resume_cursor, assets)
+            if late:
+                loader.upsert_rows(late)
+                total += len(late)
+            logger.info(
+                "Late-backfill sweep (created_at >= %s, time < %s): %d rows",
+                prev_sync, resume_cursor.date(), len(late),
+            )
+        except Exception as e:
+            logger.error("Late-backfill sweep failed (continuing): %s", e)
+    _record_sync_time(loader, sync_started)
 
     loader.close()
     logger.info("Done: %d rows in %.1fs", total, time.time() - t0)

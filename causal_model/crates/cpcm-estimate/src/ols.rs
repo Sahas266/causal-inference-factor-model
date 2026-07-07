@@ -69,6 +69,21 @@ pub fn ols(y: &DVector<f64>, x: &DMatrix<f64>, feature_names: &[String]) -> anyh
         .map(|&t| 2.0 * (1.0 - t_dist.cdf(t.abs())))
         .collect();
 
+    // HAC (Newey-West) standard errors alongside the iid ones.
+    let hac_var = hac_covariance(x, &residuals, &xtx_inv, newey_west_maxlags(n));
+    let hac_std_errors: Vec<f64> = (0..k)
+        .map(|j| hac_var[(j, j)].max(0.0).sqrt())
+        .collect();
+    let hac_t_stats: Vec<f64> = beta
+        .iter()
+        .zip(&hac_std_errors)
+        .map(|(&b, &se)| if se > 1e-15 { b / se } else { 0.0 })
+        .collect();
+    let hac_p_values: Vec<f64> = hac_t_stats
+        .iter()
+        .map(|&t| 2.0 * (1.0 - t_dist.cdf(t.abs())))
+        .collect();
+
     Ok(OlsResult {
         coefficients: beta.as_slice().to_vec(),
         std_errors,
@@ -80,7 +95,47 @@ pub fn ols(y: &DVector<f64>, x: &DMatrix<f64>, feature_names: &[String]) -> anyh
         n_obs: n,
         n_features: k,
         feature_names: feature_names.to_vec(),
+        hac_std_errors,
+        hac_t_stats,
+        hac_p_values,
     })
+}
+
+/// Default Newey-West truncation lag: floor(4 * (n/100)^(2/9)).
+pub fn newey_west_maxlags(n: usize) -> usize {
+    (4.0 * ((n as f64) / 100.0).powf(2.0 / 9.0)).floor() as usize
+}
+
+/// Newey-West HAC covariance (Bartlett kernel), sandwich form.
+///
+/// Var(β) = (X'X)⁻¹ S (X'X)⁻¹ with
+/// S = Σ_t e_t² x_t x_t' + Σ_{l=1}^{L} w_l Σ_t (x_t e_t e_{t-l} x_{t-l}' + sym),
+/// w_l = 1 - l/(L+1). `xw` is the bread's regressor matrix (X for OLS, the
+/// projected [X̂, X_exog] for 2SLS); `residuals` are the model residuals.
+/// No small-sample correction (the Python port matches this exactly).
+pub fn hac_covariance(
+    xw: &DMatrix<f64>,
+    residuals: &DVector<f64>,
+    xtx_inv: &DMatrix<f64>,
+    maxlags: usize,
+) -> DMatrix<f64> {
+    let n = xw.nrows();
+    let k = xw.ncols();
+    let mut xu = xw.clone();
+    for i in 0..n {
+        for j in 0..k {
+            xu[(i, j)] *= residuals[i];
+        }
+    }
+    let mut s = xu.transpose() * &xu;
+    let l_max = maxlags.min(n.saturating_sub(1));
+    for l in 1..=l_max {
+        let w = 1.0 - (l as f64) / ((maxlags + 1) as f64);
+        let gamma = xu.rows(l, n - l).transpose() * xu.rows(0, n - l);
+        let gamma_t = gamma.transpose();
+        s += w * (gamma + gamma_t);
+    }
+    xtx_inv * s * xtx_inv
 }
 
 /// Add an intercept (column of 1s) as the first column of X.

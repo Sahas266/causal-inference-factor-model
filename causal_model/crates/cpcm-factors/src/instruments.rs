@@ -1,6 +1,12 @@
 use std::collections::HashMap;
 
-use crate::stats::{diff, z_score_abs};
+use crate::stats::diff;
+
+/// Rolling window / min-periods for the spike z-score (matches the Python
+/// factors/instruments.py). Trailing window ⇒ spike labels at t use only
+/// data ≤ t (no look-ahead).
+const Z_WINDOW: usize = 252;
+const Z_MIN_PERIODS: usize = 60;
 
 /// Compute instrumental variables from the data panel.
 ///
@@ -68,11 +74,39 @@ pub fn compute_instruments(
     (iv_data, iv_map)
 }
 
-/// Compute a z-scored spike indicator: 1.0 if |z(diff(x))| > threshold, else 0.0.
-/// Then lag by `lag_days`.
+/// Rolling z-score of |x|: (|x_t| - mean_t) / std_t over a trailing window
+/// (population std, ddof=0 — matches pandas .rolling().std(ddof=0) in the
+/// Python port). NaN until `min_periods` non-NaN values are in the window.
+fn rolling_z_score_abs(x: &[f64], window: usize, min_periods: usize) -> Vec<f64> {
+    let n = x.len();
+    let mut out = vec![f64::NAN; n];
+    for t in 0..n {
+        if x[t].is_nan() {
+            continue;
+        }
+        let start = (t + 1).saturating_sub(window);
+        let vals: Vec<f64> = x[start..=t]
+            .iter()
+            .filter(|v| !v.is_nan())
+            .map(|v| v.abs())
+            .collect();
+        if vals.len() < min_periods {
+            continue;
+        }
+        let mean = vals.iter().sum::<f64>() / vals.len() as f64;
+        let var = vals.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / vals.len() as f64;
+        let std = var.sqrt();
+        out[t] = if std < 1e-15 { 0.0 } else { (x[t].abs() - mean) / std };
+    }
+    out
+}
+
+/// Compute a z-scored spike indicator: 1.0 if z(diff(x)) > threshold, else 0.0.
+/// The z-score is ROLLING (trailing window) so labels at t never see the
+/// future. Then lag by `lag_days`.
 fn lagged_z_score_spike(x: &[f64], threshold: f64, lag_days: usize) -> Vec<f64> {
     let d = diff(x);
-    let z = z_score_abs(&d);
+    let z = rolling_z_score_abs(&d, Z_WINDOW, Z_MIN_PERIODS);
     let indicator: Vec<f64> = z
         .iter()
         .map(|&v| {

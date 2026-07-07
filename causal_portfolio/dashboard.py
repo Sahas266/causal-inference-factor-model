@@ -263,13 +263,16 @@ def run_pipeline():
 
         if solver_name == "v4":
             from causal_portfolio.solvers.v4_pinn import V4PINNSolver
-            solver = V4PINNSolver(
-                m_drivers=m_actual, n_assets=R.shape[1],
-                hidden_dim=pinn_hidden, n_layers=3,
-            )
+
+            def _make_solver():
+                return V4PINNSolver(
+                    m_drivers=m_actual, n_assets=R.shape[1],
+                    hidden_dim=pinn_hidden, n_layers=3,
+                )
             fit_kwargs = dict(n_epochs=pinn_epochs, lr=pinn_lr, lambda_J=pinn_lambda_j)
         else:
-            solver = V1LinearSolver(alpha=ridge_alpha)
+            def _make_solver():
+                return V1LinearSolver(alpha=ridge_alpha)
             fit_kwargs = {}
 
         optimizer = ManifoldOptimizer(
@@ -278,13 +281,15 @@ def run_pipeline():
             long_only=long_only,
         )
 
-        # Fit solver on full data for diagnostics
-        solver.fit(D, R, **fit_kwargs) if fit_kwargs else solver.fit(D, R)
+        # Full-sample fit for the Solver tab — a SEPARATE instance so the
+        # backtest's rolling refits don't clobber the diagnostics.
+        diag_solver = _make_solver()
+        diag_solver.fit(D, R, **fit_kwargs)
 
         backtester = CPCMBacktester(
-            solver=solver, optimizer=optimizer,
+            solver=_make_solver(), optimizer=optimizer,
             use_ekf=use_ekf, rebalance_freq=rebalance_freq,
-            train_window=train_window,
+            train_window=train_window, fit_kwargs=fit_kwargs,
         )
         result = backtester.run(R, D, dates)
 
@@ -320,7 +325,7 @@ def run_pipeline():
         "ranking": ranking,
         "dag": dag,
         "dag_summary": dag_summary,
-        "solver": solver,
+        "solver": diag_solver,
         "solver_name": solver_name,
         "result": result,
         "ekf_data": ekf_data,
@@ -329,6 +334,24 @@ def run_pipeline():
         "D": D,
         "R": R,
         "m_actual": m_actual,
+        # Parameters that PRODUCED these results — render paths must read
+        # these, never the live sidebar widgets (which the user can move
+        # after the run without re-running).
+        "run_config": {
+            "assets": list(selected_assets),
+            "start": start_str,
+            "end": end_str,
+            "m_drivers": m_actual,
+            "solver_name": solver_name,
+            "fit_kwargs": dict(fit_kwargs),
+            "use_ekf": use_ekf,
+            "obs_noise": obs_noise,
+            "train_window": train_window,
+            "rebalance_freq": rebalance_freq,
+            "risk_aversion": risk_aversion,
+            "max_weight": max_weight,
+            "long_only": long_only,
+        },
     }
     st.session_state.result = result
     st.success("Pipeline complete!")
@@ -393,6 +416,8 @@ Walk-Forward Backtest    Rolling 252-day train, rebalance every N days
     else:
         data = st.session_state.pipeline_data
         result = st.session_state.result
+        run_cfg = data.get("run_config", {})
+        run_train_window = run_cfg.get("train_window", train_window)
 
         # ── Key metrics ──
         st.markdown("### Performance Metrics")
@@ -420,14 +445,17 @@ Walk-Forward Backtest    Rolling 252-day train, rebalance every N days
             st.markdown("### Run Configuration")
             cfg = {
                 "Assets": ", ".join(data["asset_names"]),
-                "Date range": f"{start_date} → {end_date}",
+                "Date range": f"{run_cfg.get('start', start_date)} → {run_cfg.get('end', end_date)}",
                 "Selected drivers": ", ".join(data["selected_drivers"]),
                 "Solver": data["solver_name"].upper(),
-                "EKF enabled": str(use_ekf),
-                "Train window": f"{train_window} days",
-                "Rebalance freq": f"every {rebalance_freq} days",
+                "EKF enabled": str(run_cfg.get("use_ekf", use_ekf)),
+                "Train window": f"{run_train_window} days",
+                "Rebalance freq": f"every {run_cfg.get('rebalance_freq', rebalance_freq)} days",
                 "Rebalances": str(len(result.rebalance_dates)),
             }
+            if run_cfg.get("fit_kwargs"):
+                cfg["Fit kwargs"] = ", ".join(
+                    f"{k}={v}" for k, v in run_cfg["fit_kwargs"].items())
             st.table(pd.DataFrame(cfg.items(), columns=["Parameter", "Value"]))
 
         with col_b:
@@ -456,7 +484,7 @@ Walk-Forward Backtest    Rolling 252-day train, rebalance every N days
         # Buy & Hold BTC benchmark over the same test window
         ov_returns = data.get("returns")
         if ov_returns is not None and "btc_return" in ov_returns.columns:
-            test_dates = data["dates"][train_window:train_window + len(port_cum)]
+            test_dates = data["dates"][run_train_window:run_train_window + len(port_cum)]
             btc_r = ov_returns["btc_return"].reindex(test_dates).fillna(0.0)
             fig.add_trace(go.Scatter(
                 y=np.cumprod(1 + btc_r.values), mode="lines", name="Buy & Hold BTC",
@@ -681,7 +709,10 @@ with t_solver:
         data = st.session_state.pipeline_data
         solver = data["solver"]
 
-        st.markdown(f"### {data['solver_name'].upper()} Solver Diagnostics")
+        st.markdown(f"### {data['solver_name'].upper()} Solver — full-sample fit (diagnostics)")
+        st.caption("Fitted once on the entire aligned sample for inspection only. "
+                   "The backtest uses a separate solver instance re-fitted on each "
+                   "rolling train window.")
 
         if data["solver_name"] == "v1":
             diag = solver.diagnostics
@@ -783,6 +814,7 @@ with t_backtest:
     else:
         result = st.session_state.result
         data = st.session_state.pipeline_data
+        run_train_window = data.get("run_config", {}).get("train_window", train_window)
 
         # ── Performance metrics ──
         st.markdown("### Risk/Return Summary")
@@ -801,7 +833,8 @@ with t_backtest:
         st.markdown("### Cumulative Returns")
         port_cum = np.cumprod(1 + result.returns_series)
         port_cum_series = pd.Series(
-            port_cum, index=data["dates"][train_window:train_window + len(port_cum)]
+            port_cum,
+            index=data["dates"][run_train_window:run_train_window + len(port_cum)],
         )
 
         # ── Buy & Hold BTC benchmark (same window) ──
@@ -912,7 +945,7 @@ with t_backtest:
         st.markdown("### Portfolio Weight Evolution")
         wh = result.weights_history
         asset_names = data["asset_names"]
-        wh_idx = data["dates"][train_window:train_window + len(wh)]
+        wh_idx = data["dates"][run_train_window:run_train_window + len(wh)]
         wh_df = pd.DataFrame(wh, index=wh_idx,
                              columns=asset_names[:wh.shape[1]])
         fig_wev = go.Figure()
@@ -1079,9 +1112,8 @@ with t_regimes:
     with rc1:
         regime_n_states = st.slider("Number of regimes", 1, 3, 2)
         regime_m = st.slider("Drivers per regime (m)", 1, 3, 3)
-    with rc2:
-        regime_window = st.slider("HMM window (days)", 90, 756, 504, 30)
-        regime_refit = st.slider("Causal refit cadence (days)", 7, 126, 63, 7)
+    # Radio rendered before the rc2 sliders (code order, not visual order)
+    # so we can disable the sliders it makes irrelevant.
     with rc3:
         regime_label_mode = st.radio(
             "Labeling method",
@@ -1092,6 +1124,15 @@ with t_regimes:
             "(rolling fit + forward filter). **Non-causal** = full-sample "
             "hindsight; overstates the structure (see research doc)."
         )
+    regime_is_causal = regime_label_mode.startswith("Causal")
+    with rc2:
+        regime_window = st.slider("HMM window (days)", 90, 756, 504, 30,
+                                  disabled=not regime_is_causal)
+        regime_refit = st.slider("Causal refit cadence (days)", 7, 126, 63, 7,
+                                 disabled=not regime_is_causal)
+        if not regime_is_causal:
+            st.caption("Ignored in non-causal (Viterbi) mode — the HMM is fit "
+                       "once on the full sample.")
 
     if st.button("Analyze Regimes", type="primary"):
         from causal_portfolio.regimes.dashboard_panel import analyze_regimes
@@ -1105,7 +1146,7 @@ with t_regimes:
                     start=str(start_date), end=str(end_date),
                     n_states=regime_n_states, hmm_window=regime_window,
                     hmm_refit_every=regime_refit, m_drivers=regime_m,
-                    causal=regime_label_mode.startswith("Causal"),
+                    causal=regime_is_causal,
                 )
             except Exception as e:
                 st.session_state.regime_result = None
@@ -1130,9 +1171,26 @@ with t_regimes:
         mode_tag = "causal (forward filter)" if rr.causal else "non-causal (Viterbi, look-ahead)"
         st.markdown(f"**Labeling:** {mode_tag} · **features:** {', '.join(rr.feature_columns)} "
                     f"· **labeled days:** {len(rr.dates)}")
+        # Caption from the params that PRODUCED this result, not the live
+        # widgets above (which the user can move without re-running).
+        rp = getattr(rr, "params", None) or {}
+        if rp:
+            window_tag = (f" · window={rp['hmm_window']}d · refit={rp['hmm_refit_every']}d"
+                          if rp.get("causal") else "")
+            st.caption(
+                f"Run params: assets={', '.join(rp['assets'])} · "
+                f"{rp['start']} → {rp['end']} · n_states={rp['n_states']} · "
+                f"m={rp['m_drivers']}{window_tag}"
+            )
+
+        _full_sample_note = ("Characterization (state means, transition matrix) "
+                             "from full-sample fit; labels/dwell from rolling "
+                             "causal fits.")
 
         # ── Characterization table ──
         st.markdown("### Regime Characterization")
+        if rr.causal:
+            st.caption(_full_sample_note)
         char_rows = []
         for s in range(rr.n_states):
             d = rr.dwell.get(s, {})
@@ -1149,6 +1207,8 @@ with t_regimes:
         # ── Transition matrix ──
         if rr.n_states > 1:
             st.markdown("### Transition Matrix  ·  P(next | current)")
+            if rr.causal:
+                st.caption(_full_sample_note)
             labels_tm = [f"{s}·{_regime_name(s, rr.n_states)}" for s in range(rr.n_states)]
             fig_tm = go.Figure(go.Heatmap(
                 z=rr.transition_matrix, x=labels_tm, y=labels_tm,

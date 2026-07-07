@@ -122,6 +122,20 @@ def build_cpcm_dag(
         G.add_node(shock_node, kind=NodeKind.UNOBSERVED_SHOCK, asset=asset)
         G.add_edge(shock_node, ret_node, kind=EdgeKind.CAUSAL, lag=0)
 
+    # ── Latent confounders (one per instrumented treatment) ─────
+    # u_<treatment> → treatment and u_<treatment> → every asset return.
+    # This encodes the endogeneity the IV design exists for: the backdoor
+    # criterion now FAILS for instrumented factors (the confounder is
+    # UNOBSERVED_SHOCK, so no adjustment set can include or block it) and
+    # identification falls through to the IV. Mirrors cpcm_dag.rs.
+    for _iv_name, treatment, _lag in INSTRUMENTS:
+        if treatment in global_factors:
+            u = f"u_{treatment}"
+            G.add_node(u, kind=NodeKind.UNOBSERVED_SHOCK, asset=None)
+            G.add_edge(u, treatment, kind=EdgeKind.CAUSAL, lag=0)
+            for asset in assets:
+                G.add_edge(u, f"{asset}_return", kind=EdgeKind.CAUSAL, lag=0)
+
     assert nx.is_directed_acyclic_graph(G), "CPCM DAG has a cycle!"
     return G
 

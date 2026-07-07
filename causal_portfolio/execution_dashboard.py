@@ -93,8 +93,9 @@ sm, bm = res["strat_metrics"], res["bh_metrics"]
 c1, c2, c3, c4 = st.columns(4)
 c1.metric("Total return", f"{sm['total']:+.1%}", f"{sm['total']-bm['total']:+.1%} vs BH")
 c2.metric("Sharpe", f"{sm['sharpe']:.3f}", f"{sm['sharpe']-bm['sharpe']:+.3f} vs BH")
-c3.metric("Max drawdown", f"{sm['max_dd']:+.1%}", f"{sm['max_dd']-bm['max_dd']:+.1%} vs BH",
-          delta_color="inverse")
+# max_dd is negative; a higher (closer-to-zero) delta is better, so the
+# default delta coloring is already correct.
+c3.metric("Max drawdown", f"{sm['max_dd']:+.1%}", f"{sm['max_dd']-bm['max_dd']:+.1%} vs BH")
 c4.metric("Rebalances", f"{sm['rebalances']}")
 
 fig = go.Figure()
@@ -179,8 +180,9 @@ elif state is not None:
 # ── Audit history ───────────────────────────────────────────────────
 
 st.subheader("📜 Recent Execution History (audit log)")
+st.caption(f"Filtered to **{network}** (records with unknown network shown as '?').")
 try:
-    records = dd.load_audit_history(n_days=7)
+    records = dd.load_audit_history(n_days=7, network=network)
     if records:
         hist_rows = []
         for rec in records:
@@ -189,6 +191,7 @@ try:
             gross = sum(abs(v) for v in (plan.get("deltas_usd") or {}).values())
             hist_rows.append({
                 "Time (UTC)": rec.get("ts_utc", "?")[:19],
+                "Network": rec.get("network") or "?",
                 "Submitted": "✓" if rec.get("submitted") else "—",
                 "Orders": n_orders,
                 "Gross $": f"${gross:,.0f}",
@@ -196,6 +199,6 @@ try:
             })
         st.dataframe(pd.DataFrame(hist_rows), hide_index=True, use_container_width=True)
     else:
-        st.caption("No execution history in the last 7 days.")
+        st.caption(f"No {network} execution history in the last 7 days.")
 except Exception as e:
     st.caption(f"Could not load audit history: {e}")

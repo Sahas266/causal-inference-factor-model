@@ -32,6 +32,7 @@ from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
+from scipy.special import logsumexp as _logsumexp
 
 from causal_portfolio.backtest.metrics import ANNUALIZATION
 
@@ -244,20 +245,6 @@ class RegimeClassifier:
             raise RuntimeError("fit() before state_means()")
         m = self._fitted.model.means_
         return m[np.argsort(self._fitted.permutation)]
-
-
-# ── numerical helper ─────────────────────────────────────────────────
-
-
-def _logsumexp(a: np.ndarray, axis=None, keepdims: bool = False) -> np.ndarray:
-    """Numerically stable log(sum(exp(a))). Avoids underflow at very negative values."""
-    a_max = np.max(a, axis=axis, keepdims=True)
-    # Replace -inf maxes with 0 so we don't get nan
-    a_max = np.where(np.isfinite(a_max), a_max, 0.0)
-    out = np.log(np.sum(np.exp(a - a_max), axis=axis, keepdims=keepdims))
-    if not keepdims:
-        a_max = np.squeeze(a_max, axis=axis)
-    return out + a_max
 
 
 # ── rolling-window fit+decode (full causal pipeline) ─────────────────

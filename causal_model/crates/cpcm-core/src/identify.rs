@@ -166,8 +166,11 @@ pub struct IvValidityResult {
 /// Two conditions (graph-based):
 /// 1. **Relevance**: instrument is NOT d-separated from treatment (unconditionally).
 ///    There must be an active path from Z to X.
-/// 2. **Exclusion restriction**: instrument IS d-separated from outcome given treatment.
-///    The only path from Z to Y goes through X.
+/// 2. **Exclusion restriction**: in G_T̄ (the graph with ALL edges out of the
+///    treatment removed), instrument IS d-separated from outcome given ∅
+///    (Pearl's graphical IV criterion). The previous d_sep(Z, Y | T) test
+///    conditioned on the collider T, spuriously rejecting valid instruments
+///    whenever T has an unobserved cause of Y.
 pub fn check_iv_validity(
     dag: &CausalDag,
     instrument: &str,
@@ -177,8 +180,9 @@ pub fn check_iv_validity(
     // Relevance: Z ⊥̸ X | ∅  (Z is NOT d-separated from X unconditionally)
     let relevant = !d_separated(dag, instrument, treatment, &[]);
 
-    // Exclusion: Z ⊥ Y | X  (Z IS d-separated from Y given X)
-    let excludable = d_separated(dag, instrument, outcome, &[treatment]);
+    // Exclusion: Z ⊥ Y | ∅ in the graph with treatment's outgoing edges removed
+    let pruned = dag.without_outgoing_edges(treatment);
+    let excludable = d_separated(&pruned, instrument, outcome, &[]);
 
     let valid = relevant && excludable;
 
@@ -191,7 +195,7 @@ pub fn check_iv_validity(
         )
     } else {
         format!(
-            "Invalid IV: {} is NOT d-separated from {} given {} (exclusion violated)",
+            "Invalid IV: {} is NOT d-separated from {} with edges out of {} removed (exclusion violated)",
             instrument, outcome, treatment
         )
     };
@@ -356,6 +360,27 @@ mod tests {
         assert!(!result.valid);
         assert!(result.relevant);
         assert!(!result.excludable);
+    }
+
+    /// The textbook IV graph: Z → X → Y with latent U → X, U → Y.
+    /// The old d_sep(Z, Y | T) test conditioned on the collider X and rejected
+    /// this valid instrument; the G_T̄ test must accept it.
+    #[test]
+    fn test_iv_valid_with_unobserved_confounder() {
+        let mut dag = CausalDag::new();
+        dag.add_node("Z", NodeKind::Instrument, None);
+        dag.add_node("X", NodeKind::GlobalFactor, None);
+        dag.add_node("U", NodeKind::UnobservedShock, None);
+        dag.add_node("Y", NodeKind::AssetReturn, Some("eth"));
+        dag.add_edge("Z", "X", EdgeKind::Instrumental, 1);
+        dag.add_edge("X", "Y", EdgeKind::Causal, 0);
+        dag.add_edge("U", "X", EdgeKind::Causal, 0);
+        dag.add_edge("U", "Y", EdgeKind::Causal, 0);
+
+        let result = check_iv_validity(&dag, "Z", "X", "Y");
+        assert!(result.valid, "{}", result.reason);
+        assert!(result.relevant);
+        assert!(result.excludable);
     }
 
     /// Invalid IV: Z is disconnected from X (no relevance).

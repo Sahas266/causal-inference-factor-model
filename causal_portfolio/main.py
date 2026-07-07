@@ -82,7 +82,16 @@ def run_pipeline(
 
     # ── 5. Fit V1 solver ────────────────────────────────────────
     # Align drivers and returns
-    common_idx = factors[selected].dropna().index.intersection(returns.dropna().index)
+    n_before = len(returns)
+    returns_clean = returns.dropna()
+    if len(returns_clean) < n_before:
+        worst = returns.isna().sum().sort_values(ascending=False)
+        logger.warning(
+            "dropna(how='any') removed %d/%d rows for ALL assets; worst "
+            "offenders: %s",
+            n_before - len(returns_clean), n_before, worst.head(3).to_dict(),
+        )
+    common_idx = factors[selected].dropna().index.intersection(returns_clean.index)
     D = factors.loc[common_idx, selected].values
     R = returns.loc[common_idx].values
 
@@ -91,13 +100,24 @@ def run_pipeline(
     diag = solver.diagnostics
     logger.info(f"V1 fitted: mean R²={diag['mean_r2']:.4f}")
 
-    # ── 6. Current weights (mean-variance, no manifold yet) ────
-    mu = solver.predict(D[-1:]).flatten()
-    cov = solver.residual_cov_
-    # Simple mean-variance: w = Sigma^{-1} mu / sum(Sigma^{-1} mu)
-    cov_inv = np.linalg.inv(cov + np.eye(cov.shape[0]) * 1e-6)
-    raw_w = cov_inv @ mu
-    weights = raw_w / np.sum(np.abs(raw_w))  # normalize
+    # ── 6. Current weights — same machinery the backtest evaluates ─────
+    # (ManifoldOptimizer on EKF-filtered driver state with total-return
+    # covariance and the max-weight cap; previously this used a different
+    # ad-hoc formula whose weights were never backtested.)
+    from causal_portfolio.filters.ekf import CPCMKalmanFilter
+    from causal_portfolio.optimizer.manifold import (
+        ManifoldOptimizer, estimate_covariance,
+    )
+
+    try:
+        ekf = CPCMKalmanFilter(m=m_actual)
+        ekf.fit_dynamics(D)
+        F_current = ekf.filter(D)[0][-1]
+    except Exception as e:
+        logger.warning("EKF filtering failed (%s); using raw last drivers", e)
+        F_current = D[-1]
+    optimizer = ManifoldOptimizer(risk_aversion=1.0, max_weight=0.25)
+    weights = optimizer.optimize(solver, F_current, estimate_covariance(R))
 
     return_cols = list(returns.columns)
     weight_dict = {col.replace("_return", ""): float(w)

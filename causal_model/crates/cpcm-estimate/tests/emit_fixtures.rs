@@ -27,6 +27,7 @@ fn emit_fixtures() {
     println!("OLS_SIMPLE_COEF = {}", vec_str(&r.coefficients));
     println!("OLS_SIMPLE_SE = {}", vec_str(&r.std_errors));
     println!("OLS_SIMPLE_R2 = {:.12e}", r.r_squared);
+    println!("OLS_SIMPLE_HAC_SE = {}", vec_str(&r.hac_std_errors));
 
     // ── Fixture 2: OLS multiple, y = 1 + 2x1 - 0.5x2 (exact) ──────────
     let nm = 300;
@@ -81,7 +82,11 @@ fn emit_fixtures() {
     println!("TSLS_SE = {}", vec_str(&t.std_errors));
     println!("TSLS_F = {}", vec_str(&t.first_stage_f));
     println!("TSLS_R2 = {:.12e}", t.r_squared);
-    println!("TSLS_HAUSMAN = {:.12e},{:.12e}", t.hausman_stat, t.hausman_p);
+    println!("TSLS_HAC_SE = {}", vec_str(&t.hac_std_errors));
+    match (t.hausman_stat, t.hausman_p) {
+        (Some(h), Some(p)) => println!("TSLS_HAUSMAN = {h:.12e},{p:.12e}"),
+        _ => println!("TSLS_HAUSMAN = None"),
+    }
 
     // Also emit the first 5 generated rows so Python can verify identical inputs.
     println!("DATA_Z5 = {}", vec_str(&z_data[..5]));

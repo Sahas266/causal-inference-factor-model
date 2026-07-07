@@ -64,6 +64,12 @@ def test_analyze_two_state_causal():
     assert set(r.per_regime_returns.keys()) == {0, 1}
     # State means: 2 states x 2 features (vix, btc_vol)
     assert r.state_means.shape == (2, 2)
+    # Params that produced the result are stored on it (dashboard captions
+    # read these, never the live sidebar widgets)
+    assert r.params["n_states"] == 2
+    assert r.params["causal"] is True
+    assert r.params["hmm_window"] == 504
+    assert r.params["assets"] == ASSETS
 
 
 def test_analyze_two_state_noncausal_differs_or_matches():

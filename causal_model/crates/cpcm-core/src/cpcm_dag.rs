@@ -103,6 +103,21 @@ pub fn build_cpcm_dag(assets: &[&str]) -> CausalDag {
         dag.add_edge(&shock, &ret, EdgeKind::Causal, 0);
     }
 
+    // ── Latent confounders (one per instrumented treatment) ──────────
+    // u_<treatment> → treatment and u_<treatment> → every asset return.
+    // This encodes the endogeneity the IV design exists for: the backdoor
+    // criterion now FAILS for instrumented factors (the confounder is
+    // unobservable, so no adjustment set blocks it) and identification
+    // falls through to the IV.
+    for &(_, treatment, _) in INSTRUMENTS {
+        let u = format!("u_{treatment}");
+        dag.add_node(&u, NodeKind::UnobservedShock, None);
+        dag.add_edge(&u, treatment, EdgeKind::Causal, 0);
+        for &asset in assets {
+            dag.add_edge(&u, &format!("{asset}_return"), EdgeKind::Causal, 0);
+        }
+    }
+
     debug_assert!(dag.is_dag(), "CPCM DAG has a cycle!");
     dag
 }
@@ -150,7 +165,8 @@ mod tests {
         assert_eq!(summary.asset_returns, 1);
         assert_eq!(summary.asset_covariates, 4);
         assert_eq!(summary.instruments, 4);
-        assert_eq!(summary.unobserved_shocks, 1);
+        // 1 per-asset shock + 4 latent confounders (one per instrumented factor)
+        assert_eq!(summary.unobserved_shocks, 5);
     }
 
     #[test]
@@ -163,7 +179,8 @@ mod tests {
         // 7 global + 7 macro + 4 instruments + 3*(1 return + 4 covariates + 1 shock)
         assert_eq!(summary.asset_returns, 3);
         assert_eq!(summary.asset_covariates, 12); // 4 per asset
-        assert_eq!(summary.unobserved_shocks, 3);
+        // 3 per-asset shocks + 4 latent confounders
+        assert_eq!(summary.unobserved_shocks, 7);
     }
 
     #[test]
@@ -187,13 +204,14 @@ mod tests {
     }
 
     #[test]
-    fn test_asset_returns_separated_by_conditioning_on_factors() {
+    fn test_asset_returns_confounded_even_conditioning_on_factors() {
         let dag = build_cpcm_dag(&["btc", "eth"]);
-        // If we condition on ALL shared causes, returns should be d-separated
-        // (ignoring unobserved shocks, which are per-asset).
+        // Updated deliberately (H1 fix): the latent confounders u_<factor> point
+        // at every return, so conditioning on the observed factors no longer
+        // d-separates returns — the shared endogeneity is now explicit.
         let mut cond: Vec<&str> = GLOBAL_FACTORS.to_vec();
         cond.extend_from_slice(MACRO_FACTORS);
-        assert!(d_separated(&dag, "btc_return", "eth_return", &cond));
+        assert!(!d_separated(&dag, "btc_return", "eth_return", &cond));
     }
 
     #[test]
@@ -211,12 +229,38 @@ mod tests {
     }
 
     #[test]
-    fn test_factor_identified_via_backdoor() {
+    fn test_instrumented_factor_needs_iv_not_backdoor() {
+        // Updated deliberately (H1 fix): liq_flow now has the latent confounder
+        // u_liq_flow → {liq_flow, returns}, so NO backdoor set exists and the
+        // IV fallback must be used.
         let dag = build_cpcm_dag(&["eth"]);
-        // liq_flow → eth_return: no confounders (liq_flow has no parents except
-        // the instrument). Should be identifiable with empty or small adjustment set.
         let adj = backdoor_adjustment_set(&dag, "liq_flow", "eth_return");
-        assert!(adj.is_some(), "liq_flow → eth_return should be identified");
+        assert!(adj.is_none(), "backdoor must fail for instrumented factors");
+        let iv = check_iv_validity(&dag, "gas_spike", "liq_flow", "eth_return");
+        assert!(iv.valid, "gas_spike must remain a valid IV: {}", iv.reason);
+    }
+
+    #[test]
+    fn test_identify_all_uses_iv_for_instrumented_factors() {
+        use crate::identify::{identify_all_effects, IdentificationMethod};
+        let dag = build_cpcm_dag(&["eth"]);
+        let results = identify_all_effects(&dag);
+        for r in &results {
+            match r.treatment.as_str() {
+                // instrumented factors: backdoor fails, IV succeeds
+                "liq_flow" | "funding_basis" | "stable_flow" | "chain_congestion" => {
+                    assert!(r.identified, "{} should be IV-identified", r.treatment);
+                    assert!(
+                        matches!(r.method, IdentificationMethod::Iv { .. }),
+                        "{} should use IV, got {:?}",
+                        r.treatment,
+                        r.method
+                    );
+                }
+                // unconfounded factors: still backdoor-identified
+                _ => assert_eq!(r.method, IdentificationMethod::Backdoor, "{}", r.treatment),
+            }
+        }
     }
 
     #[test]
@@ -232,8 +276,9 @@ mod tests {
         let summary = summarize_dag(&dag);
         assert_eq!(summary.asset_returns, 26);
         assert_eq!(summary.asset_covariates, 26 * 4);
-        assert_eq!(summary.unobserved_shocks, 26);
-        // Total nodes: 7 + 7 + 4 + 26*(1+4+1) = 174
-        assert_eq!(summary.total_nodes, 7 + 7 + 4 + 26 * 6);
+        // 26 per-asset shocks + 4 latent confounders
+        assert_eq!(summary.unobserved_shocks, 30);
+        // Total nodes: 7 + 7 + 4 + 26*(1+4+1) + 4 latent confounders = 178
+        assert_eq!(summary.total_nodes, 7 + 7 + 4 + 26 * 6 + 4);
     }
 }

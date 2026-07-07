@@ -12,6 +12,7 @@ import argparse
 import json
 import logging
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
@@ -64,14 +65,37 @@ def run(
     available = factors.dropna(axis=1, how="all")
     m_actual = min(m, len(available.columns))
 
+    # Select drivers on the INITIAL TRAINING WINDOW only. Full-sample
+    # selection chooses the m drivers using the entire test period, then the
+    # walk-forward "discovers" they work — upward-biasing every OOS metric.
+    aligned = available.dropna(how="all").index.intersection(returns.dropna().index)
+    if len(aligned) <= train_window:
+        logger.error(
+            "Not enough aligned history (%d rows) for train_window=%d",
+            len(aligned), train_window,
+        )
+        sys.exit(1)
+    train_idx = aligned[:train_window]
     selector = ComboDriverSelector()
-    selected = selector.select(returns, available, m=m_actual)
-    logger.info(f"Selected drivers: {selected}")
+    selected = selector.select(
+        returns.loc[train_idx], available.loc[train_idx], m=m_actual
+    )
+    logger.info(f"Selected drivers (train-window-only selection): {selected}")
 
     # ── 3. Align data ──────────────────────────────────────────
+    n_before = len(returns)
+    returns_clean = returns.dropna()
+    if len(returns_clean) < n_before:
+        worst = returns.isna().sum().sort_values(ascending=False)
+        logger.warning(
+            "dropna(how='any') removed %d/%d rows for ALL assets; worst "
+            "offenders: %s",
+            n_before - len(returns_clean), n_before,
+            worst.head(3).to_dict(),
+        )
     common = (
         factors[selected].dropna().index
-        .intersection(returns.dropna().index)
+        .intersection(returns_clean.index)
     )
     D = factors.loc[common, selected].values
     R = returns.loc[common].values
@@ -165,6 +189,8 @@ def _dump_weights(result, assets, returns_cols, out_path: str, metadata: dict) -
     payload["_meta"] = {
         **metadata,
         "rebalance_date": str(result.rebalance_dates[-1]) if result.rebalance_dates else None,
+        "generated_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "format_version": 1,
         "n_rebalances": len(result.rebalance_dates),
         "gross_exposure": float(np.sum(np.abs(weights_vec))),
         "n_nonzero": int(np.sum(np.abs(weights_vec) > 0)),

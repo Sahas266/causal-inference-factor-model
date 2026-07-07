@@ -114,11 +114,25 @@ def build_all_factors(
 
 # ── Global factor computations ──────────────────────────────────────
 
+def _complete_sum(
+    df: pd.DataFrame, cols: list[str], ffill_limit: int = 5
+) -> pd.Series:
+    """Sum components requiring ALL of them present (after short-gap ffill).
+
+    Pandas' default skipna sum lets one missing component drop the total by
+    that component's entire magnitude — `.diff()` then fabricates a giant
+    fake flow spike that dominates the z-scored factor. Short gaps are
+    bridged by ffill; days still missing any component become NaN instead.
+    """
+    filled = df[cols].ffill(limit=ffill_limit)
+    return filled.sum(axis=1, min_count=len(cols))
+
+
 def _compute_liq_flow(panel: pd.DataFrame) -> pd.Series:
     """diff(sum of protocol TVL) — net liquidity entering/leaving DeFi."""
     available = [c for c in TVL_COLUMNS if c in panel.columns]
     if available:
-        total_tvl = panel[available].sum(axis=1)
+        total_tvl = _complete_sum(panel, available)
         return z_score(total_tvl.diff())
 
     # Fallback: Dune LP flow
@@ -135,7 +149,7 @@ def _compute_stable_flow(panel: pd.DataFrame) -> pd.Series:
     if not available:
         return pd.Series(np.nan, index=panel.index)
 
-    total_supply = panel[available].sum(axis=1)
+    total_supply = _complete_sum(panel, available)
     return z_score(total_supply.diff())
 
 
@@ -168,7 +182,7 @@ def _compute_chain_congestion(panel: pd.DataFrame) -> pd.Series:
     # Fallback: CoinMetrics fee data
     fee_cols = [c for c in panel.columns if "FeeTotNtv" in c]
     if fee_cols:
-        return z_score(panel[fee_cols].sum(axis=1))
+        return z_score(_complete_sum(panel, fee_cols))
 
     return pd.Series(np.nan, index=panel.index)
 
@@ -217,7 +231,9 @@ def _compute_cex_dex_flow(panel: pd.DataFrame) -> pd.Series:
     return pd.Series(np.nan, index=panel.index)
 
 
-def innovation_factors(factors: pd.DataFrame, min_obs: int = 60) -> pd.DataFrame:
+def innovation_factors(
+    factors: pd.DataFrame, min_obs: int = 60, window: int = 252,
+) -> pd.DataFrame:
     """AR(1) innovations of each factor, z-scored.
 
     Most CPCM factors are z-scored LEVELS of persistent series (gas price,
@@ -227,18 +243,29 @@ def innovation_factors(factors: pd.DataFrame, min_obs: int = 60) -> pd.DataFrame
     innovation e_t = s_t - (a + rho * s_{t-1}) isolates the day's NEWS.
     Factors that are already diffs (liq_flow, stable_flow) come out nearly
     unchanged (rho ~ 0).
+
+    rho and a are estimated on a TRAILING window and shifted one day, so the
+    innovation at t uses only parameters known at t-1 (the previous
+    full-sample fit leaked future data into every training window). The final
+    z-score remains full-sample — it is affine and absorbed by downstream
+    regressions.
     """
     out = {}
     for c in factors.columns:
         s = factors[c]
         lag = s.shift(1)
-        ok = s.notna() & lag.notna()
-        if ok.sum() < min_obs:
+        roll_cov = lag.rolling(window, min_periods=min_obs).cov(s)
+        roll_var = lag.rolling(window, min_periods=min_obs).var()
+        rho = (roll_cov / (roll_var + 1e-15)).shift(1)
+        a = (
+            s.rolling(window, min_periods=min_obs).mean()
+            - (roll_cov / (roll_var + 1e-15))
+            * lag.rolling(window, min_periods=min_obs).mean()
+        ).shift(1)
+        innov = s - (a + rho * lag)
+        if innov.notna().sum() < min_obs:
             continue
-        x, y = lag[ok], s[ok]
-        rho = x.cov(y) / (x.var() + 1e-15)
-        a = y.mean() - rho * x.mean()
-        out[c] = z_score(s - (a + rho * lag))
+        out[c] = z_score(innov)
     return pd.DataFrame(out, index=factors.index)
 
 
@@ -260,8 +287,17 @@ def rolling_std(s: pd.Series, window: int = 7) -> pd.Series:
 
 
 def _find_column(df: pd.DataFrame, name: str) -> str | None:
-    """Find a column by exact name or as a suffix (for {asset}_{metric} format)."""
+    """Find a column by exact name or as a suffix (for {asset}_{metric} format).
+
+    Raises on ambiguity — silently picking whichever column pivots first is a
+    wrong-column footgun as PANEL_METRICS grows.
+    """
     if name in df.columns:
         return name
-    matches = [c for c in df.columns if c.endswith(f"_{name}") or c == name]
+    matches = [c for c in df.columns if c.endswith(f"_{name}")]
+    if len(matches) > 1:
+        raise ValueError(
+            f"Ambiguous factor column {name!r}: matches {sorted(matches)}. "
+            "Use the fully prefixed '{asset}_{metric}' name."
+        )
     return matches[0] if matches else None

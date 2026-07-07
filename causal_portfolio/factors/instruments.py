@@ -8,7 +8,8 @@ The DAG declares four instruments, each lagged >= 1 day to break simultaneity:
     protocol_event     instruments  chain_congestion
 
 Each is built from warehouse columns the same way the Rust reference does:
-a lagged spike indicator (|z-score of the day-over-day change| > 2σ), except
+a lagged spike indicator (ROLLING z-score of the day-over-day change > 2σ,
+window 252 / min_periods 60, so the label at t uses only data ≤ t), except
 stablecoin_mint which is the lagged level of net minting (diff of supply).
 
 Column names here are mapped to what our warehouse actually has (the Rust code
@@ -55,24 +56,21 @@ def _diff(x: np.ndarray) -> np.ndarray:
     return d
 
 
-def _z_score_abs(x: np.ndarray) -> np.ndarray:
-    """Z-score of absolute values: (|x| - mean(|x|)) / std(|x|), ignoring NaN.
+def _z_score_abs(x: np.ndarray, window: int = 252, min_periods: int = 60) -> np.ndarray:
+    """ROLLING z-score of absolute values: (|x_t| - mean_t) / std_t over a
+    trailing window (population std, ddof=0), ignoring NaN.
 
-    Matches the Rust z_score_abs: flags large-MAGNITUDE moves.
+    Trailing window ⇒ the label at t uses only data ≤ t (the previous
+    full-sample version leaked future data into spike thresholds). NaN until
+    `min_periods` non-NaN values are in the window. Matches the Rust
+    rolling_z_score_abs in cpcm-factors/instruments.rs.
     """
-    valid = x[~np.isnan(x)]
-    if valid.size == 0:
-        return x.copy()
-    abs_vals = np.abs(valid)
-    mean = abs_vals.mean()
-    var = ((abs_vals - mean) ** 2).mean()
-    std = np.sqrt(var)
-    if std < 1e-15:
-        return np.zeros(len(x))
-    out = np.full(len(x), np.nan)
-    mask = ~np.isnan(x)
-    out[mask] = (np.abs(x[mask]) - mean) / std
-    return out
+    s = pd.Series(np.abs(np.asarray(x, dtype=float)))
+    mean = s.rolling(window, min_periods=min_periods).mean()
+    std = s.rolling(window, min_periods=min_periods).std(ddof=0)
+    z = (s - mean) / std
+    z[(std < 1e-15) & s.notna() & mean.notna()] = 0.0
+    return z.to_numpy()
 
 
 def _lag(x: np.ndarray, k: int) -> np.ndarray:
@@ -83,9 +81,12 @@ def _lag(x: np.ndarray, k: int) -> np.ndarray:
     return out
 
 
-def _lagged_z_score_spike(x: np.ndarray, threshold: float = 2.0, lag: int = 1) -> np.ndarray:
-    """1.0 if |z(diff(x))| > threshold else 0.0, then lagged by `lag`."""
-    z = _z_score_abs(_diff(x))
+def _lagged_z_score_spike(
+    x: np.ndarray, threshold: float = 2.0, lag: int = 1,
+    window: int = 252, min_periods: int = 60,
+) -> np.ndarray:
+    """1.0 if rolling-z(diff(x)) > threshold else 0.0, then lagged by `lag`."""
+    z = _z_score_abs(_diff(x), window=window, min_periods=min_periods)
     ind = np.where(np.isnan(z), np.nan, (z > threshold).astype(float))
     return _lag(ind, lag)
 

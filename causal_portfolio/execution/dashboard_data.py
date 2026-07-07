@@ -14,14 +14,14 @@ import pandas as pd
 
 
 def load_market(assets: tuple[str, ...], start: str, end: str):
-    """Return (returns, macro) from the configured loader (local DuckDB)."""
-    from causal_portfolio.data import get_loader
-    loader = get_loader()
-    returns = loader.load_returns(list(assets), start, end)
-    macro = loader.load_macro(["VIXCLS"], start, end)
-    returns = returns.dropna(how="all")
-    common = returns.index.intersection(macro.index)
-    return returns.loc[common], macro.loc[common].ffill()
+    """Return (returns, macro) aligned on common dates (macro ffilled).
+
+    Thin wrapper over the shared loader helper. Note: the old local copy
+    also dropped all-NaN return rows before aligning; the shared helper
+    keeps such rows if macro covers them — shared behavior wins.
+    """
+    from causal_portfolio.data import load_returns_and_macro
+    return load_returns_and_macro(assets, start, end)
 
 
 def run_strategy(strategy: str, assets: tuple[str, ...], start: str, end: str,
@@ -91,8 +91,9 @@ def build_plan_preview(target_weights: dict, testnet: bool = True):
     from causal_portfolio.execution.config import ExecutionConfig
     from causal_portfolio.execution.hyperliquid import HLAdapter
     from causal_portfolio.execution.rebalancer import plan_rebalance
-    cfg = ExecutionConfig(testnet=testnet, dry_run=True,
-                          max_position_pct=1.0, max_single_trade_pct=1.0)
+    # Default caps on purpose: the preview must show what the CLI would
+    # actually do, safety caps included.
+    cfg = ExecutionConfig(testnet=testnet, dry_run=True)
     adapter = HLAdapter(cfg)
     state = adapter.fetch_state()
     mids = adapter.fetch_mids()
@@ -100,10 +101,18 @@ def build_plan_preview(target_weights: dict, testnet: bool = True):
     return plan_rebalance(target_weights, state, mids, meta, cfg)
 
 
-def load_audit_history(n_days: int = 7) -> list[dict]:
+def load_audit_history(n_days: int = 7, network: str | None = None) -> list[dict]:
+    """Recent audit records, newest days first.
+
+    If `network` is given ("testnet"/"mainnet"), keep only records for that
+    network — plus records with no network field (old logs), which are kept
+    visible under both.
+    """
     from causal_portfolio.execution import audit
     rows: list[dict] = []
     for i in range(n_days):
         date = (datetime.now(timezone.utc) - pd.Timedelta(days=i)).strftime("%Y-%m-%d")
         rows.extend(audit.read_log(date))
+    if network is not None:
+        rows = [r for r in rows if r.get("network") in (network, None)]
     return rows

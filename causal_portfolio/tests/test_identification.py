@@ -197,8 +197,30 @@ def test_cpcm_dag_identifies_effects():
     results = identify_all_effects(g)
     # Every factor->return pair should be classified (identified or not)
     assert len(results) > 0
-    # The CPCM star-DAG has factors directly into returns with shock confounding
-    # only via the unobserved shock (which can't open a backdoor), so factors are
-    # backdoor-identified with the empty set in this structure.
-    identified = [r for r in results if r.identified]
-    assert len(identified) > 0
+    # Updated deliberately (H1 fix): instrumented factors now carry a latent
+    # confounder u_<factor> -> {factor, returns}, so backdoor FAILS for them and
+    # identification must fall through to the IV. Unconfounded factors stay
+    # backdoor-identified.
+    instrumented = {"liq_flow", "funding_basis", "stable_flow", "chain_congestion"}
+    for r in results:
+        if r.treatment in instrumented:
+            assert r.identified, f"{r.treatment} should be IV-identified"
+            assert r.method is IdentificationMethod.IV, (
+                f"{r.treatment} should use IV, got {r.method}")
+            assert r.instrument is not None
+        else:
+            assert r.method is IdentificationMethod.BACKDOOR
+
+
+def test_iv_valid_with_unobserved_confounder():
+    """The textbook IV graph: Z→X→Y with latent U→X, U→Y. The old
+    d_sep(Z,Y|T) test conditioned on the collider X and rejected this valid
+    instrument; the G_T̄ test must accept it."""
+    g = _dag()
+    _add(g, "Z", NodeKind.INSTRUMENT); _add(g, "X", NodeKind.GLOBAL_FACTOR)
+    _add(g, "U", NodeKind.UNOBSERVED_SHOCK)
+    g.add_node("Y", kind=NodeKind.ASSET_RETURN, asset="eth")
+    g.add_edge("Z", "X", kind=EdgeKind.INSTRUMENTAL, lag=1)
+    _edge(g, "X", "Y"); _edge(g, "U", "X"); _edge(g, "U", "Y")
+    r = check_iv_validity(g, "Z", "X", "Y")
+    assert r.valid and r.relevant and r.excludable, r.reason

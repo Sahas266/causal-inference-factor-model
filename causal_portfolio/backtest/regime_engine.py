@@ -35,6 +35,7 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 
+from causal_portfolio.backtest.costs import cost_drag_return
 from causal_portfolio.backtest.engine import BacktestResult
 from causal_portfolio.factors.combo_selector import ComboDriverSelector
 from causal_portfolio.filters.ekf import CPCMKalmanFilter
@@ -82,6 +83,8 @@ class RegimeConditionalBacktester:
         rebalance_freq: int = 5,
         train_window: int = 252,
         min_obs_per_regime: int = 60,
+        fee_bps: float = 5.0,
+        slippage_bps: float = 5.0,
     ):
         if mode not in ("hard", "moe"):
             raise ValueError(f"mode must be 'hard' or 'moe', got {mode!r}")
@@ -95,10 +98,13 @@ class RegimeConditionalBacktester:
         self.rebalance_freq = rebalance_freq
         self.train_window = train_window
         self.min_obs_per_regime = min_obs_per_regime
+        self.fee_bps = fee_bps
+        self.slippage_bps = slippage_bps
 
         # Filled during run()
         self._global_drivers: Optional[list[str]] = None
         self._global_solver: Optional[V1LinearSolver] = None
+        self._global_cov: Optional[np.ndarray] = None
 
     # ── public API ──────────────────────────────────────────────────
 
@@ -156,6 +162,7 @@ class RegimeConditionalBacktester:
         current_weights = np.ones(n_assets) / n_assets
         rebalance_dates: list = []
         per_regime_rebal: dict[int, int] = {k: 0 for k in range(self.n_states)}
+        n_failed = 0
 
         # HMM refit state (amortized daily forward filter — see RollingHMM)
         roller = RollingHMM(
@@ -202,17 +209,28 @@ class RegimeConditionalBacktester:
             posterior_history[idx] = posterior
 
             # ── Rebalance ────────────────────────────────────────────
+            cost_drag = 0.0
             if should_rebalance:
                 try:
-                    current_weights = self._compute_weights(
+                    new_weights = self._compute_weights(
                         regime_models, current_regime, posterior,
                         F_panel.iloc[t - self.train_window : t],
                     )
+                    cost_drag = cost_drag_return(
+                        current_weights, new_weights, 1.0,
+                        fee_bps=self.fee_bps, slippage_bps=self.slippage_bps,
+                    )
+                    current_weights = new_weights
                     rebalance_dates.append(dates[t])
                     per_regime_rebal[current_regime] = (
                         per_regime_rebal.get(current_regime, 0) + 1
                     )
                 except Exception as e:
+                    if idx == 0:
+                        raise RuntimeError(
+                            f"First rebalance failed at t={t}: {e}"
+                        ) from e
+                    n_failed += 1
                     logger.warning("Rebalance failed at t=%d: %s", t, e)
 
             # ── P&L ──────────────────────────────────────────────────
@@ -222,6 +240,7 @@ class RegimeConditionalBacktester:
                 portfolio_returns[idx] = float(
                     np.nansum(current_weights[valid] * day_return[valid])
                 )
+            portfolio_returns[idx] -= cost_drag
             weights_history[idx] = current_weights
 
             # Day-t filtered posterior becomes tomorrow's decision input.
@@ -234,6 +253,7 @@ class RegimeConditionalBacktester:
             regime_labels=regime_labels,
             posterior_history=posterior_history,
             per_regime_n_rebalances=per_regime_rebal,
+            n_failed_rebalances=n_failed,
         )
         logger.info(
             "Regime-conditional (%s) backtest complete: %s | per-regime rebal: %s",
@@ -261,6 +281,7 @@ class RegimeConditionalBacktester:
         if slot_F.shape[1] < self.m or slot_R.empty:
             self._global_drivers = list(slot_F.columns[: self.m])
             self._global_solver = None
+            self._global_cov = None
             return
         selector = ComboDriverSelector()
         ranking = selector.rank_all_subsets(slot_R, slot_F, m=min(self.m, slot_F.shape[1]))
@@ -271,11 +292,16 @@ class RegimeConditionalBacktester:
         if mask.sum() < 30:
             self._global_drivers = drivers
             self._global_solver = None
+            self._global_cov = None
             return
         solver = V1LinearSolver(alpha=1.0)
         solver.fit(D[mask], slot_R.values[mask])
         self._global_drivers = drivers
         self._global_solver = solver
+        # ASSET-return covariance (n_assets x n_assets) — the optimizer needs
+        # this, not the factor-panel covariance. Precomputed on the same
+        # pre-test rows the fallback solver was fit on (look-ahead safe).
+        self._global_cov = estimate_covariance(slot_R.values[mask])
 
     def _fit_regime_models(
         self,
@@ -332,14 +358,13 @@ class RegimeConditionalBacktester:
             primary = next(iter(regime_models.values()), None)
         if primary is None:
             # Last resort: use global fallback
-            if self._global_solver is None:
+            if self._global_solver is None or self._global_cov is None:
                 raise RuntimeError("No regime models and no global fallback")
             F_global, _ = self._current_filtered_state(
                 self._global_drivers, factor_panel_tr,
             )
             return self.optimizer.optimize(
-                self._global_solver, F_global,
-                estimate_covariance(factor_panel_tr.values),
+                self._global_solver, F_global, self._global_cov,
             )
 
         # Compute current driver vector + filtered state for primary regime

@@ -62,3 +62,73 @@ def test_load_audit_history_returns_list():
     # Records (if any) should be dicts with expected keys
     for rec in records:
         assert "ts_utc" in rec or "submitted" in rec
+
+
+def test_load_audit_history_network_filter(monkeypatch):
+    """Network filter keeps matching + unknown-network records only."""
+    from causal_portfolio.execution import audit
+
+    fake = [
+        {"ts_utc": "t1", "network": "testnet"},
+        {"ts_utc": "t2", "network": "mainnet"},
+        {"ts_utc": "t3"},  # legacy record, no network field
+    ]
+    monkeypatch.setattr(audit, "read_log", lambda date: list(fake))
+
+    all_rows = dd.load_audit_history(n_days=1)
+    assert len(all_rows) == 3
+
+    testnet_rows = dd.load_audit_history(n_days=1, network="testnet")
+    assert [r["ts_utc"] for r in testnet_rows] == ["t1", "t3"]
+
+    mainnet_rows = dd.load_audit_history(n_days=1, network="mainnet")
+    assert [r["ts_utc"] for r in mainnet_rows] == ["t2", "t3"]
+
+
+def test_build_plan_preview_uses_default_caps(monkeypatch):
+    """Preview must use the same safety caps the CLI defaults to."""
+    import causal_portfolio.execution.dashboard_data as mod
+    from causal_portfolio.execution.config import ExecutionConfig
+
+    captured = {}
+
+    class FakeAdapter:
+        def __init__(self, cfg):
+            captured["cfg"] = cfg
+
+        def fetch_state(self):
+            return None
+
+        def fetch_mids(self):
+            return {}
+
+        def fetch_meta(self):
+            return {}
+
+    import causal_portfolio.execution.hyperliquid as hl
+    import causal_portfolio.execution.rebalancer as rb
+    monkeypatch.setattr(hl, "HLAdapter", FakeAdapter)
+    monkeypatch.setattr(rb, "plan_rebalance", lambda *a, **k: "plan")
+
+    assert mod.build_plan_preview({"btc": 1.0}, testnet=True) == "plan"
+    cfg = captured["cfg"]
+    defaults = ExecutionConfig(testnet=True, dry_run=True)
+    assert cfg.max_position_pct == defaults.max_position_pct == 0.30
+    assert cfg.max_single_trade_pct == defaults.max_single_trade_pct == 0.10
+    assert cfg.dry_run is True
+
+
+def test_load_market_matches_shared_helper(monkeypatch):
+    """load_market is the shared loader helper — identical output."""
+    import causal_portfolio.data as data_mod
+
+    calls = []
+
+    def fake(assets, start, end, macro_series=("VIXCLS",)):
+        calls.append((tuple(assets), start, end))
+        return "returns", "macro"
+
+    monkeypatch.setattr(data_mod, "load_returns_and_macro", fake)
+    out = dd.load_market(("btc",), "2024-01-01", "2024-12-31")
+    assert out == ("returns", "macro")
+    assert calls == [(("btc",), "2024-01-01", "2024-12-31")]

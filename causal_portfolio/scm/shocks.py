@@ -7,10 +7,18 @@ Mirrors the Rust INSTRUMENTS constant from cpcm_dag.rs. Each IV must:
 Reference: Section 3.3 of arXiv:2509.09585v2
 """
 
-import numpy as np
 import pandas as pd
 
 from .graph import INSTRUMENTS
+
+# Rolling window for spike thresholds: the quantile at t uses only data <= t
+# (a full-sample quantile leaks future data into the spike labels).
+_ROLL_WINDOW = 252
+_ROLL_MIN_PERIODS = 60
+
+
+def _rolling_q(s: pd.Series, q: float = 0.9) -> pd.Series:
+    return s.rolling(_ROLL_WINDOW, min_periods=_ROLL_MIN_PERIODS).quantile(q)
 
 
 def create_instruments(
@@ -24,14 +32,17 @@ def create_instruments(
         factors: Computed factor DataFrame from builder.
 
     Returns:
-        DataFrame with one column per available instrument.
+        DataFrame with one column per instrument.
+
+    Raises:
+        ValueError: if an instrument's source columns are missing (there is
+        deliberately NO fallback — a transform of the treatment itself is not
+        a valid instrument).
     """
     instruments = pd.DataFrame(index=factors.index)
 
     for iv_name, treatment, lag in INSTRUMENTS:
-        iv_series = _construct_iv(iv_name, treatment, panel, factors, lag)
-        if iv_series is not None:
-            instruments[iv_name] = iv_series
+        instruments[iv_name] = _construct_iv(iv_name, treatment, panel, factors, lag)
 
     return instruments
 
@@ -42,7 +53,7 @@ def _construct_iv(
     panel: pd.DataFrame,
     factors: pd.DataFrame,
     lag: int,
-) -> pd.Series | None:
+) -> pd.Series:
     """Construct a single IV series.
 
     Strategy: use lagged exogenous shocks that affect the treatment factor
@@ -53,13 +64,13 @@ def _construct_iv(
         col = _find(panel, "eth_avg_gas_price_gwei")
         if col is not None:
             pct_change = panel[col].pct_change()
-            return (pct_change > pct_change.quantile(0.9)).astype(float).shift(lag)
+            return (pct_change > _rolling_q(pct_change)).astype(float).shift(lag)
 
     elif iv_name == "stablecoin_mint":
         # Large stablecoin supply changes → stable_flow
         if treatment in factors.columns:
             abs_change = factors[treatment].abs()
-            return (abs_change > abs_change.quantile(0.9)).astype(float).shift(lag)
+            return (abs_change > _rolling_q(abs_change)).astype(float).shift(lag)
 
     elif iv_name == "liquidation_level":
         # Liquidation events → funding basis shifts
@@ -73,13 +84,14 @@ def _construct_iv(
         if tvl_cols:
             total_tvl = panel[tvl_cols].sum(axis=1)
             pct_change = total_tvl.pct_change().abs()
-            return (pct_change > pct_change.quantile(0.9)).astype(float).shift(lag)
+            return (pct_change > _rolling_q(pct_change)).astype(float).shift(lag)
 
-    # Fallback: lagged first-difference of the treatment factor
-    if treatment in factors.columns:
-        return factors[treatment].diff().shift(lag)
-
-    return None
+    # No fallback: a transform of the treatment itself is NOT a valid
+    # instrument (it cannot satisfy exclusion). Fail loudly instead.
+    raise ValueError(
+        f"cannot construct instrument {iv_name!r} for treatment {treatment!r}: "
+        f"required source columns are missing from the panel"
+    )
 
 
 def _find(df: pd.DataFrame, name: str) -> str | None:

@@ -50,18 +50,24 @@ class V4PINNSolver(CPCMSolver):
         hidden_dim: int = 64,
         n_layers: int = 3,
         device: str = "cpu",
+        seed: int = 0,
     ):
         self.m_drivers = m_drivers
         self.n_assets = n_assets
         self.hidden_dim = hidden_dim
         self.n_layers = n_layers
         self.device = torch.device(device)
+        self.seed = seed
 
-        self.net = _DriverReturnMLP(
-            m_drivers, n_assets, hidden_dim, n_layers
-        ).to(self.device)
+        self.net = self._fresh_net()
         self._fitted = False
         self._train_history: list[dict] = []
+
+    def _fresh_net(self) -> _DriverReturnMLP:
+        torch.manual_seed(self.seed)
+        return _DriverReturnMLP(
+            self.m_drivers, self.n_assets, self.hidden_dim, self.n_layers
+        ).to(self.device)
 
     def fit(
         self,
@@ -88,6 +94,13 @@ class V4PINNSolver(CPCMSolver):
             patience: Early stopping patience.
             batch_size: Mini-batch size (None = full batch).
         """
+        # Re-initialize the network each fit: the solver is documented as
+        # "re-fitted at each rebalance" — warm-starting from the previous
+        # window's weights made folds non-independent. Seeding here also
+        # makes fits (and the randperm sampling below) reproducible.
+        self.net = self._fresh_net()
+        self._train_history = []
+
         # Drop NaN rows
         valid = ~(np.isnan(drivers).any(axis=1) | np.isnan(returns).any(axis=1))
         D = drivers[valid]

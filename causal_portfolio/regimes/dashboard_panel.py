@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 import numpy as np
 import pandas as pd
 
-from causal_portfolio.backtest.metrics import ANNUALIZATION
+from causal_portfolio.backtest.metrics import ANNUALIZATION, sharpe_ratio
 from causal_portfolio.factors.builder import (
     FACTOR_SOURCE_ASSETS,
     MACRO_SERIES,
@@ -50,6 +50,7 @@ class RegimePanelResult:
     per_regime_returns: dict                      # state -> {"ann_return","ann_vol","sharpe","days"}
     market_curve: pd.Series                       # equal-weight basket growth-of-1 over labeled period
     notes: list[str] = field(default_factory=list)
+    params: dict = field(default_factory=dict)    # the inputs that produced this result
 
 
 def _load(assets, start, end):
@@ -176,7 +177,7 @@ def analyze_regimes(
         vol = float(r.std()) * np.sqrt(ANNUALIZATION)
         per_regime_returns[state] = {
             "ann_return": mu, "ann_vol": vol,
-            "sharpe": mu / vol if vol > 1e-9 else 0.0,
+            "sharpe": sharpe_ratio(r.values),
             "days": int(len(r)),
         }
 
@@ -191,6 +192,12 @@ def analyze_regimes(
         dwell=dwell, per_regime_drivers=per_regime_drivers,
         per_regime_returns=per_regime_returns,
         market_curve=market_curve, notes=notes,
+        params={
+            "assets": list(assets), "start": start, "end": end,
+            "n_states": n_states, "hmm_window": hmm_window,
+            "hmm_refit_every": hmm_refit_every, "m_drivers": m_actual,
+            "causal": causal,
+        },
     )
 
 

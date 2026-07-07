@@ -31,15 +31,35 @@ class TestDiff:
 
 
 class TestZScoreAbs:
+    # _z_score_abs is now ROLLING (trailing window) so labels never use
+    # future data; tests pass small min_periods to exercise the math.
+
     def test_flags_magnitude(self):
-        # A large-magnitude outlier should get a large |z|
+        # A large-magnitude outlier should get a large z at its own position
         x = np.array([1.0, -1.0, 1.0, -1.0, 50.0])
-        z = _z_score_abs(x)
-        assert z[-1] == max(z, key=abs)
+        z = _z_score_abs(x, window=252, min_periods=2)
+        assert z[-1] == np.nanmax(np.abs(z))
+
+    def test_no_lookahead(self):
+        # Changing FUTURE values must not change the z-score at t (this is
+        # exactly the leakage the rolling version removes).
+        rng = np.random.default_rng(0)
+        x = rng.standard_normal(100)
+        x2 = x.copy()
+        x2[80:] += 1000.0
+        z1 = _z_score_abs(x, window=252, min_periods=10)
+        z2 = _z_score_abs(x2, window=252, min_periods=10)
+        np.testing.assert_array_equal(z1[:80], z2[:80])
 
     def test_constant_returns_zeros(self):
-        z = _z_score_abs(np.array([2.0, 2.0, 2.0]))
-        assert np.allclose(z, 0.0)
+        z = _z_score_abs(np.array([2.0] * 10), window=252, min_periods=2)
+        assert np.allclose(z[1:], 0.0)  # first value NaN (min_periods)
+        assert np.isnan(z[0])
+
+    def test_nan_before_min_periods(self):
+        z = _z_score_abs(np.arange(100, dtype=float))  # default min_periods=60
+        assert np.isnan(z[:59]).all()
+        assert not np.isnan(z[59:]).any()
 
     def test_all_nan_safe(self):
         z = _z_score_abs(np.array([np.nan, np.nan]))
@@ -59,13 +79,16 @@ class TestLag:
 
 class TestSpike:
     def test_spike_is_lagged_indicator(self):
-        # Flat then a jump: the spike should appear one day AFTER the jump (lag 1)
-        x = np.array([10.0] * 20 + [10000.0] + [10.0] * 20, dtype=float)
-        spike = _lagged_z_score_spike(x, threshold=2.0, lag=1)
+        # Noisy series then a jump: the spike should appear one day AFTER the
+        # jump (lag 1). Noise keeps the rolling std > 0 before the jump.
+        rng = np.random.default_rng(1)
+        x = 10.0 + rng.normal(0, 0.5, 80)
+        x[40] = 10000.0
+        spike = _lagged_z_score_spike(x, threshold=2.0, lag=1, min_periods=10)
         # values are 0/1/NaN
         vals = set(np.unique(spike[~np.isnan(spike)]))
         assert vals.issubset({0.0, 1.0})
-        assert np.nansum(spike) >= 1.0
+        assert spike[41] == 1.0  # jump at 40 → label at 41
 
 
 class TestFindColumns:

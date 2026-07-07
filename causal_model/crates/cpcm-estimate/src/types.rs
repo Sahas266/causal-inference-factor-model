@@ -13,6 +13,10 @@ pub struct OlsResult {
     pub n_obs: usize,
     pub n_features: usize,
     pub feature_names: Vec<String>,
+    /// Newey-West HAC (Bartlett kernel) standard errors and derived stats.
+    pub hac_std_errors: Vec<f64>,
+    pub hac_t_stats: Vec<f64>,
+    pub hac_p_values: Vec<f64>,
 }
 
 /// Result of a 2SLS regression.
@@ -27,14 +31,19 @@ pub struct TslsResult {
     pub n_obs: usize,
     pub feature_names: Vec<String>,
 
-    /// First-stage F-statistic for each endogenous variable.
+    /// First-stage PARTIAL F-statistic (excluded instruments) per endogenous variable.
     pub first_stage_f: Vec<f64>,
     /// Sargan overidentification test (only if instruments > endogenous vars).
     pub sargan_stat: Option<f64>,
     pub sargan_p: Option<f64>,
-    /// Hausman test: OLS vs 2SLS.
-    pub hausman_stat: f64,
-    pub hausman_p: f64,
+    /// Hausman test: OLS vs 2SLS. None when no variance-difference term is
+    /// positive (difference matrix not positive definite).
+    pub hausman_stat: Option<f64>,
+    pub hausman_p: Option<f64>,
+    /// Newey-West HAC (Bartlett kernel) standard errors and derived stats.
+    pub hac_std_errors: Vec<f64>,
+    pub hac_t_stats: Vec<f64>,
+    pub hac_p_values: Vec<f64>,
 }
 
 /// Regression diagnostics.

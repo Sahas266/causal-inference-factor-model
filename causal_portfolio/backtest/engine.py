@@ -16,6 +16,7 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 
+from causal_portfolio.backtest.costs import cost_drag_return
 from causal_portfolio.backtest.metrics import (
     average_turnover,
     calmar_ratio,
@@ -48,13 +49,16 @@ class BacktestResult:
     returns_series: np.ndarray = field(default_factory=lambda: np.array([]))
     weights_history: np.ndarray = field(default_factory=lambda: np.array([]))
     rebalance_dates: list = field(default_factory=list)
+    n_failed_rebalances: int = 0
 
     def summary(self) -> str:
+        # Coherence is a full-test-period EKF diagnostic (fit in-sample on the
+        # test window), NOT an out-of-sample metric — labeled accordingly.
         return (
             f"Sharpe: {self.sharpe:.3f} | Sortino: {self.sortino:.3f} | "
             f"MaxDD: {self.max_dd:.1%} | Calmar: {self.calmar:.3f} | "
             f"Turnover: {self.avg_turnover:.3f} | "
-            f"Coherence: {self.coherence_score:.4f}"
+            f"Coherence(in-sample diag): {self.coherence_score:.4f}"
         )
 
     @classmethod
@@ -99,6 +103,9 @@ class CPCMBacktester:
         use_ekf: bool = True,
         rebalance_freq: int = 5,
         train_window: int = 252,
+        fee_bps: float = 5.0,
+        slippage_bps: float = 5.0,
+        fit_kwargs: dict | None = None,
     ):
         """
         Args:
@@ -107,12 +114,20 @@ class CPCMBacktester:
             use_ekf: Whether to apply EKF filtering to drivers.
             rebalance_freq: Rebalance every N trading days.
             train_window: Rolling training window size.
+            fee_bps / slippage_bps: transaction costs charged on L1 weight
+                turnover at every rebalance (same model as costs.py, so CPCM
+                results are cost-comparable to the strategies.py baselines).
+            fit_kwargs: extra kwargs forwarded to every solver.fit() call
+                (e.g. V4 epochs / lr / jacobian lambda).
         """
         self.solver = solver
         self.optimizer = optimizer
         self.use_ekf = use_ekf
         self.rebalance_freq = rebalance_freq
         self.train_window = train_window
+        self.fee_bps = fee_bps
+        self.slippage_bps = slippage_bps
+        self.fit_kwargs = dict(fit_kwargs) if fit_kwargs else {}
 
     def run(
         self,
@@ -146,18 +161,31 @@ class CPCMBacktester:
 
         test_start = self.train_window
 
+        n_failed = 0
         for t in range(test_start, T):
             idx = t - test_start
 
             # ── Rebalance check ──
+            cost_drag = 0.0
             if idx % self.rebalance_freq == 0:
                 try:
-                    current_weights = self._rebalance(
-                        returns, drivers, t, m
+                    new_weights = self._rebalance(returns, drivers, t, m)
+                    cost_drag = cost_drag_return(
+                        current_weights, new_weights, 1.0,
+                        fee_bps=self.fee_bps, slippage_bps=self.slippage_bps,
                     )
+                    current_weights = new_weights
                     if dates is not None:
                         rebalance_dates.append(dates[t])
                 except Exception as e:
+                    if idx == 0:
+                        # No valid weights were ever computed — trading the
+                        # initialized 1/n portfolio would be an undisclosed
+                        # equal-weight backtest. Fail loudly instead.
+                        raise RuntimeError(
+                            f"First rebalance failed at t={t}: {e}"
+                        ) from e
+                    n_failed += 1
                     logger.warning(f"Rebalance failed at t={t}: {e}")
                     # Keep previous weights
 
@@ -168,6 +196,7 @@ class CPCMBacktester:
                 portfolio_returns[idx] = np.nansum(
                     current_weights[valid] * day_return[valid]
                 )
+            portfolio_returns[idx] -= cost_drag
             weights_history[idx] = current_weights
 
         # ── Compute metrics ──
@@ -187,7 +216,13 @@ class CPCMBacktester:
         result = BacktestResult.from_returns(
             portfolio_returns, weights_history, rebalance_dates,
             coherence_score=coherence,
+            n_failed_rebalances=n_failed,
         )
+        if n_failed:
+            logger.warning(
+                "%d rebalance(s) failed; stale weights were held through "
+                "those periods", n_failed,
+            )
 
         logger.info(f"Backtest complete: {result.summary()}")
         return result
@@ -206,7 +241,7 @@ class CPCMBacktester:
         R_train = returns[train_start:t]
 
         # Fit solver
-        self.solver.fit(D_train, R_train)
+        self.solver.fit(D_train, R_train, **self.fit_kwargs)
 
         # Apply EKF filtering
         if self.use_ekf:

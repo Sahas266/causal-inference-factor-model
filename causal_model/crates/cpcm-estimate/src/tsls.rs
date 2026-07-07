@@ -1,7 +1,7 @@
 use nalgebra::{DMatrix, DVector};
 use statrs::distribution::{ContinuousCDF, ChiSquared, StudentsT};
 
-use crate::ols::{ols, project_onto};
+use crate::ols::{hac_covariance, newey_west_maxlags, ols, project_onto};
 use crate::types::TslsResult;
 
 /// Two-Stage Least Squares estimation.
@@ -38,16 +38,12 @@ pub fn tsls(
 
     // ── Stage 1: Regress each endogenous var on [Z, X_exog] ──────────
     let z_full = hstack(&[z, x_exog]);
-    let z_full_names: Vec<String> = instrument_names
-        .iter()
-        .chain(exog_names.iter())
-        .cloned()
-        .collect();
+    let _ = instrument_names; // names carried for the caller; numerics don't need them
 
     let x_hat = project_onto(x_endog, &z_full)?;
 
-    // First-stage F-statistics (one per endogenous variable)
-    let first_stage_f = compute_first_stage_f(x_endog, &z_full, &z_full_names)?;
+    // First-stage PARTIAL F-statistics (excluded instruments only)
+    let first_stage_f = compute_first_stage_f(x_endog, z, x_exog)?;
 
     // ── Stage 2: Regress y on [X̂, X_exog] ───────────────────────────
     let x_second = hstack(&[&x_hat, x_exog]);
@@ -109,14 +105,31 @@ pub fn tsls(
 
     // ── Sargan test (overidentification) ─────────────────────────────
     let (sargan_stat, sargan_p) = if m > k1 {
-        compute_sargan(y, &x_original, z, &beta)?
+        compute_sargan(y, &x_original, z, x_exog, &beta, k1)?
     } else {
         (None, None)
     };
 
-    // ── Hausman test ─────────────────────────────────────────────────
+    // ── Hausman test (uses the CORRECTED 2SLS SEs, not raw stage-2 SEs) ──
     let ols_result = ols(y, &x_original, &all_names)?;
-    let (hausman_stat, hausman_p) = compute_hausman(&ols_result, &stage2_result, k1)?;
+    let (hausman_stat, hausman_p) =
+        compute_hausman(&ols_result, beta.as_slice(), &std_errors, k1);
+
+    // HAC (Newey-West) standard errors: bread from [X̂, X_exog], residuals
+    // from the original X (the 2SLS correction).
+    let hac_var = hac_covariance(&x_second, &residuals, &xtx_hat_inv, newey_west_maxlags(n));
+    let hac_std_errors: Vec<f64> = (0..k_total)
+        .map(|j| hac_var[(j, j)].max(0.0).sqrt())
+        .collect();
+    let hac_t_stats: Vec<f64> = beta
+        .iter()
+        .zip(&hac_std_errors)
+        .map(|(&b, &se)| if se > 1e-15 { b / se } else { 0.0 })
+        .collect();
+    let hac_p_values: Vec<f64> = hac_t_stats
+        .iter()
+        .map(|&t| 2.0 * (1.0 - t_dist.cdf(t.abs())))
+        .collect();
 
     Ok(TslsResult {
         coefficients: beta.as_slice().to_vec(),
@@ -132,59 +145,78 @@ pub fn tsls(
         sargan_p,
         hausman_stat,
         hausman_p,
+        hac_std_errors,
+        hac_t_stats,
+        hac_p_values,
     })
 }
 
-/// Compute first-stage F-statistic for each endogenous variable.
+/// First-stage PARTIAL F of the excluded instruments per endogenous variable.
+///
+/// Restricted: x_j on X_exog only (R²r). Full: x_j on [Z, X_exog] (R²f).
+/// F = ((R²f - R²r)/m) / ((1 - R²f)/(n - m - k2)).
+/// The omnibus F used previously let exogenous controls inflate the statistic.
 fn compute_first_stage_f(
     x_endog: &DMatrix<f64>,
-    z_full: &DMatrix<f64>,
-    z_full_names: &[String],
+    z: &DMatrix<f64>,
+    x_exog: &DMatrix<f64>,
 ) -> anyhow::Result<Vec<f64>> {
     let n = x_endog.nrows();
     let k1 = x_endog.ncols();
-    let mut f_stats = Vec::with_capacity(k1);
+    let m = z.ncols();
+    let k2 = x_exog.ncols();
+    let z_full = hstack(&[z, x_exog]);
+    let full_names: Vec<String> = (0..m + k2).map(|i| format!("c{i}")).collect();
+    let exog_names: Vec<String> = (0..k2).map(|i| format!("e{i}")).collect();
+    let df2 = (n as f64) - (m as f64) - (k2 as f64);
 
+    let mut f_stats = Vec::with_capacity(k1);
     for j in 0..k1 {
         let y_j = x_endog.column(j).into_owned();
-        let result = ols(&y_j, z_full, z_full_names)?;
-
-        let k = z_full.ncols() as f64;
-        let df1 = k - 1.0; // instruments only (excluding exogenous which are always included)
-        let df2 = (n as f64) - k;
-
-        // F = (R² / df1) / ((1 - R²) / df2)
-        let f = if result.r_squared < 1.0 && df1 > 0.0 {
-            (result.r_squared / df1) / ((1.0 - result.r_squared) / df2)
+        let r2_r = if k2 > 0 {
+            ols(&y_j, x_exog, &exog_names)?.r_squared
         } else {
             0.0
         };
-
+        let r2_f = ols(&y_j, &z_full, &full_names)?.r_squared;
+        let f = if r2_f < 1.0 && m > 0 && df2 > 0.0 {
+            ((r2_f - r2_r) / (m as f64)) / ((1.0 - r2_f) / df2)
+        } else {
+            0.0
+        };
         f_stats.push(f);
     }
 
     Ok(f_stats)
 }
 
-/// Sargan overidentification test.
+/// Sargan overidentification test: n·R² of 2SLS residuals on [Z, X_exog].
 /// H0: all instruments are valid (uncorrelated with the error term).
+///
+/// df = m - k1 (instruments minus endogenous). The aux regression must include
+/// X_exog: residuals are orthogonal to exog by construction, and omitting it
+/// misattributes exog variation to the instruments.
 fn compute_sargan(
     y: &DVector<f64>,
     x: &DMatrix<f64>,
     z: &DMatrix<f64>,
+    x_exog: &DMatrix<f64>,
     beta: &DVector<f64>,
+    k1: usize,
 ) -> anyhow::Result<(Option<f64>, Option<f64>)> {
     let residuals = y - x * beta;
     let n = residuals.len() as f64;
     let m = z.ncols();
-    let k = x.ncols();
 
-    // Regress residuals on Z
-    let z_names: Vec<String> = (0..m).map(|i| format!("z{i}")).collect();
-    let aux = ols(&residuals, z, &z_names)?;
+    let zx = hstack(&[z, x_exog]);
+    let names: Vec<String> = (0..m)
+        .map(|i| format!("z{i}"))
+        .chain((0..x_exog.ncols()).map(|i| format!("e{i}")))
+        .collect();
+    let aux = ols(&residuals, &zx, &names)?;
 
     let stat = n * aux.r_squared;
-    let df = (m - k) as f64;
+    let df = m as f64 - k1 as f64;
 
     if df > 0.0 {
         let chi2 = ChiSquared::new(df).unwrap();
@@ -195,42 +227,34 @@ fn compute_sargan(
     }
 }
 
-/// Hausman test comparing OLS and 2SLS estimates.
+/// Hausman test comparing OLS and 2SLS estimates (diagonal simplification).
 /// H0: OLS is consistent (no endogeneity).
+///
+/// Uses the CORRECTED 2SLS SEs. Terms with a non-positive variance difference
+/// are SKIPPED (standard practice — the difference matrix is not positive
+/// definite there); df = number of terms used. (None, None) if none usable.
 fn compute_hausman(
     ols_result: &crate::types::OlsResult,
-    tsls_stage2: &crate::types::OlsResult,
+    tsls_beta: &[f64],
+    tsls_se: &[f64],
     k_endog: usize,
-) -> anyhow::Result<(f64, f64)> {
-    let diff: Vec<f64> = ols_result
-        .coefficients
-        .iter()
-        .zip(&tsls_stage2.coefficients)
-        .take(k_endog) // compare only endogenous variable coefficients
-        .map(|(&a, &b)| a - b)
-        .collect();
-
-    // H = (β_ols - β_2sls)' * (V_2sls - V_ols)⁻¹ * (β_ols - β_2sls)
-    // Simplified: use the difference in variance (diagonals only for tractability)
-    let var_diff: Vec<f64> = ols_result
-        .std_errors
-        .iter()
-        .zip(&tsls_stage2.std_errors)
-        .take(k_endog)
-        .map(|(&se_ols, &se_tsls)| (se_tsls * se_tsls - se_ols * se_ols).max(1e-15))
-        .collect();
-
-    let stat: f64 = diff
-        .iter()
-        .zip(&var_diff)
-        .map(|(&d, &v)| d * d / v)
-        .sum();
-
-    let df = k_endog as f64;
-    let chi2 = ChiSquared::new(df).map_err(|e| anyhow::anyhow!("Chi2 error: {e}"))?;
+) -> (Option<f64>, Option<f64>) {
+    let mut stat = 0.0;
+    let mut df = 0usize;
+    for j in 0..k_endog {
+        let d = ols_result.coefficients[j] - tsls_beta[j];
+        let v = tsls_se[j] * tsls_se[j] - ols_result.std_errors[j] * ols_result.std_errors[j];
+        if v > 0.0 {
+            stat += d * d / v;
+            df += 1;
+        }
+    }
+    if df == 0 {
+        return (None, None);
+    }
+    let chi2 = ChiSquared::new(df as f64).unwrap();
     let p = 1.0 - chi2.cdf(stat.max(0.0));
-
-    Ok((stat, p))
+    (Some(stat), Some(p))
 }
 
 /// Horizontally stack matrices.

@@ -235,10 +235,16 @@ def check_iv_validity(
     """Graph-based IV check (port of identify.rs::check_iv_validity).
 
     Relevance: Z is NOT d-separated from treatment (unconditionally).
-    Exclusion: Z IS d-separated from outcome given treatment.
+    Exclusion: in G_T̄ (the graph with ALL edges out of the treatment removed),
+    Z IS d-separated from outcome given ∅ (Pearl's graphical IV criterion).
+    The previous d_sep(Z, Y | T) test conditioned on the collider T, spuriously
+    rejecting valid instruments whenever T has an unobserved cause of Y.
     """
     relevant = not d_separated(dag, instrument, treatment, [])
-    excludable = d_separated(dag, instrument, outcome, [treatment])
+    pruned = dag.copy()
+    if treatment in pruned.nodes:
+        pruned.remove_edges_from(list(pruned.out_edges(treatment)))
+    excludable = d_separated(pruned, instrument, outcome, [])
     valid = relevant and excludable
     if valid:
         reason = "Valid IV: relevant and excludable"
@@ -246,7 +252,7 @@ def check_iv_validity(
         reason = f"Invalid IV: {instrument} is d-separated from {treatment} (no relevance)"
     else:
         reason = (f"Invalid IV: {instrument} is NOT d-separated from {outcome} "
-                  f"given {treatment} (exclusion violated)")
+                  f"with edges out of {treatment} removed (exclusion violated)")
     return IvValidityResult(instrument, treatment, outcome, relevant, excludable, valid, reason)
 
 

@@ -41,12 +41,14 @@ def should_rebalance(
     Returns:
         bool — True to execute the rebalance, False to skip.
     """
-    if threshold_l1 <= 0:
-        return True
     if current_weights.shape != target_weights.shape:
         raise ValueError(
             f"shape mismatch: current={current_weights.shape} "
             f"target={target_weights.shape}"
         )
     delta_l1 = float(np.abs(target_weights - current_weights).sum())
+    if threshold_l1 <= 0:
+        # "Always rebalance" still shouldn't count a no-op trade as a
+        # rebalance — that inflated n_rebalances metadata to one per day.
+        return delta_l1 > 1e-12
     return delta_l1 >= threshold_l1

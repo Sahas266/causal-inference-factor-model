@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Optional
@@ -31,7 +32,20 @@ CACHE_DIR = Path(__file__).parent / "cache"
 
 # Bump to invalidate all on-disk parquet caches when load semantics change.
 # v2: simple returns by default; tz-naive UTC index from both backends.
-CACHE_VERSION = 2
+# v3: monthly macro series shifted by publication lag (no more using CPI/M2
+#     from their observation stamp weeks before release).
+CACHE_VERSION = 3
+
+# Publication lag, in days from the FRED observation stamp to public release.
+# Monthly aggregates are stamped at the month START but released weeks after
+# the month ENDS — ffilling from the stamp date hands the pipeline ~4-6 weeks
+# of look-ahead. Daily market series (VIX, DGS10, T10Y2Y, DFF, dollar index)
+# publish same/next day and the backtest engines already lag decisions by a
+# day, so they are not shifted.
+MACRO_RELEASE_LAG_DAYS: dict[str, int] = {
+    "cpiaucsl": 45,  # CPI: month-start stamp, mid-following-month release
+    "m2sl": 45,      # M2 monthly: ~4 weeks after month end
+}
 
 
 def _to_utc_bound(s: str, which: str) -> str:
@@ -108,7 +122,9 @@ class BaseCPCMDataLoader(ABC):
         if panel.empty:
             return panel
         panel = panel.copy()
-        panel.columns = [c.rsplit("_", 1)[0] for c in panel.columns]
+        # removesuffix, not rsplit: a price_metric containing '_' (e.g.
+        # 'funding_rate_8h') would otherwise mangle asset names.
+        panel.columns = [c.removesuffix(f"_{price_metric}") for c in panel.columns]
         return panel
 
     def load_returns(
@@ -163,6 +179,12 @@ class BaseCPCMDataLoader(ABC):
         df = df.sort_index().resample("D").last().ffill()
         df.columns = [c.lower() for c in df.columns]
 
+        # Shift monthly aggregates by their publication lag so a series only
+        # becomes visible on (approximately) its real release date.
+        for col, lag in MACRO_RELEASE_LAG_DAYS.items():
+            if col in df.columns:
+                df[col] = df[col].shift(lag)
+
         if use_cache and not df.empty:
             self._write_cache(cache_key, df)
         return df
@@ -191,6 +213,11 @@ class BaseCPCMDataLoader(ABC):
 
     @staticmethod
     def _read_cache(key: str) -> Optional[pd.DataFrame]:
+        # The cache never self-invalidates within a CACHE_VERSION — after a
+        # backfill adds rows inside a cached window, set CPCM_REFRESH_CACHE=1
+        # (or pass use_cache=False) to force a re-fetch.
+        if os.environ.get("CPCM_REFRESH_CACHE"):
+            return None
         path = CACHE_DIR / f"{key}.parquet"
         if path.exists():
             logger.debug(f"Cache hit: {path}")

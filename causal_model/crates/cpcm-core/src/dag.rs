@@ -177,6 +177,18 @@ impl CausalDag {
             .collect()
     }
 
+    /// A copy of the graph with all edges OUT of `name` removed (Pearl's G_T̄,
+    /// used by the graphical IV exclusion test). Node indices are preserved.
+    pub fn without_outgoing_edges(&self, name: &str) -> CausalDag {
+        let mut out = self.clone();
+        if let Some(&idx) = out.index.get(name) {
+            out.graph.retain_edges(|g, e| {
+                g.edge_endpoints(e).map_or(true, |(src, _)| src != idx)
+            });
+        }
+        out
+    }
+
     /// Check if there is a directed path from `from` to `to`.
     pub fn has_directed_path(&self, from: &str, to: &str) -> bool {
         let &from_idx = match self.index.get(from) {

@@ -57,9 +57,11 @@ def test_cost_shape_mismatch_raises():
 # ── threshold (no-trade band) ────────────────────────────────────────
 
 
-def test_threshold_zero_always_trades():
+def test_threshold_zero_trades_on_any_change_but_not_noop():
     assert should_rebalance(np.array([1, 0]), np.array([0.99, 0.01]), 0.0)
-    assert should_rebalance(np.array([1, 0]), np.array([1, 0]), 0.0)
+    # Identical target is a no-op, not a trade — counting it inflated
+    # n_rebalances metadata to one per day.
+    assert not should_rebalance(np.array([1, 0]), np.array([1, 0]), 0.0)
 
 
 def test_threshold_skips_small_change():

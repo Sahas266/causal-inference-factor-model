@@ -96,8 +96,11 @@ def test_tsls_matches_rust_exactly():
     fx = FIXTURES["tsls_canonical"]
     np.testing.assert_allclose(res.coefficients, fx["coef"], rtol=0, atol=1e-6)
     np.testing.assert_allclose(res.std_errors, fx["se"], rtol=0, atol=1e-6)
+    np.testing.assert_allclose(res.hac_std_errors, fx["hac_se"], rtol=1e-6, atol=0)
     np.testing.assert_allclose(res.first_stage_f, fx["first_stage_f"], rtol=1e-6, atol=0)
     assert abs(res.r_squared - fx["r2"]) < 1e-6
+    # Hausman now uses the corrected 2SLS SEs (fixture regenerated for the fix)
+    assert res.hausman_stat is not None
     assert abs(res.hausman_stat - fx["hausman_stat"]) < 1e-4
     # Just-identified (m == k1) → no Sargan
     assert res.sargan_stat is None
@@ -128,15 +131,45 @@ def test_durbin_watson_monotone():
 
 
 def test_overidentified_produces_sargan():
-    """Sargan needs m > k1+k2 (the Rust uses total cols for df), so with one
-    endogenous + intercept we need >= 3 instruments to get df > 0."""
+    """Sargan runs whenever m > k1 (df = m - k1, instruments minus endogenous)."""
     z, x, y = _lcg_dataset(500)
     n = 500
     z2 = z + 0.5 * np.sin(np.arange(n))
-    z3 = z - 0.3 * np.cos(np.arange(n))
-    Z = np.column_stack([z, z2, z3])
+    Z = np.column_stack([z, z2])  # m=2 > k1=1 now suffices (df bug fixed)
     res = tsls(y, x.reshape(-1, 1), np.ones((n, 1)), Z,
-               ["x"], ["intercept"], ["z1", "z2", "z3"])
+               ["x"], ["intercept"], ["z1", "z2"])
     assert res.sargan_stat is not None
     assert res.sargan_p is not None
     assert 0.0 <= res.sargan_p <= 1.0
+
+
+def test_hausman_none_when_no_usable_terms():
+    """Exogenous x: 2SLS ≈ OLS, corrected SEs can be <= OLS SEs → terms with
+    var_diff <= 0 are skipped; all skipped → (None, None) instead of the old
+    1e-15-clamp explosion."""
+    rng = np.random.default_rng(7)
+    n = 400
+    z = rng.standard_normal(n)
+    x = z.copy()          # x IS the instrument: 2SLS == OLS exactly
+    y = 1.0 + 0.5 * x + rng.standard_normal(n) * 0.1
+    res = tsls(y, x.reshape(-1, 1), np.ones((n, 1)), z.reshape(-1, 1),
+               ["x"], ["intercept"], ["z"])
+    # identical fits → var_diff == 0 → skipped → no Hausman
+    assert res.hausman_stat is None and res.hausman_p is None
+
+
+def test_partial_f_matches_reference_implementation():
+    """Library partial F must agree with the experiment harness's
+    _partial_first_stage_f (ols_vs_2sls.py) — same math, different code path."""
+    from causal_portfolio.experiments.ols_vs_2sls import _partial_first_stage_f
+    rng = np.random.default_rng(11)
+    n = 300
+    exog = rng.standard_normal((n, 2))
+    z = rng.standard_normal(n)
+    x = 0.4 * z + 0.8 * exog[:, 0] + rng.standard_normal(n) * 0.5
+    y = 0.3 * x + rng.standard_normal(n)
+    x_exog = add_intercept(exog)
+    res = tsls(y, x.reshape(-1, 1), x_exog, z.reshape(-1, 1),
+               ["x"], ["intercept", "e1", "e2"], ["z"])
+    f_ref = _partial_first_stage_f(x, z, exog)
+    np.testing.assert_allclose(res.first_stage_f[0], f_ref, rtol=1e-8)

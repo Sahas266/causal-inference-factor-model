@@ -11,10 +11,17 @@ Numerics mirror the Rust exactly so results match to ~1e-9:
   - 2SLS first stage projects endogenous regressors onto [Z, X_exog]; second
     stage regresses y on [X̂, X_exog]; standard errors use the ORIGINAL X
     residuals (the 2SLS correction), with Var(β) = σ²(X̂'X̂)⁻¹.
-  - First-stage F per endogenous var = (R²/df1)/((1-R²)/df2), df1 = k_zfull-1.
-  - Sargan = n·R² of residuals-on-Z (only when overidentified), df = m-k.
-  - Hausman uses the diagonal-only simplification from the Rust (sum of
-    d²/(se_tsls²-se_ols²) over endogenous coefficients).
+  - First-stage F per endogenous var is the PARTIAL F of the excluded
+    instruments: restricted (X_exog only) vs full ([Z, X_exog]) R²,
+    F = ((R²f-R²r)/m) / ((1-R²f)/(n-m-k2)).
+  - Sargan = n·R² of residuals-on-[Z, X_exog] (only when overidentified),
+    df = m - k1 (instruments minus endogenous).
+  - Hausman uses the diagonal-only simplification (sum of d²/(se_tsls²-se_ols²)
+    over endogenous coefficients) with the CORRECTED 2SLS SEs; terms with a
+    non-positive variance difference are skipped (difference matrix not PD),
+    df = number of terms used, (None, None) if none usable.
+  - HAC (Newey-West, Bartlett kernel) standard errors are computed alongside
+    the iid SEs for both OLS and 2SLS; maxlags = floor(4*(n/100)^(2/9)).
 
 Why port instead of calling statsmodels: we want bit-comparable parity with the
 Rust reference (validated in tests/test_estimators.py against emitted fixtures),
@@ -50,6 +57,9 @@ class OlsResult:
     n_obs: int
     n_features: int
     feature_names: list[str]
+    hac_std_errors: np.ndarray
+    hac_t_stats: np.ndarray
+    hac_p_values: np.ndarray
 
 
 @dataclass
@@ -65,8 +75,11 @@ class TslsResult:
     first_stage_f: np.ndarray
     sargan_stat: float | None
     sargan_p: float | None
-    hausman_stat: float
-    hausman_p: float
+    hausman_stat: float | None
+    hausman_p: float | None
+    hac_std_errors: np.ndarray
+    hac_t_stats: np.ndarray
+    hac_p_values: np.ndarray
 
 
 @dataclass
@@ -129,6 +142,35 @@ def project_onto(x: np.ndarray, z: np.ndarray) -> np.ndarray:
     return z @ ztz_inv @ z.T @ x
 
 
+# ── HAC (Newey-West) standard errors ─────────────────────────────────
+
+
+def newey_west_maxlags(n: int) -> int:
+    """Default Newey-West truncation lag: floor(4 * (n/100)^(2/9))."""
+    return int(np.floor(4.0 * (n / 100.0) ** (2.0 / 9.0)))
+
+
+def _hac_covariance(
+    xw: np.ndarray, residuals: np.ndarray, xtx_inv: np.ndarray, maxlags: int,
+) -> np.ndarray:
+    """Newey-West HAC covariance (Bartlett kernel), sandwich form.
+
+    Var(β) = (X'X)⁻¹ S (X'X)⁻¹ with
+    S = Σ_t e_t² x_t x_t' + Σ_{l=1}^{L} w_l Σ_t (x_t e_t e_{t-l} x_{t-l}' + sym),
+    w_l = 1 - l/(L+1). `xw` is the bread's regressor matrix (X for OLS, the
+    projected [X̂, X_exog] for 2SLS); `residuals` are the model residuals.
+    No small-sample correction (matches the Rust exactly).
+    """
+    n = xw.shape[0]
+    xu = xw * residuals.reshape(-1, 1)
+    s = xu.T @ xu
+    for l in range(1, min(maxlags, n - 1) + 1):
+        w = 1.0 - l / (maxlags + 1.0)
+        gamma = xu[l:].T @ xu[:-l]
+        s = s + w * (gamma + gamma.T)
+    return xtx_inv @ s @ xtx_inv
+
+
 # ── OLS ──────────────────────────────────────────────────────────────
 
 
@@ -167,11 +209,17 @@ def ols(y: np.ndarray, x: np.ndarray, feature_names: list[str]) -> OlsResult:
 
     t_stats, p_values = _t_and_p(beta, std_errors, df_resid)
 
+    hac_var = _hac_covariance(x, residuals, xtx_inv, newey_west_maxlags(n))
+    hac_std_errors = np.sqrt(np.maximum(np.diag(hac_var), 0.0))
+    hac_t_stats, hac_p_values = _t_and_p(beta, hac_std_errors, df_resid)
+
     return OlsResult(
         coefficients=beta, std_errors=std_errors, t_stats=t_stats,
         p_values=np.asarray(p_values), r_squared=r_squared,
         adj_r_squared=adj_r_squared, residuals=residuals, n_obs=n,
         n_features=k, feature_names=list(feature_names),
+        hac_std_errors=hac_std_errors, hac_t_stats=hac_t_stats,
+        hac_p_values=np.asarray(hac_p_values),
     )
 
 
@@ -206,9 +254,8 @@ def tsls(
 
     # Stage 1: regress each endogenous var on [Z, X_exog]
     z_full = np.hstack([z, x_exog])
-    z_full_names = list(instrument_names) + list(exog_names)
     x_hat = project_onto(x_endog, z_full)
-    first_stage_f = _compute_first_stage_f(x_endog, z_full, z_full_names)
+    first_stage_f = _compute_first_stage_f(x_endog, z, x_exog)
 
     # Stage 2: regress y on [X̂, X_exog]
     x_second = np.hstack([x_hat, x_exog])
@@ -236,12 +283,19 @@ def tsls(
     r_squared = 1.0 - sse / sst if sst > 0.0 else 0.0
 
     if m > k1:
-        sargan_stat, sargan_p = _compute_sargan(y, x_original, z, beta)
+        sargan_stat, sargan_p = _compute_sargan(y, x_original, z, x_exog, beta, k1)
     else:
         sargan_stat, sargan_p = None, None
 
+    # Hausman compares OLS SEs with the CORRECTED 2SLS SEs (std_errors above),
+    # not the raw stage-2 OLS SEs.
     ols_full = ols(y, x_original, all_names)
-    hausman_stat, hausman_p = _compute_hausman(ols_full, stage2, k1)
+    hausman_stat, hausman_p = _compute_hausman(ols_full, beta, std_errors, k1)
+
+    hac_var = _hac_covariance(x_second, residuals, xtx_hat_inv,
+                              newey_west_maxlags(n))
+    hac_std_errors = np.sqrt(np.maximum(np.diag(hac_var), 0.0))
+    hac_t_stats, hac_p_values = _t_and_p(beta, hac_std_errors, df_resid)
 
     return TslsResult(
         coefficients=beta, std_errors=std_errors, t_stats=t_stats,
@@ -249,38 +303,57 @@ def tsls(
         n_obs=n, feature_names=all_names, first_stage_f=first_stage_f,
         sargan_stat=sargan_stat, sargan_p=sargan_p,
         hausman_stat=hausman_stat, hausman_p=hausman_p,
+        hac_std_errors=hac_std_errors, hac_t_stats=hac_t_stats,
+        hac_p_values=np.asarray(hac_p_values),
     )
 
 
 def _compute_first_stage_f(
-    x_endog: np.ndarray, z_full: np.ndarray, z_full_names: list[str],
+    x_endog: np.ndarray, z: np.ndarray, x_exog: np.ndarray,
 ) -> np.ndarray:
-    n = x_endog.shape[0]
-    k1 = x_endog.shape[1]
-    k = float(z_full.shape[1])
-    df1 = k - 1.0   # instruments only (exogenous always included)
-    df2 = n - k
+    """Partial F of the EXCLUDED instruments (weak-instrument diagnostic).
+
+    Restricted: x_j on X_exog only (R²r). Full: x_j on [Z, X_exog] (R²f).
+    F = ((R²f - R²r)/m) / ((1 - R²f)/(n - m - k2)).
+    The omnibus F used previously let exogenous controls inflate the statistic.
+    """
+    n, k1 = x_endog.shape
+    m = z.shape[1]
+    k2 = x_exog.shape[1]
+    z_full = np.hstack([z, x_exog])
+    full_names = [f"c{i}" for i in range(m + k2)]
+    exog_names = [f"e{i}" for i in range(k2)]
+    df2 = float(n - m - k2)
     f_stats = np.zeros(k1)
     for j in range(k1):
-        res = ols(x_endog[:, j], z_full, z_full_names)
-        if res.r_squared < 1.0 and df1 > 0.0:
-            f_stats[j] = (res.r_squared / df1) / ((1.0 - res.r_squared) / df2)
+        xj = x_endog[:, j]
+        r2_r = ols(xj, x_exog, exog_names).r_squared if k2 > 0 else 0.0
+        r2_f = ols(xj, z_full, full_names).r_squared
+        if r2_f < 1.0 and m > 0 and df2 > 0.0:
+            f_stats[j] = ((r2_f - r2_r) / m) / ((1.0 - r2_f) / df2)
         else:
             f_stats[j] = 0.0
     return f_stats
 
 
 def _compute_sargan(
-    y: np.ndarray, x: np.ndarray, z: np.ndarray, beta: np.ndarray,
+    y: np.ndarray, x: np.ndarray, z: np.ndarray, x_exog: np.ndarray,
+    beta: np.ndarray, k1: int,
 ) -> tuple[float | None, float | None]:
+    """Sargan overidentification: n·R² of 2SLS residuals on [Z, X_exog].
+
+    df = m - k1 (instruments minus endogenous). The aux regression must include
+    X_exog: residuals are orthogonal to exog by construction, and omitting it
+    misattributes exog variation to the instruments.
+    """
     residuals = y - x @ beta
     n = float(residuals.shape[0])
     m = z.shape[1]
-    k = x.shape[1]
-    z_names = [f"z{i}" for i in range(m)]
-    aux = ols(residuals, z, z_names)
+    zx = np.hstack([z, x_exog])
+    names = [f"z{i}" for i in range(m)] + [f"e{i}" for i in range(x_exog.shape[1])]
+    aux = ols(residuals, zx, names)
     stat = n * aux.r_squared
-    df = float(m - k)
+    df = float(m - k1)
     if df > 0.0:
         p = float(1.0 - _chi2.cdf(stat, df))
         return float(stat), p
@@ -288,15 +361,26 @@ def _compute_sargan(
 
 
 def _compute_hausman(
-    ols_result: OlsResult, tsls_stage2: OlsResult, k_endog: int,
-) -> tuple[float, float]:
-    diff = ols_result.coefficients[:k_endog] - tsls_stage2.coefficients[:k_endog]
-    se_ols = ols_result.std_errors[:k_endog]
-    se_tsls = tsls_stage2.std_errors[:k_endog]
-    var_diff = np.maximum(se_tsls ** 2 - se_ols ** 2, 1e-15)
-    stat = float((diff ** 2 / var_diff).sum())
-    df = float(k_endog)
-    p = float(1.0 - _chi2.cdf(max(stat, 0.0), df))
+    ols_result: OlsResult, tsls_beta: np.ndarray, tsls_se: np.ndarray,
+    k_endog: int,
+) -> tuple[float | None, float | None]:
+    """Diagonal Hausman using the corrected 2SLS SEs.
+
+    Terms with var_diff <= 0 are SKIPPED (standard practice — the variance
+    difference is not positive definite there); df = number of terms used.
+    Returns (None, None) when no term is usable.
+    """
+    stat = 0.0
+    df = 0
+    for j in range(k_endog):
+        d = float(ols_result.coefficients[j] - tsls_beta[j])
+        v = float(tsls_se[j] ** 2 - ols_result.std_errors[j] ** 2)
+        if v > 0.0:
+            stat += d * d / v
+            df += 1
+    if df == 0:
+        return None, None
+    p = float(1.0 - _chi2.cdf(max(stat, 0.0), float(df)))
     return stat, p
 
 
