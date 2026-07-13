@@ -7,6 +7,7 @@ import os
 import re
 import time
 from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterator
@@ -14,9 +15,17 @@ from typing import Iterator
 from causal_portfolio.execution.audit import LOG_DIR
 
 
+_ACTIVE_LOG: ContextVar[Path | None] = ContextVar("cpcm_execution_log", default=None)
+
+
 @contextmanager
 def execution_run_log(name: str, log_dir: Path | None = None) -> Iterator[Path]:
     """Capture all model and execution logs for one run in a unique file."""
+    active_path = _ACTIVE_LOG.get()
+    if active_path is not None:
+        yield active_path
+        return
+
     safe_name = re.sub(r"[^A-Za-z0-9_-]+", "-", name).strip("-")
     if not safe_name:
         raise ValueError("execution log name must contain a letter or number")
@@ -33,10 +42,13 @@ def execution_run_log(name: str, log_dir: Path | None = None) -> Iterator[Path]:
     formatter.converter = time.gmtime
     handler.setFormatter(formatter)
 
+    # ponytail: process-wide handler assumes one execution run at a time; use
+    # queue handlers if concurrent execution is introduced.
     root = logging.getLogger()
     previous_level = root.level
     root.setLevel(min(previous_level, logging.INFO))
     root.addHandler(handler)
+    token = _ACTIVE_LOG.set(path)
     run_logger = logging.getLogger("cpcm.execution.run")
     try:
         run_logger.info("execution run started: %s log=%s", name, path)
@@ -50,3 +62,4 @@ def execution_run_log(name: str, log_dir: Path | None = None) -> Iterator[Path]:
         root.removeHandler(handler)
         root.setLevel(previous_level)
         handler.close()
+        _ACTIVE_LOG.reset(token)

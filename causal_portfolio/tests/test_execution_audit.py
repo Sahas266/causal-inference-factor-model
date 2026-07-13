@@ -112,6 +112,18 @@ def test_execution_run_log_records_system_exit(tmp_path):
     assert "SystemExit: 2" in text
 
 
+def test_execution_run_log_reuses_active_file(tmp_path):
+    from causal_portfolio.execution import execution_run_log
+
+    with execution_run_log("outer", log_dir=tmp_path) as outer:
+        with execution_run_log("inner", log_dir=tmp_path) as inner:
+            logging.getLogger("nested_model").info("nested handoff")
+
+    assert inner == outer
+    assert len(list(tmp_path.glob("execution-*.log"))) == 1
+    assert "nested handoff" in outer.read_text(encoding="utf-8")
+
+
 def test_generic_cli_uses_shared_execution_log(tmp_path, monkeypatch):
     from causal_portfolio.execution import run_logging
     from causal_portfolio.execution import cli
