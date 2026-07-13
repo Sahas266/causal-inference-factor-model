@@ -397,8 +397,9 @@ def execute_plan(
        `acknowledge_mainnet=True` kwarg. The CLI sets it after a confirmation
        prompt; programmatic callers must opt in deliberately.
 
-    5. Audit write: every result is appended to the rotating JSONL log unless
-       `write_audit=False`. Test code disables this; production never should.
+    5. Audit write: appending to the rotating JSONL log is attempted for every
+       result unless `write_audit=False`; failures are returned in `audit_error`.
+       Test code may disable this; production should leave the default enabled.
     """
     target_id = (
         plan.target_snapshot.target_id

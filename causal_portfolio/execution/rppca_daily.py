@@ -306,6 +306,9 @@ def _submit_target(args: argparse.Namespace, target_path: Path) -> None:
     if result.audit_error:
         logger.error("submission completed but audit append failed: %s",
                      result.audit_error)
+    if not result.submitted:
+        logger.info("RP-PCA rebalance no-op: no orders submitted")
+        return
     logger.info("submitted RP-PCA rebalance: %s", result.response)
 
 

@@ -115,6 +115,7 @@ def test_rppca_submission_uses_standard_interface(tmp_path, monkeypatch, caplog)
             calls=captured.get("calls", 0) + 1,
         )
         return SimpleNamespace(
+            submitted=True,
             error=None,
             response={"status": "ok"},
             post_submit_error="post-state unavailable",
@@ -131,6 +132,35 @@ def test_rppca_submission_uses_standard_interface(tmp_path, monkeypatch, caplog)
     assert captured["calls"] == 1
     assert "post-state unavailable" in caplog.text
     assert "audit disk full" in caplog.text
+
+
+def test_rppca_submission_logs_empty_plan_as_no_op(tmp_path, monkeypatch, caplog):
+    import logging
+    from types import SimpleNamespace
+
+    target_path = tmp_path / "target.json"
+    target_path.write_text(
+        '{"btc": 0.1, "_meta": {"rebalance_date": "2026-07-13"}}',
+        encoding="utf-8",
+    )
+    args = build_parser().parse_args([])
+    monkeypatch.setattr(
+        rppca_daily,
+        "execute_model_target",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            submitted=False,
+            error=None,
+            response=None,
+            post_submit_error=None,
+            audit_error=None,
+        ),
+    )
+    caplog.set_level(logging.INFO, logger=rppca_daily.logger.name)
+
+    rppca_daily._submit_target(args, target_path)
+
+    assert "RP-PCA rebalance no-op" in caplog.text
+    assert "submitted RP-PCA rebalance" not in caplog.text
 
 
 def test_main_logs_failures_before_execution_audit(tmp_path, monkeypatch):

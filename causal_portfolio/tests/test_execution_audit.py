@@ -15,6 +15,7 @@ from causal_portfolio.execution.types import (
     AccountState,
     AssetMeta,
     Position,
+    ReconcileDrift,
     SubmitResult,
 )
 
@@ -62,6 +63,17 @@ def test_append_creates_jsonl_file(tmp_path):
     assert record["error"] is None
     assert record["post_submit_error"] == "post-state unavailable"
     assert record["plan"]["target_weights"] == {"btc": 0.3}
+
+
+def test_submit_result_sixth_positional_argument_remains_drifts():
+    plan = _build_plan_with_orders()
+    drift = ReconcileDrift("BTC", 100.0, 90.0, -10.0, -0.1)
+
+    result = SubmitResult(plan, True, {"status": "ok"}, None, None, [drift])
+
+    assert result.drifts == [drift]
+    assert result.post_submit_error is None
+    assert result.audit_error is None
 
 
 def test_append_appends_multiple_records(tmp_path):
