@@ -9,10 +9,11 @@ Key separation:
 
 Public entry points:
   - plan_rebalance: weights + state → RebalancePlan (no orders submitted)
-  - execute_rebalance: plan + adapter → SubmitResult (orders submitted)
+  - execute_target(target, config): TargetSnapshot → SubmitResult
 """
 
 from causal_portfolio.execution.config import ExecutionConfig
+from causal_portfolio.execution.hyperliquid import execute_target
 from causal_portfolio.execution.rebalancer import plan_rebalance
 from causal_portfolio.execution.reconcile import reconcile
 from causal_portfolio.execution.run_logging import execution_run_log
@@ -40,6 +41,7 @@ __all__ = [
     "SkipReason",
     "SubmitResult",
     "TargetSnapshot",
+    "execute_target",
     "load_target_snapshot",
     "execution_run_log",
     "plan_rebalance",

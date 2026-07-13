@@ -30,6 +30,8 @@ from causal_portfolio.execution.orderbook import (
     parse_fill_response,
 )
 from causal_portfolio.execution.precision import round_price as _round_price, round_size
+from causal_portfolio.execution.rebalancer import plan_rebalance
+from causal_portfolio.execution.run_logging import execution_run_log
 from causal_portfolio.execution.types import (
     AccountState,
     AssetMeta,
@@ -37,6 +39,7 @@ from causal_portfolio.execution.types import (
     Position,
     RebalancePlan,
     SubmitResult,
+    TargetSnapshot,
     make_cloid,
 )
 
@@ -342,6 +345,31 @@ class HLAdapter:
     @staticmethod
     def _round_size_down(size: float, sz_decimals: int) -> float:
         return round_size(size, sz_decimals) if size > 0 else 0.0
+
+
+def execute_target(
+    target: TargetSnapshot,
+    config: ExecutionConfig,
+    *,
+    acknowledge_mainnet: bool = False,
+) -> SubmitResult:
+    """Execute one provenance-carrying model target."""
+    if not isinstance(target, TargetSnapshot):
+        raise TypeError("target must be a TargetSnapshot")
+    with execution_run_log(target.strategy or "model"):
+        adapter = HLAdapter(config)
+        plan = plan_rebalance(
+            target,
+            adapter.fetch_state(),
+            adapter.fetch_mids(),
+            adapter.fetch_meta(),
+            config,
+        )
+        return execute_plan(
+            adapter,
+            plan,
+            acknowledge_mainnet=acknowledge_mainnet,
+        )
 
 
 def execute_plan(

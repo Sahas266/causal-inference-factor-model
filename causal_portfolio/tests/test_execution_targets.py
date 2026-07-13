@@ -149,6 +149,42 @@ def test_plan_carries_target_and_network_provenance():
     assert target.target_id in plan.notes[0]
 
 
+def test_execute_target_owns_model_handoff(tmp_path, monkeypatch):
+    from causal_portfolio.execution import audit, execute_target, run_logging
+    import causal_portfolio.execution.hyperliquid as hl
+
+    cfg = ExecutionConfig(testnet=True, dry_run=True)
+    state, mids, meta = _market()
+    adapter = _adapter(cfg)
+    adapter.fetch_mids.return_value = mids
+    adapter.fetch_meta.return_value = meta
+    monkeypatch.setattr(hl, "HLAdapter", lambda config: adapter)
+    monkeypatch.setattr(audit, "LOG_DIR", tmp_path)
+    monkeypatch.setattr(run_logging, "LOG_DIR", tmp_path)
+    target = TargetSnapshot(
+        {"btc": 0.1},
+        as_of=datetime.now(timezone.utc),
+        strategy="unit model",
+    )
+
+    result = execute_target(target, cfg)
+
+    assert result.plan.target_snapshot is target
+    assert result.submitted is False
+    adapter.fetch_state.assert_called_once_with()
+    adapter.fetch_mids.assert_called_once_with()
+    adapter.fetch_meta.assert_called_once_with()
+    assert len(list(tmp_path.glob("execution-unit-model-*.log"))) == 1
+    assert len(list(tmp_path.glob("rebalance-*.jsonl"))) == 1
+
+
+def test_execute_target_rejects_unversioned_dict():
+    from causal_portfolio.execution import execute_target
+
+    with pytest.raises(TypeError, match="TargetSnapshot"):
+        execute_target({"btc": 0.1}, ExecutionConfig())
+
+
 def test_network_mismatch_blocks_before_any_write():
     state, mids, meta = _market()
     plan = plan_rebalance(
