@@ -419,12 +419,16 @@ def execute_plan(
         try:
             from causal_portfolio.execution.audit import append as audit_append
             audit_path = audit_append(result)
-        except Exception:
+        except Exception as e:
             logger.exception("audit append failed (continuing)")
+            result = replace(result, audit_error=str(e))
     logger.info(
-        "execution finished: submitted=%s error=%s target_id=%s audit=%s",
+        "execution finished: submitted=%s error=%s post_submit_error=%s "
+        "audit_error=%s target_id=%s audit=%s",
         result.submitted,
         result.error,
+        result.post_submit_error,
+        result.audit_error,
         target_id,
         audit_path,
     )
@@ -455,6 +459,10 @@ def _execute_plan_inner(
         logger.info("DRY RUN — not submitting %d orders", len(plan.orders))
         return SubmitResult(plan=plan, submitted=False)
 
+    if not plan.orders:
+        logger.info("no orders to submit")
+        return SubmitResult(plan=plan, submitted=False)
+
     if not adapter.config.allow_stale_signal:
         if plan.target_snapshot is None:
             freshness_error = (
@@ -480,12 +488,11 @@ def _execute_plan_inner(
             )
 
     # Gate 4: mainnet writes need explicit acknowledgement
-    if adapter.config.is_live_mainnet() and not acknowledge_mainnet:
+    if adapter.config.is_live_mainnet() and acknowledge_mainnet is not True:
         return SubmitResult(
             plan=plan, submitted=False,
-            error=("LIVE MAINNET write blocked: pass acknowledge_mainnet=True to "
-                   "execute_plan() to opt in. The CLI does this after a "
-                   "confirmation prompt."),
+            error=("LIVE MAINNET write blocked: acknowledge_mainnet must be the "
+                   "literal boolean True."),
         )
 
     if adapter.config.is_live_mainnet():
@@ -513,6 +520,19 @@ def _execute_plan_inner(
             response = adapter.submit_orders_book_aware(plan.orders)
         else:
             response = adapter.submit_orders(plan.orders)
+    except Exception as e:
+        logger.exception("submission failed before completion")
+        # Best-effort post-state snapshot: orders may have partially gone out
+        # before the failure, and the audit log should capture where we landed.
+        post = None
+        try:
+            post = adapter.fetch_state()
+        except Exception:
+            logger.warning("post-failure state fetch also failed")
+        return SubmitResult(plan=plan, submitted=False, post_state=post, error=str(e))
+
+    post = None
+    try:
         post = adapter.fetch_state()
         from causal_portfolio.execution.reconcile import format_drift_summary, reconcile
         drifts = reconcile(
@@ -524,15 +544,14 @@ def _execute_plan_inner(
         return SubmitResult(plan=plan, submitted=True,
                             response=response, post_state=post, drifts=drifts)
     except Exception as e:
-        logger.exception("submit_orders failed")
-        # Best-effort post-state snapshot: orders may have partially gone out
-        # before the failure, and the audit log should capture where we landed.
-        post = None
-        try:
-            post = adapter.fetch_state()
-        except Exception:
-            logger.warning("post-failure state fetch also failed")
-        return SubmitResult(plan=plan, submitted=False, post_state=post, error=str(e))
+        logger.exception("post-submit state/reconciliation failed")
+        return SubmitResult(
+            plan=plan,
+            submitted=True,
+            response=response,
+            post_state=post,
+            post_submit_error=str(e),
+        )
 
 
 def _detect_cancel_race(plan, mid_state, tolerance_usd: float = 25.0) -> bool:

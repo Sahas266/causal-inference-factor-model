@@ -54,6 +54,7 @@ def append(result: SubmitResult, log_dir: Path | None = None) -> Path:
         ),
         "submitted": result.submitted,
         "error": result.error,
+        "post_submit_error": result.post_submit_error,
         "plan": _serialize(result.plan),
         "response": result.response,
         "post_state": _serialize(result.post_state) if result.post_state else None,

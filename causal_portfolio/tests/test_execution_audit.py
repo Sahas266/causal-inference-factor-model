@@ -19,6 +19,13 @@ from causal_portfolio.execution.types import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _redirect_execution_run_logs(tmp_path, monkeypatch):
+    from causal_portfolio.execution import run_logging
+
+    monkeypatch.setattr(run_logging, "LOG_DIR", tmp_path)
+
+
 def _build_plan_with_orders():
     cfg = ExecutionConfig(dry_run=True, max_position_pct=1.0, max_single_trade_pct=1.0)
     state = AccountState(address="0xabc", account_value_usd=10_000.0,
@@ -40,15 +47,20 @@ def test_serialize_handles_dataclass_and_enum():
 
 def test_append_creates_jsonl_file(tmp_path):
     plan = _build_plan_with_orders()
-    result = SubmitResult(plan=plan, submitted=False)
+    result = SubmitResult(
+        plan=plan,
+        submitted=True,
+        post_submit_error="post-state unavailable",
+    )
 
     path = append(result, log_dir=tmp_path)
     assert path.exists()
     lines = path.read_text(encoding="utf-8").strip().split("\n")
     assert len(lines) == 1
     record = json.loads(lines[0])
-    assert record["submitted"] is False
+    assert record["submitted"] is True
     assert record["error"] is None
+    assert record["post_submit_error"] == "post-state unavailable"
     assert record["plan"]["target_weights"] == {"btc": 0.3}
 
 
@@ -124,6 +136,26 @@ def test_execution_run_log_reuses_active_file(tmp_path):
     assert "nested handoff" in outer.read_text(encoding="utf-8")
 
 
+def test_caught_nested_logging_failure_records_traceback_once(tmp_path):
+    from causal_portfolio.execution import execution_run_log
+
+    with execution_run_log("outer", log_dir=tmp_path) as outer:
+        try:
+            with execution_run_log("inner", log_dir=tmp_path) as inner:
+                logging.getLogger("nested_model").info("nested emitted message")
+                raise RuntimeError("inner exploded")
+        except RuntimeError:
+            pass
+
+    assert inner == outer
+    assert len(list(tmp_path.glob("execution-*.log"))) == 1
+    text = outer.read_text(encoding="utf-8")
+    assert "execution run failed: inner" in text
+    assert "RuntimeError: inner exploded" in text
+    assert "execution run completed: outer" in text
+    assert text.count("nested emitted message") == 1
+
+
 def test_generic_cli_uses_shared_execution_log(tmp_path, monkeypatch):
     from causal_portfolio.execution import run_logging
     from causal_portfolio.execution import cli
@@ -149,6 +181,47 @@ def test_cli_execute_refuses_without_live_flag(tmp_path, capsys):
     # raises SystemExit, not a return code 1. Both prove the gate works.
     with pytest.raises(SystemExit):
         main(["execute", "--weights", str(weights_file)])
+
+
+def test_cli_execute_surfaces_post_submit_and_audit_errors(tmp_path, monkeypatch, capsys):
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock
+
+    from causal_portfolio.execution import cli
+    from causal_portfolio.execution import hyperliquid as hl_mod
+
+    weights_file = tmp_path / "w.json"
+    weights_file.write_text(json.dumps({"btc": 0.3}), encoding="utf-8")
+    adapter = MagicMock()
+    plan = SimpleNamespace(orders=[object()])
+    execute = MagicMock(return_value=SimpleNamespace(
+        error=None,
+        response={"status": "ok"},
+        post_submit_error="post-state unavailable",
+        audit_error="audit disk full",
+    ))
+    monkeypatch.setattr(hl_mod, "HLAdapter", lambda _cfg: adapter)
+    monkeypatch.setattr(hl_mod, "execute_plan", execute)
+    monkeypatch.setattr(cli, "plan_rebalance", lambda *_args: plan)
+    monkeypatch.setattr(cli, "_print_plan", lambda *_args, **_kwargs: None)
+    args = SimpleNamespace(
+        live=True,
+        weights=str(weights_file),
+        mainnet=False,
+        slippage_bps=None,
+        max_signal_age_hours=72.0,
+        allow_stale_signal=False,
+        twap_minutes=0.0,
+        twap_slices=5,
+        no_smart_execution=False,
+    )
+
+    assert cli.cmd_execute(args) == 0
+
+    stderr = capsys.readouterr().err
+    assert "post-state unavailable" in stderr
+    assert "audit disk full" in stderr
+    execute.assert_called_once()
 
 
 def test_target_loader_rejects_non_dict(tmp_path):

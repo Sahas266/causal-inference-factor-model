@@ -96,7 +96,7 @@ def test_default_end_resolves_at_run_time():
     assert args.end is None
 
 
-def test_rppca_submission_uses_standard_interface(tmp_path, monkeypatch):
+def test_rppca_submission_uses_standard_interface(tmp_path, monkeypatch, caplog):
     from types import SimpleNamespace
 
     target_path = tmp_path / "target.json"
@@ -108,8 +108,18 @@ def test_rppca_submission_uses_standard_interface(tmp_path, monkeypatch):
     captured = {}
 
     def fake_execute(target, config, *, acknowledge_mainnet=False):
-        captured.update(target=target, config=config, acknowledge=acknowledge_mainnet)
-        return SimpleNamespace(error=None, response={"status": "ok"})
+        captured.update(
+            target=target,
+            config=config,
+            acknowledge=acknowledge_mainnet,
+            calls=captured.get("calls", 0) + 1,
+        )
+        return SimpleNamespace(
+            error=None,
+            response={"status": "ok"},
+            post_submit_error="post-state unavailable",
+            audit_error="audit disk full",
+        )
 
     monkeypatch.setattr(rppca_daily, "execute_model_target", fake_execute)
     rppca_daily._submit_target(args, target_path)
@@ -118,6 +128,9 @@ def test_rppca_submission_uses_standard_interface(tmp_path, monkeypatch):
     assert captured["config"].dry_run is False
     assert captured["config"].testnet is True
     assert captured["acknowledge"] is False
+    assert captured["calls"] == 1
+    assert "post-state unavailable" in caplog.text
+    assert "audit disk full" in caplog.text
 
 
 def test_main_logs_failures_before_execution_audit(tmp_path, monkeypatch):

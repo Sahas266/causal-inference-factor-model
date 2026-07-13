@@ -152,6 +152,17 @@ def cmd_execute(args) -> int:
     if result.error:
         print(f"\nERROR: {result.error}", file=sys.stderr)
         return 2
+    if result.post_submit_error:
+        print(
+            f"\nWARNING: submission completed but post-submit checks failed: "
+            f"{result.post_submit_error}",
+            file=sys.stderr,
+        )
+    if result.audit_error:
+        print(
+            f"\nERROR: submission completed but audit append failed: {result.audit_error}",
+            file=sys.stderr,
+        )
     print(f"\nSubmitted. Response: {result.response}")
     return 0
 

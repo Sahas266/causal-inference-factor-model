@@ -198,5 +198,7 @@ class SubmitResult:
     submitted: bool                     # False if dry_run
     response: dict | None = None        # raw HL response, if submitted
     post_state: AccountState | None = None
-    error: str | None = None
+    error: str | None = None             # failure before known completed submission
+    post_submit_error: str | None = None # post-state or reconciliation failure
+    audit_error: str | None = None       # structured audit append failure
     drifts: list[ReconcileDrift] = field(default_factory=list)  # post-trade reconciliation

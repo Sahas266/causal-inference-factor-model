@@ -27,6 +27,8 @@ from causal_portfolio.execution.types import (
 def _make_plan(address: str, orders=None, *, with_provenance: bool = True, network=None):
     state = AccountState(address=address, account_value_usd=10_000.0,
                          margin_used_usd=0.0)
+    if orders is None:
+        orders = [Order("BTC", True, 0.01, 100_000.0, "0x" + "1" * 32)]
     target_snapshot = (
         TargetSnapshot({"btc": 0.1}, as_of=datetime.now(timezone.utc))
         if with_provenance
@@ -35,7 +37,7 @@ def _make_plan(address: str, orders=None, *, with_provenance: bool = True, netwo
     return RebalancePlan(
         timestamp_ms=1000, target_weights={"btc": 0.1},
         current_state=state, target_usd={"BTC": 1000.0},
-        deltas_usd={"BTC": 1000.0}, orders=orders or [],
+        deltas_usd={"BTC": 1000.0}, orders=orders,
         skipped=[], equity_used=10_000.0,
         network=network,
         target_snapshot=target_snapshot,
@@ -131,6 +133,34 @@ def test_execute_reconcile_uses_min_order_notional_floor_for_tiny_runs():
     assert result.drifts[0].actual_usd == pytest.approx(19.82)
 
 
+def test_post_submit_reconciliation_failure_preserves_submission(monkeypatch):
+    import importlib
+
+    reconcile_mod = importlib.import_module("causal_portfolio.execution.reconcile")
+
+    plan = _make_plan(address="0xAAA")
+    adapter = _mock_adapter(
+        address="0xAAA",
+        config=ExecutionConfig(testnet=True, dry_run=False, smart_execution=False),
+    )
+    response = {"status": "ok", "response": {"data": "accepted"}}
+    adapter.submit_orders.return_value = response
+    monkeypatch.setattr(
+        reconcile_mod,
+        "reconcile",
+        MagicMock(side_effect=RuntimeError("reconciliation unavailable")),
+    )
+
+    result = execute_plan(adapter, plan, write_audit=False)
+
+    assert result.submitted
+    assert result.response == response
+    assert result.post_state == adapter.fetch_state.return_value
+    assert result.error is None
+    assert result.post_submit_error == "reconciliation unavailable"
+    adapter.submit_orders.assert_called_once()
+
+
 # ── Gate 2: mainnet acknowledgement ──────────────────────────────────
 
 
@@ -144,6 +174,27 @@ def test_mainnet_blocked_without_acknowledgement():
     assert not result.submitted
     assert "MAINNET" in (result.error or "")
     adapter.submit_orders.assert_not_called()
+
+
+@pytest.mark.parametrize("acknowledgement", ["yes", 1, object()])
+def test_mainnet_truthy_non_boolean_acknowledgement_stays_blocked(acknowledgement):
+    plan = _make_plan(address="0xAAA")
+    adapter = _mock_adapter(address="0xAAA", config=ExecutionConfig(
+        testnet=False, dry_run=False,
+    ))
+
+    result = execute_plan(
+        adapter,
+        plan,
+        write_audit=False,
+        acknowledge_mainnet=acknowledgement,
+    )
+
+    assert not result.submitted
+    assert "literal boolean True" in (result.error or "")
+    assert "execute_plan" not in (result.error or "")
+    assert "CLI" not in (result.error or "")
+    adapter.cancel_all_open.assert_not_called()
 
 
 def test_mainnet_proceeds_with_acknowledgement():
@@ -191,6 +242,27 @@ def test_testnet_does_not_need_acknowledgement():
     assert result.submitted
 
 
+def test_empty_live_plan_is_audited_without_exchange_calls(monkeypatch):
+    from causal_portfolio.execution import audit as audit_mod
+
+    plan = _make_plan(address="0xAAA", orders=[])
+    adapter = _mock_adapter(address="0xAAA", config=ExecutionConfig(
+        testnet=True, dry_run=False,
+    ))
+    audit_append = MagicMock(return_value=None)
+    monkeypatch.setattr(audit_mod, "append", audit_append)
+
+    result = execute_plan(adapter, plan)
+
+    assert not result.submitted
+    assert result.error is None
+    adapter.cancel_all_open.assert_not_called()
+    adapter.fetch_state.assert_not_called()
+    adapter.submit_orders.assert_not_called()
+    adapter.submit_orders_book_aware.assert_not_called()
+    audit_append.assert_called_once_with(result)
+
+
 # ── Gate 3: dry-run honored ──────────────────────────────────────────
 
 
@@ -216,7 +288,7 @@ def test_execute_plan_logs_transaction_for_any_model(caplog):
 
     text = caplog.text
     assert f"target_id={plan.target_snapshot.target_id}" in text
-    assert "network=testnet orders=0 dry_run=True" in text
+    assert f"network=testnet orders={len(plan.orders)} dry_run=True" in text
     assert "execution finished: submitted=False error=None" in text
 
 
@@ -236,6 +308,36 @@ def test_audit_appended_by_execute_plan(tmp_path, monkeypatch):
     # Find any log file in tmp_path
     log_files = list(tmp_path.glob("rebalance-*.jsonl"))
     assert len(log_files) == 1
+
+
+def test_audit_append_failure_preserves_submission_state(tmp_path, monkeypatch):
+    from causal_portfolio.execution import audit as audit_mod
+    from causal_portfolio.execution.run_logging import execution_run_log
+
+    plan = _make_plan(address="0xAAA")
+    adapter = _mock_adapter(
+        address="0xAAA",
+        config=ExecutionConfig(testnet=True, dry_run=False, smart_execution=False),
+    )
+    response = {"status": "ok", "response": {"data": "accepted"}}
+    adapter.submit_orders.return_value = response
+    monkeypatch.setattr(
+        audit_mod,
+        "append",
+        MagicMock(side_effect=OSError("audit disk full")),
+    )
+
+    with execution_run_log("audit-failure", log_dir=tmp_path) as run_log:
+        result = execute_plan(adapter, plan)
+
+    assert result.submitted
+    assert result.response == response
+    assert result.error is None
+    assert result.audit_error == "audit disk full"
+    text = run_log.read_text(encoding="utf-8")
+    assert "audit append failed" in text
+    assert "OSError: audit disk full" in text
+    assert "audit_error=audit disk full" in text
 
 
 def test_audit_disabled_by_flag(tmp_path, monkeypatch):

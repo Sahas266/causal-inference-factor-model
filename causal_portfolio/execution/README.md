@@ -52,8 +52,14 @@ python -m causal_portfolio.execution.cli execute --weights weights.json --live -
 The execution CLI automatically writes a unique text log to
 `causal_portfolio/execution/logs/execution-cli-*.log`. It captures all logger
 output emitted during the CLI run plus failure tracebacks. Every `execute_plan()`
-call also appends a structured JSONL audit record containing the target, planned
-orders, exchange response, post-trade state, and reconciliation drift.
+call attempts to append a structured JSONL audit record by default, containing
+the target, planned orders, exchange response, post-trade state, reconciliation
+drift, and any post-submit error. An append failure is returned as
+`SubmitResult.audit_error` and logged in the text run log.
+
+`SubmitResult.submitted=True` remains authoritative when post-submit state fetch,
+reconciliation, or audit logging fails. `post_submit_error` and `audit_error`
+require operator attention, but neither makes the completed trade safe to retry.
 
 New models can produce the standard dated JSON/CSV target and invoke the CLI.
 Models calling the execution API directly use the public model handoff:
@@ -161,6 +167,7 @@ Each rebalance appends one JSON record to `logs/rebalance-YYYY-MM-DD.jsonl`:
   "target_id": "9f51a4bd24d7c2b1",
   "submitted": true,
   "error": null,
+  "post_submit_error": null,
   "plan": {
     "target_weights": {"btc": 0.3, "eth": 0.2},
     "orders": [...],

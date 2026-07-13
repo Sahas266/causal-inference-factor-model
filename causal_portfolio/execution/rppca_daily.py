@@ -300,6 +300,12 @@ def _submit_target(args: argparse.Namespace, target_path: Path) -> None:
     )
     if result.error:
         raise RuntimeError(result.error)
+    if result.post_submit_error:
+        logger.warning("submission completed but post-submit checks failed: %s",
+                       result.post_submit_error)
+    if result.audit_error:
+        logger.error("submission completed but audit append failed: %s",
+                     result.audit_error)
     logger.info("submitted RP-PCA rebalance: %s", result.response)
 
 

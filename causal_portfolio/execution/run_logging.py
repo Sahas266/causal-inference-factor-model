@@ -21,9 +21,14 @@ _ACTIVE_LOG: ContextVar[Path | None] = ContextVar("cpcm_execution_log", default=
 @contextmanager
 def execution_run_log(name: str, log_dir: Path | None = None) -> Iterator[Path]:
     """Capture all model and execution logs for one run in a unique file."""
+    run_logger = logging.getLogger("cpcm.execution.run")
     active_path = _ACTIVE_LOG.get()
     if active_path is not None:
-        yield active_path
+        try:
+            yield active_path
+        except BaseException:
+            run_logger.exception("execution run failed: %s", name)
+            raise
         return
 
     safe_name = re.sub(r"[^A-Za-z0-9_-]+", "-", name).strip("-")
@@ -42,14 +47,13 @@ def execution_run_log(name: str, log_dir: Path | None = None) -> Iterator[Path]:
     formatter.converter = time.gmtime
     handler.setFormatter(formatter)
 
-    # ponytail: process-wide handler assumes one execution run at a time; use
-    # queue handlers if concurrent execution is introduced.
+    # ponytail: process-wide handler assumes serialized outer runs; add
+    # serialization or context-aware filtering before allowing concurrency.
     root = logging.getLogger()
     previous_level = root.level
     root.setLevel(min(previous_level, logging.INFO))
     root.addHandler(handler)
     token = _ACTIVE_LOG.set(path)
-    run_logger = logging.getLogger("cpcm.execution.run")
     try:
         run_logger.info("execution run started: %s log=%s", name, path)
         yield path
