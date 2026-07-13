@@ -37,6 +37,7 @@ from datetime import datetime, timezone
 from causal_portfolio.execution.audit import LOG_DIR, read_log
 from causal_portfolio.execution.config import ExecutionConfig
 from causal_portfolio.execution.rebalancer import plan_rebalance
+from causal_portfolio.execution.run_logging import execution_run_log
 from causal_portfolio.execution.targets import load_target_snapshot
 from causal_portfolio.execution.types import AccountState, AssetMeta
 
@@ -243,8 +244,7 @@ def cmd_logs(args) -> int:
     return 0
 
 
-def main(argv: list[str] | None = None) -> int:
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+def _main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="causal_portfolio.execution.cli")
     sub = p.add_subparsers(dest="cmd", required=True)
 
@@ -299,6 +299,17 @@ def main(argv: list[str] | None = None) -> int:
 
     args = p.parse_args(argv)
     return args.func(args)
+
+
+def main(argv: list[str] | None = None) -> int:
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    effective_argv = list(argv) if argv is not None else sys.argv[1:]
+    command = effective_argv[0] if effective_argv else "missing"
+    with execution_run_log("cli") as run_log:
+        logger.info("starting execution CLI: log=%s command=%s", run_log, command)
+        result = _main(argv)
+        logger.info("execution CLI finished: command=%s rc=%d", command, result)
+        return result
 
 
 if __name__ == "__main__":

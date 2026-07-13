@@ -372,13 +372,34 @@ def execute_plan(
     5. Audit write: every result is appended to the rotating JSONL log unless
        `write_audit=False`. Test code disables this; production never should.
     """
+    target_id = (
+        plan.target_snapshot.target_id
+        if plan.target_snapshot is not None
+        else "unversioned"
+    )
+    network = plan.network or ("testnet" if adapter.config.testnet else "mainnet")
+    logger.info(
+        "execution started: target_id=%s network=%s orders=%d dry_run=%s",
+        target_id,
+        network,
+        len(plan.orders),
+        adapter.config.dry_run,
+    )
     result = _execute_plan_inner(adapter, plan, acknowledge_mainnet=acknowledge_mainnet)
+    audit_path = None
     if write_audit:
         try:
             from causal_portfolio.execution.audit import append as audit_append
-            audit_append(result)
+            audit_path = audit_append(result)
         except Exception:
             logger.exception("audit append failed (continuing)")
+    logger.info(
+        "execution finished: submitted=%s error=%s target_id=%s audit=%s",
+        result.submitted,
+        result.error,
+        target_id,
+        audit_path,
+    )
     return result
 
 

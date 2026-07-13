@@ -5,6 +5,7 @@ Mocks the HLAdapter so we can exercise the gating logic without network.
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 from unittest.mock import MagicMock
 
@@ -202,6 +203,21 @@ def test_dry_run_skips_network_writes():
     assert not result.submitted
     adapter.submit_orders.assert_not_called()
     adapter.cancel_all_open.assert_not_called()
+
+
+def test_execute_plan_logs_transaction_for_any_model(caplog):
+    plan = _make_plan(address="0xAAA")
+    adapter = _mock_adapter(address="0xAAA", config=ExecutionConfig(
+        testnet=True, dry_run=True,
+    ))
+    caplog.set_level(logging.INFO, logger="cpcm.execution.hl")
+
+    execute_plan(adapter, plan, write_audit=False)
+
+    text = caplog.text
+    assert f"target_id={plan.target_snapshot.target_id}" in text
+    assert "network=testnet orders=0 dry_run=True" in text
+    assert "execution finished: submitted=False error=None" in text
 
 
 # ── Audit write integration ──────────────────────────────────────────

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime, timezone
 
 import pytest
@@ -82,6 +83,49 @@ def test_cli_plan_with_stub_state(tmp_path, capsys, monkeypatch):
     assert rc == 0
     out = capsys.readouterr().out
     assert "RebalancePlan" in out
+
+
+def test_execution_run_log_captures_any_model_failure(tmp_path):
+    from causal_portfolio.execution import execution_run_log
+
+    with pytest.raises(RuntimeError, match="model exploded"):
+        with execution_run_log("other-model", log_dir=tmp_path) as path:
+            logging.getLogger("arbitrary_model").info("target ready")
+            raise RuntimeError("model exploded")
+
+    text = path.read_text(encoding="utf-8")
+    assert "target ready" in text
+    assert "Z INFO arbitrary_model target ready" in text
+    assert "execution run failed: other-model" in text
+    assert "RuntimeError: model exploded" in text
+
+
+def test_execution_run_log_records_system_exit(tmp_path):
+    from causal_portfolio.execution import execution_run_log
+
+    with pytest.raises(SystemExit):
+        with execution_run_log("parser", log_dir=tmp_path) as path:
+            raise SystemExit(2)
+
+    text = path.read_text(encoding="utf-8")
+    assert "execution run failed: parser" in text
+    assert "SystemExit: 2" in text
+
+
+def test_generic_cli_uses_shared_execution_log(tmp_path, monkeypatch):
+    from causal_portfolio.execution import run_logging
+    from causal_portfolio.execution import cli
+
+    weights_file = tmp_path / "w.json"
+    weights_file.write_text(json.dumps({"btc": 0.3}), encoding="utf-8")
+    monkeypatch.setattr(run_logging, "LOG_DIR", tmp_path)
+
+    assert cli.main(["plan", "--weights", str(weights_file)]) == 0
+    logs = list(tmp_path.glob("execution-cli-*.log"))
+    assert len(logs) == 1
+    text = logs[0].read_text(encoding="utf-8")
+    assert "command=plan" in text
+    assert "execution run completed: cli" in text
 
 
 def test_cli_execute_refuses_without_live_flag(tmp_path, capsys):

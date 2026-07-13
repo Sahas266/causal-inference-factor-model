@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 
 import pytest
 
+import causal_portfolio.execution.rppca_daily as rppca_daily
 from causal_portfolio.execution.rppca_daily import (
     build_parser,
     forward_fill_prices,
@@ -93,3 +94,20 @@ def test_default_end_resolves_at_run_time():
     args = build_parser().parse_args([])
 
     assert args.end is None
+
+
+def test_main_logs_failures_before_execution_audit(tmp_path, monkeypatch):
+    from causal_portfolio.execution import run_logging
+
+    def fail(_args):
+        raise RuntimeError("model exploded")
+
+    monkeypatch.setattr(run_logging, "LOG_DIR", tmp_path)
+    monkeypatch.setattr(rppca_daily, "run_once", fail)
+
+    assert rppca_daily.main([]) == 1
+    logs = list(tmp_path.glob("execution-rppca-*.log"))
+    assert len(logs) == 1
+    text = logs[0].read_text(encoding="utf-8")
+    assert "execution run failed: rppca" in text
+    assert "RuntimeError: model exploded" in text

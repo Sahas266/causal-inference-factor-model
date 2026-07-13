@@ -15,6 +15,7 @@ Public entry points:
 from causal_portfolio.execution.config import ExecutionConfig
 from causal_portfolio.execution.rebalancer import plan_rebalance
 from causal_portfolio.execution.reconcile import reconcile
+from causal_portfolio.execution.run_logging import execution_run_log
 from causal_portfolio.execution.targets import load_target_snapshot
 from causal_portfolio.execution.types import (
     AccountState,
@@ -40,6 +41,7 @@ __all__ = [
     "SubmitResult",
     "TargetSnapshot",
     "load_target_snapshot",
+    "execution_run_log",
     "plan_rebalance",
     "reconcile",
 ]

@@ -18,6 +18,7 @@ import requests
 
 from causal_portfolio.execution.config import ExecutionConfig
 from causal_portfolio.execution.rebalancer import plan_rebalance
+from causal_portfolio.execution.run_logging import execution_run_log
 from causal_portfolio.execution.targets import load_target_snapshot
 
 logger = logging.getLogger("cpcm.execution.rppca_daily")
@@ -334,7 +335,21 @@ def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     args = build_parser().parse_args(argv)
     while True:
-        run_once(args)
+        try:
+            with execution_run_log("rppca") as run_log:
+                logger.info(
+                    "starting RP-PCA model: log=%s network=%s execute=%s assets=%s "
+                    "target_gross=%.4f target_out=%s",
+                    run_log,
+                    "mainnet" if args.mainnet else "testnet",
+                    args.execute,
+                    args.assets,
+                    args.target_gross,
+                    args.target_out,
+                )
+                run_once(args)
+        except Exception:
+            return 1
         if not args.loop:
             return 0
         time.sleep(args.every_hours * 3600)

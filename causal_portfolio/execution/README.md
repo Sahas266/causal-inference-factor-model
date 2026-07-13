@@ -47,6 +47,26 @@ python -m causal_portfolio.execution.cli execute --weights weights.json --live -
 python -m causal_portfolio.execution.cli execute --weights weights.json --live --testnet --twap-minutes 10 --twap-slices 5
 ```
 
+## Model-independent logging
+
+The execution CLI automatically writes a unique text log to
+`causal_portfolio/execution/logs/execution-cli-*.log`. It captures all logger
+output emitted during the CLI run plus failure tracebacks. Every `execute_plan()`
+call also appends a structured JSONL audit record containing the target, planned
+orders, exchange response, post-trade state, and reconciliation drift.
+
+New models can produce the standard dated JSON/CSV target and invoke the CLI.
+A model that calls the execution API directly should wrap the complete
+model-to-execution handoff with the shared logger:
+
+```python
+from causal_portfolio.execution import execution_run_log
+
+with execution_run_log("my-model"):
+    # Build/load the target, plan the rebalance, and call execute_plan().
+    ...
+```
+
 ## Daily local RP-PCA runner
 
 Generate an RP-PCA target from the local DuckDB snapshot or a wide price CSV:
