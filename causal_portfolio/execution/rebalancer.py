@@ -91,7 +91,8 @@ def plan_rebalance(
 
     Returns:
         RebalancePlan — orders + skipped reasons + audit-friendly intermediate
-        state. Submit it via hyperliquid.submit_plan(plan, adapter).
+        state. Submit snapshots through the public `execute_target()`; use
+        `hyperliquid.execute_plan()` only for an already prepared plan.
     """
     ts = timestamp_ms if timestamp_ms is not None else int(time.time() * 1000)
     notes: list[str] = []

@@ -16,8 +16,8 @@ import numpy as np
 import pandas as pd
 import requests
 
+from causal_portfolio.execution import execute_target as execute_model_target
 from causal_portfolio.execution.config import ExecutionConfig
-from causal_portfolio.execution.rebalancer import plan_rebalance
 from causal_portfolio.execution.run_logging import execution_run_log
 from causal_portfolio.execution.targets import load_target_snapshot
 
@@ -276,14 +276,13 @@ def run_once(args: argparse.Namespace) -> RPPCAResult:
     )
     logger.info("wrote RP-PCA target to %s", target_path)
     if args.execute:
-        execute_target(args, target_path)
+        _submit_target(args, target_path)
     return RPPCAResult(weights, last_data_date, now, gamma_used, n_obs, target_path)
 
 
-def execute_target(args: argparse.Namespace, target_path: Path) -> None:
+def _submit_target(args: argparse.Namespace, target_path: Path) -> None:
     if args.mainnet and not args.ack_mainnet:
         raise PermissionError("mainnet execution requires --ack-mainnet")
-    from causal_portfolio.execution.hyperliquid import HLAdapter, execute_plan
 
     cfg = ExecutionConfig(
         testnet=not args.mainnet,
@@ -293,10 +292,12 @@ def execute_target(args: argparse.Namespace, target_path: Path) -> None:
         twap_minutes=args.twap_minutes,
         twap_slices=args.twap_slices,
     )
-    adapter = HLAdapter(cfg)
     target = load_target_snapshot(target_path)
-    plan = plan_rebalance(target, adapter.fetch_state(), adapter.fetch_mids(), adapter.fetch_meta(), cfg)
-    result = execute_plan(adapter, plan, acknowledge_mainnet=args.mainnet)
+    result = execute_model_target(
+        target,
+        cfg,
+        acknowledge_mainnet=args.mainnet,
+    )
     if result.error:
         raise RuntimeError(result.error)
     logger.info("submitted RP-PCA rebalance: %s", result.response)

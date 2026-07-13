@@ -56,16 +56,23 @@ call also appends a structured JSONL audit record containing the target, planned
 orders, exchange response, post-trade state, and reconciliation drift.
 
 New models can produce the standard dated JSON/CSV target and invoke the CLI.
-A model that calls the execution API directly should wrap the complete
-model-to-execution handoff with the shared logger:
+Models calling the execution API directly use the public model handoff:
 
 ```python
-from causal_portfolio.execution import execution_run_log
+from datetime import datetime, timezone
 
-with execution_run_log("my-model"):
-    # Build/load the target, plan the rebalance, and call execute_plan().
-    ...
+from causal_portfolio.execution import ExecutionConfig, TargetSnapshot, execute_target
+
+target = TargetSnapshot(
+    weights={"btc": 0.3, "eth": 0.2},
+    as_of=datetime.now(timezone.utc),
+    strategy="my-model",
+)
+result = execute_target(target, ExecutionConfig())  # dry-run testnet by default
 ```
+
+JSON/CSV producers call `load_target_snapshot()` first, then pass the returned
+`TargetSnapshot` to `execute_target()`.
 
 ## Daily local RP-PCA runner
 

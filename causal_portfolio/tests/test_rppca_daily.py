@@ -96,6 +96,30 @@ def test_default_end_resolves_at_run_time():
     assert args.end is None
 
 
+def test_rppca_submission_uses_standard_interface(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    target_path = tmp_path / "target.json"
+    target_path.write_text(
+        '{"btc": 0.1, "_meta": {"rebalance_date": "2026-07-13"}}',
+        encoding="utf-8",
+    )
+    args = build_parser().parse_args([])
+    captured = {}
+
+    def fake_execute(target, config, *, acknowledge_mainnet=False):
+        captured.update(target=target, config=config, acknowledge=acknowledge_mainnet)
+        return SimpleNamespace(error=None, response={"status": "ok"})
+
+    monkeypatch.setattr(rppca_daily, "execute_model_target", fake_execute)
+    rppca_daily._submit_target(args, target_path)
+
+    assert captured["target"].weights == {"btc": 0.1}
+    assert captured["config"].dry_run is False
+    assert captured["config"].testnet is True
+    assert captured["acknowledge"] is False
+
+
 def test_main_logs_failures_before_execution_audit(tmp_path, monkeypatch):
     from causal_portfolio.execution import run_logging
 
