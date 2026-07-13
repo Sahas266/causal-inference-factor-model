@@ -7,6 +7,7 @@ import pytest
 from causal_portfolio.execution.rppca_daily import (
     build_parser,
     forward_fill_prices,
+    refresh_local_prices,
     run_once,
 )
 from causal_portfolio.execution.targets import load_target_snapshot
@@ -37,8 +38,43 @@ def test_rppca_daily_generates_loadable_forward_filled_target(tmp_path):
 
     assert target.exists()
     assert loaded.strategy == "RP-PCA daily tangency"
-    assert loaded.as_of == datetime(2026, 1, 30, tzinfo=timezone.utc)
+    assert loaded.as_of == datetime(2026, 2, 2, tzinfo=timezone.utc)
+    assert loaded.metadata["last_data_date"] == "2026-01-30"
     assert set(loaded.weights) <= {"btc", "eth", "sol"}
+
+
+def test_refresh_local_prices_upserts_one_batched_snapshot(tmp_path, monkeypatch):
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "bitcoin": {"usd": 62_751.0},
+                "ethereum": {"usd": 1_776.77},
+            }
+
+    def fake_get(url, **kwargs):
+        assert url.endswith("/simple/price")
+        assert kwargs["params"]["ids"] == "bitcoin,ethereum"
+        return Response()
+
+    monkeypatch.setattr("requests.get", fake_get)
+    db = tmp_path / "prices.duckdb"
+
+    count = refresh_local_prices(
+        ["btc", "eth"],
+        db_path=db,
+        now=datetime(2026, 7, 13, 16, 0, tzinfo=timezone.utc),
+    )
+
+    import duckdb
+
+    rows = duckdb.connect(str(db), read_only=True).execute(
+        "SELECT asset, metric, value FROM asset_metrics ORDER BY asset"
+    ).fetchall()
+    assert count == 2
+    assert rows == [("btc", "price", 62_751.0), ("eth", "price", 1_776.77)]
 
 
 def test_forward_fill_prices_enforces_limit(tmp_path):

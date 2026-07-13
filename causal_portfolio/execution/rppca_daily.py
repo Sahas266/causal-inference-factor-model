@@ -6,6 +6,7 @@ import argparse
 import json
 import logging
 import math
+import os
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -13,6 +14,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import requests
 
 from causal_portfolio.execution.config import ExecutionConfig
 from causal_portfolio.execution.rebalancer import plan_rebalance
@@ -21,6 +23,17 @@ from causal_portfolio.execution.targets import load_target_snapshot
 logger = logging.getLogger("cpcm.execution.rppca_daily")
 
 DEFAULT_ASSETS = ["btc", "eth", "sol", "bnb", "avax", "uni", "aave", "link", "doge"]
+COINGECKO_IDS = {
+    "btc": "bitcoin",
+    "eth": "ethereum",
+    "sol": "solana",
+    "bnb": "binancecoin",
+    "avax": "avalanche-2",
+    "uni": "uniswap",
+    "aave": "aave",
+    "link": "chainlink",
+    "doge": "dogecoin",
+}
 TIME_COLUMNS = ("date", "time", "ts", "timestamp")
 
 
@@ -32,6 +45,49 @@ class RPPCAResult:
     gamma_used: float
     n_observations: int
     target_path: Path
+
+
+def refresh_local_prices(
+    assets: list[str],
+    *,
+    db_path: str | Path | None = None,
+    now: datetime | None = None,
+) -> int:
+    """Append one current CoinGecko price snapshot to the local DuckDB."""
+    mapped = {asset: COINGECKO_IDS[asset] for asset in assets if asset in COINGECKO_IDS}
+    if not mapped:
+        raise ValueError("none of the requested assets have a CoinGecko mapping")
+    response = requests.get(
+        "https://api.coingecko.com/api/v3/simple/price",
+        params={"ids": ",".join(mapped.values()), "vs_currencies": "usd"},
+        timeout=30,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    missing = [asset for asset, coin_id in mapped.items() if not payload.get(coin_id, {}).get("usd")]
+    if missing:
+        raise ValueError(f"CoinGecko response missing prices: {', '.join(missing)}")
+
+    from causal_portfolio.data import DEFAULT_LOCAL_DB
+    from causal_portfolio.data.duckdb_loader import DuckDBCPCMDataLoader
+
+    timestamp = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    target_db = Path(db_path or os.environ.get("CPCM_LOCAL_DB") or DEFAULT_LOCAL_DB)
+    rows = [
+        {
+            "provider": "coingecko",
+            "provider_priority": 3,
+            "asset": asset,
+            "metric": "price",
+            "time": timestamp,
+            "value": float(payload[coin_id]["usd"]),
+            "frequency": "1d",
+            "metadata": json.dumps({"fetched_utc": timestamp.isoformat()}),
+        }
+        for asset, coin_id in mapped.items()
+    ]
+    with DuckDBCPCMDataLoader(db_path=str(target_db), read_only=False) as loader:
+        return loader.upsert_rows(rows)
 
 
 def _load_csv_prices(path: Path, assets: list[str]) -> pd.DataFrame:
@@ -155,7 +211,7 @@ def write_target(
     weights: dict[str, float],
     *,
     target_path: Path,
-    last_data_date: pd.Timestamp,
+    rebalance_date: pd.Timestamp,
     generated_at: datetime,
     metadata: dict,
 ) -> None:
@@ -163,7 +219,7 @@ def write_target(
     payload["_meta"] = {
         **metadata,
         "strategy": "RP-PCA daily tangency",
-        "rebalance_date": last_data_date.date().isoformat(),
+        "rebalance_date": rebalance_date.date().isoformat(),
         "generated_utc": generated_at.isoformat(timespec="seconds"),
         "format_version": 1,
         "gross_exposure": float(sum(abs(v) for v in weights.values())),
@@ -176,6 +232,12 @@ def run_once(args: argparse.Namespace) -> RPPCAResult:
     assets = [a.strip().lower() for a in args.assets.split(",") if a.strip()]
     now = datetime.now(timezone.utc)
     end = args.end or now.date().isoformat()
+    if args.refresh_prices and not args.prices_csv:
+        try:
+            count = refresh_local_prices(assets, now=now)
+            logger.info("refreshed %d local CoinGecko prices", count)
+        except Exception as exc:
+            logger.warning("local price refresh failed; using existing data: %s", exc)
     prices = load_prices(assets, args.start, end, Path(args.prices_csv) if args.prices_csv else None)
     prices, last_data_date = forward_fill_prices(
         prices,
@@ -197,7 +259,7 @@ def run_once(args: argparse.Namespace) -> RPPCAResult:
     write_target(
         weights,
         target_path=target_path,
-        last_data_date=last_data_date,
+        rebalance_date=pd.Timestamp(end),
         generated_at=now,
         metadata={
             "assets": assets,
@@ -205,6 +267,7 @@ def run_once(args: argparse.Namespace) -> RPPCAResult:
             "mean_window": args.mean_window,
             "n_components": args.n_components,
             "gamma_used": gamma_used,
+            "last_data_date": last_data_date.date().isoformat(),
             "price_forward_filled_to": end,
             "max_ffill_days": args.max_ffill_days,
             "source": str(args.prices_csv or "causal_portfolio.data.get_loader"),
@@ -254,6 +317,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--max-abs-weight", type=float, default=0.30)
     p.add_argument("--long-only", action="store_true")
     p.add_argument("--max-ffill-days", type=int, default=7, help="-1 allows unlimited forward fill")
+    p.add_argument("--refresh-prices", action="store_true", help="Refresh local prices from CoinGecko first")
     p.add_argument("--execute", action="store_true", help="Submit the target to Hyperliquid")
     p.add_argument("--mainnet", action="store_true", help="Use Hyperliquid mainnet; default is testnet")
     p.add_argument("--ack-mainnet", action="store_true", help="Required with --execute --mainnet")
