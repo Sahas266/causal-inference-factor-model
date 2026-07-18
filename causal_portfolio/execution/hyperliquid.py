@@ -585,6 +585,12 @@ def _repair_failed_legs(
     (rather than resubmitting the original orders) makes the retry safe after
     ambiguous fills: whatever actually filled is already in the state.
 
+    Caveat: `resolved` is judged against the ORIGINAL plan.target_usd while
+    the repair re-plans at fresh equity — if equity moved more than the
+    reconcile tolerance mid-run, the final position is correct for current
+    equity but still reports unresolved drift. Treat that alert as "off the
+    original plan", not necessarily "wrong position".
+
     Returns (repair_summary, final_post_state, final_drifts).
     """
     from causal_portfolio.execution.reconcile import reconcile

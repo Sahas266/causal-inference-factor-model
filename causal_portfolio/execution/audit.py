@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from dataclasses import asdict, is_dataclass
 from datetime import datetime, timezone
 from enum import Enum
@@ -21,7 +22,9 @@ from causal_portfolio.execution.types import RebalancePlan, SubmitResult
 
 logger = logging.getLogger("cpcm.execution.audit")
 
-LOG_DIR = Path(__file__).parent / "logs"
+# Default lives inside the package (fine for repo checkouts). Installed
+# site-packages may be read-only — set CPCM_EXECUTION_LOG_DIR for those.
+LOG_DIR = Path(os.environ.get("CPCM_EXECUTION_LOG_DIR") or Path(__file__).parent / "logs")
 
 
 def _serialize(obj: Any) -> Any:
