@@ -1,0 +1,35 @@
+# Packages ONLY the execution layer (causal_portfolio.execution) as an
+# installable library. The research stack (data/factors/solvers/backtest)
+# stays repo-only. Version single-sourced from execution/__init__.py.
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cpcm-execution"
+dynamic = ["version"]
+description = "CPCM Hyperliquid execution layer: target weights -> safe perp orders (plan, execute, reconcile, repair, audit, notify)"
+readme = "causal_portfolio/execution/README.md"
+requires-python = ">=3.11"
+dependencies = [
+    # Exact pins: the adapter is written and tested against these versions;
+    # HL SDK minor releases have changed signing/order semantics before.
+    "hyperliquid-python-sdk==0.24.0",
+    "eth-account==0.13.7",
+    "requests>=2.31,<3",
+]
+
+[project.optional-dependencies]
+# rppca_daily model runner (not needed for plan/execute/notify core)
+model = ["numpy", "pandas", "python-dotenv"]
+
+[project.scripts]
+cpcm-exec = "causal_portfolio.execution.cli:main"
+cpcm-notify = "causal_portfolio.execution.notify:main"
+
+[tool.setuptools.dynamic]
+version = {attr = "causal_portfolio.execution.__version__"}
+
+[tool.setuptools.packages.find]
+include = ["causal_portfolio.execution*"]
+namespaces = true

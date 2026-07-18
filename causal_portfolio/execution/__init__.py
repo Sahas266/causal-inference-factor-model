@@ -12,6 +12,9 @@ Public entry points:
   - execute_target(target, config): TargetSnapshot → SubmitResult
 """
 
+# Library version (semver). Single source of truth — pyproject.toml reads it.
+__version__ = "0.1.0"
+
 from causal_portfolio.execution.config import ExecutionConfig
 from causal_portfolio.execution.hyperliquid import execute_target
 from causal_portfolio.execution.rebalancer import plan_rebalance

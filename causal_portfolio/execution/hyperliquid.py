@@ -400,6 +400,11 @@ def execute_plan(
     5. Audit write: appending to the rotating JSONL log is attempted for every
        result unless `write_audit=False`; failures are returned in `audit_error`.
        Test code may disable this; production should leave the default enabled.
+
+    6. Leg-failure fallback: post-trade reconciliation drift triggers up to
+       `config.repair_attempts` re-plan + book-aware retry passes; unresolved
+       drift and any error are pushed to Telegram (see execution/notify.py)
+       when TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID are configured.
     """
     target_id = (
         plan.target_snapshot.target_id
@@ -433,6 +438,11 @@ def execute_plan(
         target_id,
         audit_path,
     )
+    try:
+        from causal_portfolio.execution import notify
+        notify.notify_result(result)
+    except Exception:
+        logger.exception("telegram notification failed (continuing)")
     return result
 
 
@@ -542,8 +552,13 @@ def _execute_plan_inner(
             tolerance_usd=adapter.config.min_order_notional_usd,
         )
         logger.info(format_drift_summary(drifts))
+        repair = None
+        if drifts and adapter.config.repair_attempts > 0:
+            repair, post, drifts = _repair_failed_legs(adapter, plan, post, drifts)
+            logger.info("post-repair: " + format_drift_summary(drifts))
         return SubmitResult(plan=plan, submitted=True,
-                            response=response, post_state=post, drifts=drifts)
+                            response=response, post_state=post, drifts=drifts,
+                            repair=repair)
     except Exception as e:
         logger.exception("post-submit state/reconciliation failed")
         return SubmitResult(
@@ -553,6 +568,65 @@ def _execute_plan_inner(
             post_state=post,
             post_submit_error=str(e),
         )
+
+
+def _repair_failed_legs(
+    adapter: HLAdapter,
+    plan: RebalancePlan,
+    post: AccountState,
+    drifts: list,
+) -> tuple[dict, AccountState, list]:
+    """Fallback for failed/partial legs: re-plan residuals, retry book-aware.
+
+    Reconciliation drift is the universal leg-failure signal — it catches
+    unfilled IOC slices, oracle-band rejects, and ambiguous responses across
+    the batch, book-aware, and TWAP paths alike, because it compares actual
+    post-trade positions to the plan target. Re-planning against fresh state
+    (rather than resubmitting the original orders) makes the retry safe after
+    ambiguous fills: whatever actually filled is already in the state.
+
+    Returns (repair_summary, final_post_state, final_drifts).
+    """
+    from causal_portfolio.execution.reconcile import reconcile
+
+    cfg = adapter.config
+    target = (
+        plan.target_snapshot if plan.target_snapshot is not None
+        else plan.target_weights
+    )
+    attempts: list[dict[str, Any]] = []
+    for i in range(cfg.repair_attempts):
+        try:
+            repair_plan = plan_rebalance(
+                target, post, adapter.fetch_mids(), adapter.fetch_meta(), cfg,
+            )
+            if not repair_plan.orders:
+                attempts.append({"attempt": i + 1, "orders": 0,
+                                 "note": "residual not tradeable (dust/caps)"})
+                break
+            logger.warning(
+                "leg repair attempt %d/%d: %d residual order(s) for %s",
+                i + 1, cfg.repair_attempts, len(repair_plan.orders),
+                [o.coin for o in repair_plan.orders],
+            )
+            response = adapter.submit_orders_book_aware(repair_plan.orders)
+            post = adapter.fetch_state()
+            drifts = reconcile(
+                plan, post, tolerance_usd=cfg.min_order_notional_usd,
+            )
+            attempts.append({
+                "attempt": i + 1,
+                "orders": len(repair_plan.orders),
+                "response": response,
+                "remaining_drifts": len(drifts),
+            })
+            if not drifts:
+                break
+        except Exception as e:
+            logger.exception("leg repair attempt %d failed", i + 1)
+            attempts.append({"attempt": i + 1, "error": str(e)})
+            break
+    return {"attempts": attempts, "resolved": not drifts}, post, drifts
 
 
 def _detect_cancel_race(plan, mid_state, tolerance_usd: float = 25.0) -> bool:

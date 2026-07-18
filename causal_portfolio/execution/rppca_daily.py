@@ -275,6 +275,11 @@ def run_once(args: argparse.Namespace) -> RPPCAResult:
         },
     )
     logger.info("wrote RP-PCA target to %s", target_path)
+    from causal_portfolio.execution import notify
+    notify.send(
+        f"RP-PCA target {end} (data through {last_data_date.date().isoformat()}):\n"
+        + "\n".join(f"  {a}: {w:+.4f}" for a, w in sorted(weights.items()))
+    )
     if args.execute:
         _submit_target(args, target_path)
     return RPPCAResult(weights, last_data_date, now, gamma_used, n_obs, target_path)

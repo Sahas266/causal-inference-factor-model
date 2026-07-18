@@ -76,6 +76,13 @@ class ExecutionConfig:
     smart_poll_seconds: float = 1.5    # wait between attempts
     smart_max_band_bps: float = 200.0  # don't price further than this from mid
 
+    # ── Leg-failure repair ──────────────────────────────────────────────
+    # After submission + reconciliation, coins whose actual notional still
+    # drifts from target (failed/partial legs) are re-planned against fresh
+    # state and retried via book-aware execution, up to this many passes.
+    # 0 disables the fallback.
+    repair_attempts: int = 1
+
     # ── Network ─────────────────────────────────────────────────────────
     testnet: bool = True
 
@@ -117,6 +124,8 @@ class ExecutionConfig:
             raise ValueError(f"smart_poll_seconds must be >= 0, got {self.smart_poll_seconds}")
         if self.smart_max_band_bps <= 0:
             raise ValueError(f"smart_max_band_bps must be > 0, got {self.smart_max_band_bps}")
+        if self.repair_attempts < 0:
+            raise ValueError(f"repair_attempts must be >= 0, got {self.repair_attempts}")
         if self.max_signal_age_hours <= 0:
             raise ValueError(
                 f"max_signal_age_hours must be > 0, got {self.max_signal_age_hours}"

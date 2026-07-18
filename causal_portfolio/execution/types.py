@@ -202,3 +202,6 @@ class SubmitResult:
     drifts: list[ReconcileDrift] = field(default_factory=list)  # post-trade reconciliation
     post_submit_error: str | None = None  # post-state or reconciliation failure
     audit_error: str | None = None        # structured audit append failure
+    # Leg-failure fallback summary: {"attempts": [...], "resolved": bool}
+    # when a repair pass ran, else None. `drifts` reflects post-repair state.
+    repair: dict | None = None
