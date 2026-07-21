@@ -12,16 +12,16 @@ description = "CPCM Hyperliquid execution layer: target weights -> safe perp ord
 readme = "causal_portfolio/execution/README.md"
 requires-python = ">=3.11"
 dependencies = [
-    # Exact pins: the adapter is written and tested against these versions;
-    # HL SDK minor releases have changed signing/order semantics before.
-    "hyperliquid-python-sdk==0.24.0",
-    "eth-account==0.13.7",
+    # Stay within tested minor lines while accepting compatible security fixes.
+    "hyperliquid-python-sdk~=0.24.0",
+    "eth-account~=0.13.7",
+    "python-dotenv>=1,<2",
     "requests>=2.31,<3",
 ]
 
 [project.optional-dependencies]
-# rppca_daily model runner (not needed for plan/execute/notify core)
-model = ["numpy", "pandas", "python-dotenv"]
+# CSV-backed rppca_daily runner; DuckDB loading needs the full repository.
+model = ["numpy", "pandas"]
 
 [project.scripts]
 cpcm-exec = "causal_portfolio.execution.cli:main"

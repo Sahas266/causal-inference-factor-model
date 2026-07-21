@@ -4,7 +4,8 @@ Records inputs, plan, response, post-state in JSON-Lines format. One file per
 day, keyed by UTC date. Never compressed or rotated automatically — debugging
 a fill from three weeks ago requires the raw record.
 
-File path: <repo>/causal_portfolio/execution/logs/rebalance-YYYY-MM-DD.jsonl
+Default path: ~/.cpcm-execution/logs/rebalance-YYYY-MM-DD.jsonl
+Override: CPCM_EXECUTION_LOG_DIR
 """
 
 from __future__ import annotations
@@ -22,9 +23,11 @@ from causal_portfolio.execution.types import RebalancePlan, SubmitResult
 
 logger = logging.getLogger("cpcm.execution.audit")
 
-# Default lives inside the package (fine for repo checkouts). Installed
-# site-packages may be read-only — set CPCM_EXECUTION_LOG_DIR for those.
-LOG_DIR = Path(os.environ.get("CPCM_EXECUTION_LOG_DIR") or Path(__file__).parent / "logs")
+# Keep runtime state outside source/site-packages; env override supports services.
+LOG_DIR = Path(
+    os.environ.get("CPCM_EXECUTION_LOG_DIR")
+    or Path.home() / ".cpcm-execution" / "logs"
+)
 
 
 def _serialize(obj: Any) -> Any:
@@ -62,6 +65,7 @@ def append(result: SubmitResult, log_dir: Path | None = None) -> Path:
         "response": result.response,
         "post_state": _serialize(result.post_state) if result.post_state else None,
         "drifts": _serialize(result.drifts),
+        "repair": _serialize(result.repair),
     }
     with path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(record, default=str) + "\n")

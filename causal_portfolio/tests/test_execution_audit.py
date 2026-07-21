@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pytest
 
@@ -52,6 +53,7 @@ def test_append_creates_jsonl_file(tmp_path):
         plan=plan,
         submitted=True,
         post_submit_error="post-state unavailable",
+        repair={"attempts": [{"attempt": 1}], "resolved": False},
     )
 
     path = append(result, log_dir=tmp_path)
@@ -62,7 +64,18 @@ def test_append_creates_jsonl_file(tmp_path):
     assert record["submitted"] is True
     assert record["error"] is None
     assert record["post_submit_error"] == "post-state unavailable"
+    assert record["repair"] == {"attempts": [{"attempt": 1}], "resolved": False}
     assert record["plan"]["target_weights"] == {"btc": 0.3}
+
+
+def test_default_log_dir_is_user_owned(monkeypatch):
+    import importlib
+    from causal_portfolio.execution import audit
+
+    monkeypatch.delenv("CPCM_EXECUTION_LOG_DIR", raising=False)
+    importlib.reload(audit)
+
+    assert audit.LOG_DIR == Path.home() / ".cpcm-execution" / "logs"
 
 
 def test_submit_result_sixth_positional_argument_remains_drifts():
@@ -134,6 +147,17 @@ def test_execution_run_log_records_system_exit(tmp_path):
     text = path.read_text(encoding="utf-8")
     assert "execution run failed: parser" in text
     assert "SystemExit: 2" in text
+
+
+def test_execution_run_log_does_not_fail_successful_system_exit(tmp_path):
+    from causal_portfolio.execution import execution_run_log
+
+    with pytest.raises(SystemExit) as exc:
+        with execution_run_log("help", log_dir=tmp_path) as path:
+            raise SystemExit(0)
+
+    assert exc.value.code == 0
+    assert "execution run failed" not in path.read_text(encoding="utf-8")
 
 
 def test_execution_run_log_reuses_active_file(tmp_path):

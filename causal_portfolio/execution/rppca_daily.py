@@ -276,9 +276,14 @@ def run_once(args: argparse.Namespace) -> RPPCAResult:
     )
     logger.info("wrote RP-PCA target to %s", target_path)
     from causal_portfolio.execution import notify
+    weight_lines = [
+        f"{'🟢' if w >= 0 else '🔴'} {notify._esc(a)}: <b>{w:+.4f}</b>"
+        for a, w in sorted(weights.items())
+    ]
     notify.send(
-        f"RP-PCA target {end} (data through {last_data_date.date().isoformat()}):\n"
-        + "\n".join(f"  {a}: {w:+.4f}" for a, w in sorted(weights.items()))
+        f"📈 <b>RP-PCA Target</b> — {end} (data through "
+        f"{last_data_date.date().isoformat()})\n\n" + "\n".join(weight_lines),
+        parse_mode="HTML",
     )
     if args.execute:
         _submit_target(args, target_path)

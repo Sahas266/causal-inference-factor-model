@@ -31,7 +31,7 @@ negative and start with `-100`.
 
 ## 4. Configure
 
-Add to repo-root `.env` (never commit):
+Add to `.env` in the command's working directory or a parent (never commit):
 
 ```
 TELEGRAM_BOT_TOKEN=123456789:AA...
@@ -43,8 +43,29 @@ TELEGRAM_CHAT_ID=-100xxxxxxxxxx
 ```bash
 python -m causal_portfolio.execution.notify --test     # ping the channel
 python -m causal_portfolio.execution.notify --state    # live testnet account summary
+python -m causal_portfolio.execution.notify --pnl       # live unrealized PnL, once
 python -m causal_portfolio.execution.notify --message "hello"
 ```
+
+Formatted messages (state, PnL, execution results, RP-PCA targets) use bold
+labels, monospace ids, and 🟢/🔴/⚠️/🛑 status emoji so a scroll through the
+channel reads at a glance. `--message` stays plain text — arbitrary operator
+text is never parsed as markup.
+
+## 6. Recurring PnL updates (every 30 minutes)
+
+Two ways to run it, pick one:
+
+- **Standalone loop** (simplest — no OS scheduler needed):
+  ```bash
+  python -m causal_portfolio.execution.notify --pnl-loop --interval-minutes 30
+  ```
+  Leave it running (a terminal, `nssm`, or a Task Scheduler "at log on"
+  trigger with no repeat). Ctrl-C exits cleanly. Windows wrapper:
+  `causal_portfolio/execution/run_pnl_notifier.cmd`.
+- **Task Scheduler repeat trigger**: schedule
+  `python -m causal_portfolio.execution.notify --pnl` on a 30-minute repeat
+  trigger instead, if you'd rather not keep a process running.
 
 ## What gets sent automatically
 
@@ -53,6 +74,8 @@ python -m causal_portfolio.execution.notify --message "hello"
   silent; live submissions and all failures notify.
 - **Model updates** (`rppca_daily.run_once`): target date + weight vector on
   every target write.
+- **PnL updates**: only when you start `--pnl-loop` (or schedule `--pnl`) per
+  step 6 above — not automatic on its own.
 
-Unconfigured env = notifications silently disabled; a Telegram outage never
-blocks or fails an execution run (send errors are logged and swallowed).
+Unconfigured env = notifications silently disabled. Telegram errors are logged
+and swallowed; the HTTP timeout caps notification delay at 15 seconds.

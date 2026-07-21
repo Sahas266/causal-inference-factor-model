@@ -7,7 +7,7 @@ Wraps the official `hyperliquid-python-sdk` to:
   - Cancel open orders before placing a new batch (clean-slate rebalance).
 
 Lazy-imports the SDK so the rest of the execution layer is testable without
-it. Install with: `pip install hyperliquid-python-sdk==0.24.0`.
+it. Install with: `pip install hyperliquid-python-sdk~=0.24.0`.
 
 Default base URL is testnet. Mainnet only when ExecutionConfig.testnet=False
 AND ExecutionConfig.dry_run=False (caller's responsibility to gate).
@@ -18,8 +18,7 @@ from __future__ import annotations
 import logging
 import os
 import time
-from dataclasses import replace
-from pathlib import Path
+from dataclasses import asdict, replace
 from typing import Any
 
 from causal_portfolio.execution.config import ExecutionConfig
@@ -63,13 +62,12 @@ def _read_env_chain(names: tuple[str, ...]) -> str | None:
 
 
 def _load_dotenv_once() -> None:
-    """Load .env from repo root if dotenv is available. Idempotent enough."""
+    """Load the nearest .env above the working directory, when available."""
     try:
-        from dotenv import load_dotenv
+        from dotenv import find_dotenv, load_dotenv
     except ImportError:
         return
-    repo_root = Path(__file__).resolve().parents[2]
-    load_dotenv(repo_root / ".env")
+    load_dotenv(find_dotenv(usecwd=True))
 
 
 class HLAdapter:
@@ -85,7 +83,7 @@ class HLAdapter:
         except ImportError as e:
             raise ImportError(
                 "hyperliquid-python-sdk not installed. Run: "
-                "pip install hyperliquid-python-sdk==0.24.0 eth-account==0.13.7"
+                "pip install hyperliquid-python-sdk~=0.24.0 eth-account~=0.13.7"
             ) from e
 
         _load_dotenv_once()
@@ -511,6 +509,10 @@ def _execute_plan_inner(
                        len(plan.orders),
                        sum(abs(d) for d in plan.deltas_usd.values()))
 
+    submission_error = None
+    submission_started = False
+    mid_state = plan.current_state
+    post = None
     try:
         adapter.cancel_all_open()
 
@@ -525,6 +527,7 @@ def _execute_plan_inner(
                 error="cancel-race detected: positions moved between cancel and submit",
             )
 
+        submission_started = True
         if adapter.config.twap_minutes > 0:
             response = _submit_orders_twap(adapter, plan.orders)
         elif adapter.config.smart_execution:
@@ -535,16 +538,23 @@ def _execute_plan_inner(
         logger.exception("submission failed before completion")
         # Best-effort post-state snapshot: orders may have partially gone out
         # before the failure, and the audit log should capture where we landed.
-        post = None
         try:
             post = adapter.fetch_state()
         except Exception:
             logger.warning("post-failure state fetch also failed")
-        return SubmitResult(plan=plan, submitted=False, post_state=post, error=str(e))
+        if (
+            not submission_started
+            or post is None
+            or not _position_sizes_changed(plan, mid_state, post)
+        ):
+            return SubmitResult(plan=plan, submitted=False, post_state=post, error=str(e))
+        logger.warning("submission response failed after positions changed; reconciling")
+        response = None
+        submission_error = str(e)
 
-    post = None
     try:
-        post = adapter.fetch_state()
+        if post is None:
+            post = adapter.fetch_state()
         from causal_portfolio.execution.reconcile import format_drift_summary, reconcile
         drifts = reconcile(
             plan,
@@ -558,15 +568,18 @@ def _execute_plan_inner(
             logger.info("post-repair: " + format_drift_summary(drifts))
         return SubmitResult(plan=plan, submitted=True,
                             response=response, post_state=post, drifts=drifts,
-                            repair=repair)
+                            post_submit_error=submission_error, repair=repair)
     except Exception as e:
         logger.exception("post-submit state/reconciliation failed")
+        post_submit_error = str(e)
+        if submission_error:
+            post_submit_error = f"{submission_error}; post-submit checks failed: {e}"
         return SubmitResult(
             plan=plan,
             submitted=True,
             response=response,
             post_state=post,
-            post_submit_error=str(e),
+            post_submit_error=post_submit_error,
         )
 
 
@@ -585,12 +598,6 @@ def _repair_failed_legs(
     (rather than resubmitting the original orders) makes the retry safe after
     ambiguous fills: whatever actually filled is already in the state.
 
-    Caveat: `resolved` is judged against the ORIGINAL plan.target_usd while
-    the repair re-plans at fresh equity — if equity moved more than the
-    reconcile tolerance mid-run, the final position is correct for current
-    equity but still reports unresolved drift. Treat that alert as "off the
-    original plan", not necessarily "wrong position".
-
     Returns (repair_summary, final_post_state, final_drifts).
     """
     from causal_portfolio.execution.reconcile import reconcile
@@ -602,36 +609,55 @@ def _repair_failed_legs(
     )
     attempts: list[dict[str, Any]] = []
     for i in range(cfg.repair_attempts):
+        attempt: dict[str, Any] = {"attempt": i + 1}
+        repair_plan = None
+        submission_started = False
         try:
             repair_plan = plan_rebalance(
                 target, post, adapter.fetch_mids(), adapter.fetch_meta(), cfg,
             )
+            attempt.update({
+                "orders": len(repair_plan.orders),
+                "target_usd": dict(repair_plan.target_usd),
+                "equity_used": repair_plan.equity_used,
+                "planned_orders": [asdict(order) for order in repair_plan.orders],
+            })
             if not repair_plan.orders:
-                attempts.append({"attempt": i + 1, "orders": 0,
-                                 "note": "residual not tradeable (dust/caps)"})
+                attempt["note"] = "residual not tradeable (dust/caps)"
+                attempts.append(attempt)
                 break
             logger.warning(
                 "leg repair attempt %d/%d: %d residual order(s) for %s",
                 i + 1, cfg.repair_attempts, len(repair_plan.orders),
                 [o.coin for o in repair_plan.orders],
             )
+            submission_started = True
             response = adapter.submit_orders_book_aware(repair_plan.orders)
+            attempt["response"] = response
             post = adapter.fetch_state()
             drifts = reconcile(
-                plan, post, tolerance_usd=cfg.min_order_notional_usd,
+                repair_plan, post, tolerance_usd=cfg.min_order_notional_usd,
             )
-            attempts.append({
-                "attempt": i + 1,
-                "orders": len(repair_plan.orders),
-                "response": response,
-                "remaining_drifts": len(drifts),
-            })
+            attempt["remaining_drifts"] = len(drifts)
+            attempts.append(attempt)
             if not drifts:
                 break
         except Exception as e:
             logger.exception("leg repair attempt %d failed", i + 1)
-            attempts.append({"attempt": i + 1, "error": str(e)})
-            break
+            attempt["error"] = str(e)
+            attempts.append(attempt)
+            try:
+                post = adapter.fetch_state()
+                drifts = reconcile(
+                    repair_plan or plan,
+                    post,
+                    tolerance_usd=cfg.min_order_notional_usd,
+                )
+            except Exception as state_error:
+                attempt["state_error"] = str(state_error)
+                break
+            if not drifts or submission_started:
+                break
     return {"attempts": attempts, "resolved": not drifts}, post, drifts
 
 
@@ -659,6 +685,21 @@ def _detect_cancel_race(plan, mid_state, tolerance_usd: float = 25.0) -> bool:
             )
             return True
     return False
+
+
+def _position_sizes_changed(
+    plan: RebalancePlan,
+    before: AccountState,
+    post: AccountState,
+) -> bool:
+    """Return whether a planned or pre-existing position changed size."""
+    before_positions = before.positions
+    coins = set(plan.target_usd) | set(before_positions)
+    return any(
+        (before_positions[coin].size if coin in before_positions else 0.0)
+        != (post.positions[coin].size if coin in post.positions else 0.0)
+        for coin in coins
+    )
 
 
 def _child_cloid(parent_cloid: str, slice_index: int) -> str:

@@ -3,9 +3,30 @@
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning: [SemVer](https://semver.org/) — MAJOR = breaking public API
 (`execute_target`, `plan_rebalance`, `ExecutionConfig`, types), MINOR =
-backwards-compatible features, PATCH = fixes. Pinned exchange SDK:
-`hyperliquid-python-sdk==0.24.0` (bump = at least MINOR here, re-run the
+backwards-compatible features, PATCH = fixes. Exchange SDK compatibility line:
+`hyperliquid-python-sdk~=0.24.0` (minor bump = at least MINOR here, re-run the
 testnet gate first).
+
+## [0.1.2] - 2026-07-21
+
+### Added
+- Telegram messages (execution results, portfolio state, RP-PCA targets) now
+  render as HTML: bold labels, monospace ids, 🟢/🔴/⚠️/🛑 status emoji.
+- `notify.format_pnl` / `--pnl`: live unrealized PnL per position, marked to
+  current mids, plus account total.
+- `notify.run_pnl_loop` / `--pnl-loop --interval-minutes`: standalone
+  recurring PnL notifier (default 30 min); `run_pnl_notifier.cmd` wrapper.
+
+## [0.1.1] - 2026-07-20
+
+### Fixed
+- Reconcile and repair partial fills observed after a submission response error.
+- Retry pre-submit repair failures after refreshing account state; stop after
+  ambiguous submission errors. Reconcile against the fresh-equity target.
+- Keep logs outside installed package directories and record repair details.
+- Load `.env` from the caller's working tree and redact Telegram bot tokens
+  from request-error logs.
+- Accept patch-level SDK and `eth-account` fixes within tested minor lines.
 
 ## [0.1.0] - 2026-07-17
 

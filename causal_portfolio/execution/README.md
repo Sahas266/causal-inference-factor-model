@@ -50,7 +50,8 @@ python -m causal_portfolio.execution.cli execute --weights weights.json --live -
 ## Model-independent logging
 
 The execution CLI automatically writes a unique text log to
-`causal_portfolio/execution/logs/execution-cli-*.log`. It captures all logger
+`~/.cpcm-execution/logs/execution-cli-*.log` (override with
+`CPCM_EXECUTION_LOG_DIR`). It captures all logger
 output emitted during the CLI run plus failure tracebacks. Every `execute_plan()`
 call attempts to append a structured JSONL audit record by default, containing
 the target, planned orders, exchange response, post-trade state, reconciliation
@@ -81,6 +82,10 @@ JSON/CSV producers call `load_target_snapshot()` first, then pass the returned
 `TargetSnapshot` to `execute_target()`.
 
 ## Daily local RP-PCA runner
+
+This runner belongs to the repository checkout. An installed
+`cpcm-execution[model]` supports `--prices-csv`; its default DuckDB loader also
+needs the repo-only `causal_portfolio.data` package.
 
 Generate an RP-PCA target from the local DuckDB snapshot or a wide price CSV:
 
@@ -121,15 +126,17 @@ planning, but live writes reject them unless `allow_stale_signal=True`.
 
 Reads work without a private key; writes require it. Never commit either to a `.env` checked into the repo.
 
-## Optional dependency
+## SDK compatibility
 
-The network adapter requires `hyperliquid-python-sdk`:
+The `cpcm-execution` package installs the tested SDK line automatically. For a
+repo-only execution environment, install it directly with:
 
 ```bash
-pip install "hyperliquid-python-sdk==0.24.0" "eth-account==0.13.7"
+pip install "hyperliquid-python-sdk~=0.24.0" "eth-account~=0.13.7"
 ```
 
-Not in `requirements.txt` because the pure rebalancer is useful without it (planning, testing, paper-trading). Only install when you're ready to hit testnet.
+`cpcm-execution` and the repository requirements install these automatically;
+the direct command is useful for an execution-only development environment.
 
 ## Safety defaults
 
@@ -158,7 +165,8 @@ plan; full reduce-only closes are allowed so cleanup can flatten tiny residuals.
 
 ## Audit log format
 
-Each rebalance appends one JSON record to `logs/rebalance-YYYY-MM-DD.jsonl`:
+Each rebalance appends one JSON record to
+`~/.cpcm-execution/logs/rebalance-YYYY-MM-DD.jsonl` by default:
 
 ```json
 {

@@ -26,6 +26,10 @@ def execution_run_log(name: str, log_dir: Path | None = None) -> Iterator[Path]:
     if active_path is not None:
         try:
             yield active_path
+        except SystemExit as e:
+            if e.code not in (None, 0):
+                run_logger.exception("execution run failed: %s", name)
+            raise
         except BaseException:
             run_logger.exception("execution run failed: %s", name)
             raise
@@ -57,6 +61,10 @@ def execution_run_log(name: str, log_dir: Path | None = None) -> Iterator[Path]:
     try:
         run_logger.info("execution run started: %s log=%s", name, path)
         yield path
+    except SystemExit as e:
+        if e.code not in (None, 0):
+            run_logger.exception("execution run failed: %s", name)
+        raise
     except BaseException:
         run_logger.exception("execution run failed: %s", name)
         raise
