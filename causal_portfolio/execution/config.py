@@ -13,6 +13,7 @@ flags --live and --mainnet (the CLI requires both for any mainnet write).
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 
 
@@ -62,6 +63,11 @@ class ExecutionConfig:
 
     # ── Slippage ────────────────────────────────────────────────────────
     slippage_bps: int = 30         # IOC limit at mid ± slippage_bps/10000
+
+    # None preserves existing callers. When set, estimate fee + live L2 impact
+    # before any cancel or submit and fail closed above the all-in bps limit.
+    max_transaction_cost_bps: float | None = None
+    estimated_taker_fee_bps: float = 4.5
 
     # ── Asset universe ──────────────────────────────────────────────────
     asset_map: dict[str, str] = field(default_factory=lambda: dict(DEFAULT_ASSET_MAP))
@@ -118,6 +124,25 @@ class ExecutionConfig:
             )
         if self.slippage_bps < 0:
             raise ValueError(f"slippage_bps must be >= 0, got {self.slippage_bps}")
+        if (
+            self.max_transaction_cost_bps is not None
+            and (
+                not math.isfinite(self.max_transaction_cost_bps)
+                or self.max_transaction_cost_bps < 0
+            )
+        ):
+            raise ValueError(
+                "max_transaction_cost_bps must be >= 0 when set, got "
+                f"{self.max_transaction_cost_bps}"
+            )
+        if (
+            not math.isfinite(self.estimated_taker_fee_bps)
+            or self.estimated_taker_fee_bps < 0
+        ):
+            raise ValueError(
+                "estimated_taker_fee_bps must be >= 0, got "
+                f"{self.estimated_taker_fee_bps}"
+            )
         if self.smart_max_attempts < 1:
             raise ValueError(f"smart_max_attempts must be >= 1, got {self.smart_max_attempts}")
         if self.smart_poll_seconds < 0:

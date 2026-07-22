@@ -9,7 +9,7 @@ import math
 import os
 import time
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import numpy as np
@@ -272,17 +272,36 @@ def run_once(args: argparse.Namespace) -> RPPCAResult:
             "price_forward_filled_to": end,
             "max_ffill_days": args.max_ffill_days,
             "source": str(args.prices_csv or "causal_portfolio.data.get_loader"),
+            "expected_next_rebalance": (
+                now + timedelta(hours=args.every_hours)
+            ).isoformat(),
         },
     )
     logger.info("wrote RP-PCA target to %s", target_path)
     from causal_portfolio.execution import notify
+    target = load_target_snapshot(target_path)
+    expected_next = now + timedelta(hours=args.every_hours)
+    try:
+        from causal_portfolio.execution import trace
+
+        trace.start_cycle(
+            target,
+            expected_next_rebalance=expected_next,
+            model_prices={
+                asset: float(price) for asset, price in prices.iloc[-1].items()
+            },
+            price_source=str(args.prices_csv or "causal_portfolio.data.get_loader"),
+        )
+    except Exception:
+        logger.exception("RP-PCA trace initialization failed (continuing)")
     weight_lines = [
         f"{'🟢' if w >= 0 else '🔴'} {notify._esc(a)}: <b>{w:+.4f}</b>"
         for a, w in sorted(weights.items())
     ]
     notify.send(
         f"📈 <b>RP-PCA Target</b> — {end} (data through "
-        f"{last_data_date.date().isoformat()})\n\n" + "\n".join(weight_lines),
+        f"{last_data_date.date().isoformat()})\n"
+        f"{notify.format_next_rebalance(expected_next)}\n\n" + "\n".join(weight_lines),
         parse_mode="HTML",
     )
     if args.execute:
@@ -301,6 +320,8 @@ def _submit_target(args: argparse.Namespace, target_path: Path) -> None:
         allow_stale_signal=args.allow_stale_signal,
         twap_minutes=args.twap_minutes,
         twap_slices=args.twap_slices,
+        max_transaction_cost_bps=args.max_transaction_cost_bps,
+        estimated_taker_fee_bps=args.estimated_taker_fee_bps,
     )
     target = load_target_snapshot(target_path)
     result = execute_model_target(
@@ -346,6 +367,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--max-signal-age-hours", type=float, default=72.0)
     p.add_argument("--twap-minutes", type=float, default=0.0)
     p.add_argument("--twap-slices", type=int, default=5)
+    p.add_argument("--max-transaction-cost-bps", type=float, default=15.0)
+    p.add_argument("--estimated-taker-fee-bps", type=float, default=4.5)
     p.add_argument("--loop", action="store_true", help="Run forever")
     p.add_argument("--every-hours", type=float, default=24.0)
     return p

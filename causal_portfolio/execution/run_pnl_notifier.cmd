@@ -9,10 +9,9 @@ if not exist "%PYTHON_EXE%" set "PYTHON_EXE=python"
 
 if not exist "causal_portfolio\execution\logs" mkdir "causal_portfolio\execution\logs"
 
-rem Long-running: sends a PnL update every 30 minutes until stopped.
-rem Start it once (e.g. via Task Scheduler "at log on", no repeat trigger
-rem needed) and leave it running; %* forwards overrides like --mainnet.
-"%PYTHON_EXE%" -m causal_portfolio.execution.notify --pnl-loop --interval-minutes 30 %* >> "causal_portfolio\execution\logs\pnl_notifier.log" 2>&1
+rem One-shot. Windows Task Scheduler owns the 30-minute recurrence.
+rem %* forwards overrides like --mainnet.
+"%PYTHON_EXE%" -m causal_portfolio.execution.notify --pnl %* >> "causal_portfolio\execution\logs\pnl_notifier.log" 2>&1
 
 set "EXIT_CODE=%ERRORLEVEL%"
 popd

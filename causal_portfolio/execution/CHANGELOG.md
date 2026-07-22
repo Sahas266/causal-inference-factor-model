@@ -7,6 +7,17 @@ backwards-compatible features, PATCH = fixes. Exchange SDK compatibility line:
 `hyperliquid-python-sdk~=0.24.0` (minor bump = at least MINOR here, re-run the
 testnet gate first).
 
+## [0.2.0] - 2026-07-22
+
+### Added
+- Model-agnostic pre-submit transaction-cost gate using configured taker fees
+  plus full-size live L2 VWAP impact; RP-PCA starts at a 15 bp ceiling.
+- One-active-cycle SQLite trace with permanent no-overwrite archives for model
+  targets, plans, results, cost decisions, PnL, and portfolio metrics.
+- Framework-free local HTML control panel generated after each PnL snapshot.
+- Telegram rebalance countdown and cost-gate no-op details.
+- One-shot 30-minute PnL wrapper for Windows Task Scheduler.
+
 ## [0.1.2] - 2026-07-21
 
 ### Added

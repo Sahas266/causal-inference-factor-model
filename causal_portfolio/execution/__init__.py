@@ -13,7 +13,7 @@ Public entry points:
 """
 
 # Library version (semver). Single source of truth — pyproject.toml reads it.
-__version__ = "0.1.2"
+__version__ = "0.2.0"
 
 from causal_portfolio.execution.config import ExecutionConfig
 from causal_portfolio.execution.hyperliquid import execute_target

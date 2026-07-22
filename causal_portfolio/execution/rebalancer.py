@@ -284,6 +284,7 @@ def plan_rebalance(
         notes=notes,
         network="testnet" if config.testnet else "mainnet",
         target_snapshot=target_snapshot,
+        mids=dict(mids),
     )
     logger.info(plan.summary())
     return plan

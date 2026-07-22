@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import sqlite3
+from contextlib import closing
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock
 
@@ -176,6 +178,13 @@ def test_execute_target_owns_model_handoff(tmp_path, monkeypatch):
     adapter.fetch_meta.assert_called_once_with()
     assert len(list(tmp_path.glob("execution-unit-model-*.log"))) == 1
     assert len(list(tmp_path.glob("rebalance-*.jsonl"))) == 1
+    trace_path = tmp_path / "rebalance-current.sqlite3"
+    assert trace_path.exists()
+    with closing(sqlite3.connect(trace_path)) as conn:
+        kinds = {
+            row[0] for row in conn.execute("SELECT DISTINCT kind FROM events")
+        }
+    assert kinds == {"model_target", "execution_plan", "execution_result"}
 
 
 def test_execute_target_rejects_unversioned_dict():

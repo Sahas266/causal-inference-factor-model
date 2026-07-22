@@ -14,6 +14,13 @@ from causal_portfolio.execution.rppca_daily import (
 from causal_portfolio.execution.targets import load_target_snapshot
 
 
+@pytest.fixture(autouse=True)
+def _redirect_trace(tmp_path, monkeypatch):
+    from causal_portfolio.execution import audit
+
+    monkeypatch.setattr(audit, "LOG_DIR", tmp_path / "execution-logs")
+
+
 def test_rppca_daily_generates_loadable_forward_filled_target(tmp_path):
     prices = tmp_path / "prices.csv"
     target = tmp_path / "target.json"
@@ -128,6 +135,8 @@ def test_rppca_submission_uses_standard_interface(tmp_path, monkeypatch, caplog)
     assert captured["target"].weights == {"btc": 0.1}
     assert captured["config"].dry_run is False
     assert captured["config"].testnet is True
+    assert captured["config"].max_transaction_cost_bps == 15.0
+    assert captured["config"].estimated_taker_fee_bps == 4.5
     assert captured["acknowledge"] is False
     assert captured["calls"] == 1
     assert "post-state unavailable" in caplog.text

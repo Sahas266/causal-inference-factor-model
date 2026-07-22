@@ -21,6 +21,7 @@ target weights (w)
         │
         ▼
   audit.py logs every rebalance to logs/rebalance-YYYY-MM-DD.jsonl
+  trace.py keeps one active SQLite cycle and permanent completed archives
 ```
 
 ## Quick start
@@ -39,6 +40,9 @@ python -m causal_portfolio.execution.cli plan --weights weights.json --live-stat
 # 4. Submit on testnet
 export HL_PRIVATE_KEY=0x...
 python -m causal_portfolio.execution.cli execute --weights weights.json --live --testnet
+
+# Apply the model-agnostic all-in transaction-cost gate
+python -m causal_portfolio.execution.cli execute --weights weights.json --live --testnet --max-transaction-cost-bps 15
 
 # 5. Mainnet (requires confirmation prompt)
 python -m causal_portfolio.execution.cli execute --weights weights.json --live --mainnet
@@ -93,7 +97,8 @@ Generate an RP-PCA target from the local DuckDB snapshot or a wide price CSV:
 python -m causal_portfolio.execution.rppca_daily --target-out tmp/rppca_daily_target.json
 ```
 
-Run locally every 24 hours and execute on Hyperliquid testnet:
+Run locally every 24 hours and execute on Hyperliquid testnet. RP-PCA defaults
+to a 15 bp all-in cost ceiling:
 
 ```bash
 python -m causal_portfolio.execution.rppca_daily --loop --every-hours 24 --execute --target-out tmp/rppca_daily_target.json
@@ -149,6 +154,8 @@ the direct command is useful for an execution-only development environment.
 | `max_single_trade_pct` | 0.10 | One trade can't move more than 10% of equity |
 | `min_order_notional_usd` | $10 | Surface sub-minimum sleeves before exchange reject |
 | `slippage_bps` | 30 | IOC limit at mid ± 30bps |
+| `max_transaction_cost_bps` | None | Optional all-in fee + live L2 impact ceiling |
+| `estimated_taker_fee_bps` | 4.5 | Fee component for the pre-trade estimate |
 | `max_signal_age_hours` | 72 | Block stale model targets before live writes |
 | `smart_execution` | True | Reprice IOC slices against the live L2 book |
 | `twap_minutes` | 0 | Disabled unless an operator requests client-side slicing |
@@ -162,6 +169,19 @@ Target exposures are pre-filtered against each market's Hyperliquid
 an already over-limit position.
 Non-reducing orders below `min_order_notional_usd` are skipped in the dry-run
 plan; full reduce-only closes are allowed so cleanup can flatten tiny residuals.
+The minimum notional is exchange validation, not rebalance policy. When the
+transaction-cost gate is enabled, missing or insufficient L2 depth blocks the
+submission before open-order cancellation. RP-PCA explicitly enables a 15 bp
+limit; review it after roughly 30 logged rebalances rather than auto-tuning it.
+
+## Rebalance trace and control panel
+
+The active cycle is `~/.cpcm-execution/logs/rebalance-current.sqlite3`.
+Starting a different target archives it as
+`rebalance-<started-utc>-<target-id>.sqlite3`; archives are never overwritten
+or deleted automatically. The 30-minute PnL command appends marked positions,
+PnL, equity, margin, and exposure, then atomically writes the standalone panel
+to `~/.cpcm-execution/control-panel/index.html`.
 
 ## Audit log format
 

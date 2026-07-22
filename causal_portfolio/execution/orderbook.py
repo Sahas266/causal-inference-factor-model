@@ -48,6 +48,26 @@ class L2Book:
         return 0.5 * (self.best_bid + self.best_ask)
 
 
+def estimate_vwap(book: L2Book, is_buy: bool, size: float) -> float | None:
+    """Return full-size book VWAP, or None for an invalid/shallow book."""
+    if size <= 0 or not book.bids or not book.asks:
+        return None
+    if book.best_bid >= book.best_ask:
+        return None
+    levels = book.asks if is_buy else book.bids
+    remaining = size
+    notional = 0.0
+    for level in levels:
+        if level.px <= 0 or level.sz <= 0:
+            return None
+        take = min(remaining, level.sz)
+        notional += take * level.px
+        remaining -= take
+        if remaining <= 1e-12:
+            return notional / size
+    return None
+
+
 def marketable_price(
     book: L2Book,
     is_buy: bool,

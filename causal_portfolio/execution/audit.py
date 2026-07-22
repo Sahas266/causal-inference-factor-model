@@ -66,6 +66,8 @@ def append(result: SubmitResult, log_dir: Path | None = None) -> Path:
         "post_state": _serialize(result.post_state) if result.post_state else None,
         "drifts": _serialize(result.drifts),
         "repair": _serialize(result.repair),
+        "cost_estimate": _serialize(result.cost_estimate),
+        "cost_gate_reason": result.cost_gate_reason,
     }
     with path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(record, default=str) + "\n")

@@ -127,6 +127,12 @@ def cmd_execute(args) -> int:
     cfg_kwargs["twap_minutes"] = args.twap_minutes
     cfg_kwargs["twap_slices"] = args.twap_slices
     cfg_kwargs["smart_execution"] = not args.no_smart_execution
+    cfg_kwargs["max_transaction_cost_bps"] = getattr(
+        args, "max_transaction_cost_bps", None
+    )
+    cfg_kwargs["estimated_taker_fee_bps"] = getattr(
+        args, "estimated_taker_fee_bps", 4.5
+    )
     cfg = ExecutionConfig(**cfg_kwargs)
 
     from causal_portfolio.execution.hyperliquid import HLAdapter, execute_plan
@@ -163,6 +169,10 @@ def cmd_execute(args) -> int:
             f"\nERROR: submission completed but audit append failed: {result.audit_error}",
             file=sys.stderr,
         )
+    if not getattr(result, "submitted", True):
+        reason = getattr(result, "cost_gate_reason", None) or "no submission required"
+        print(f"\nNot submitted: {reason}")
+        return 0
     print(f"\nSubmitted. Response: {result.response}")
     return 0
 
@@ -306,6 +316,11 @@ def _main(argv: list[str] | None = None) -> int:
                         help="Number of TWAP child batches when --twap-minutes > 0")
     p_exec.add_argument("--no-smart-execution", action="store_true",
                         help="Disable book-aware IOC slicing; use parent limit prices")
+    p_exec.add_argument("--max-transaction-cost-bps", type=float, default=None,
+                        help="Block execution above this estimated all-in cost; "
+                             "disabled when omitted")
+    p_exec.add_argument("--estimated-taker-fee-bps", type=float, default=4.5,
+                        help="Fee component used by the pre-trade cost estimate")
     p_exec.set_defaults(func=cmd_execute)
 
     args = p.parse_args(argv)

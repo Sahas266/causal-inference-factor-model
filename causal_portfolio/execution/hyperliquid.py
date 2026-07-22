@@ -25,6 +25,7 @@ from causal_portfolio.execution.config import ExecutionConfig
 from causal_portfolio.execution.orderbook import (
     L2Book,
     L2Level,
+    estimate_vwap,
     marketable_price,
     parse_fill_response,
 )
@@ -345,6 +346,74 @@ class HLAdapter:
         return round_size(size, sz_decimals) if size > 0 else 0.0
 
 
+def _estimate_transaction_cost(adapter: HLAdapter, orders: list[Order]) -> dict[str, Any]:
+    """Estimate all-in taker fee and full-size L2 impact before submission."""
+    mids = adapter.fetch_mids()
+    fee_bps = adapter.config.estimated_taker_fee_bps
+    planned_notional = 0.0
+    slippage_usd = 0.0
+    fee_usd = 0.0
+    legs: list[dict[str, Any]] = []
+    for order in orders:
+        mid = mids.get(order.coin)
+        if mid is None or mid <= 0:
+            raise ValueError(f"{order.coin}: mid price unavailable")
+        book = adapter.fetch_l2_book(order.coin, depth=100)
+        vwap = estimate_vwap(book, order.is_buy, order.size)
+        if vwap is None:
+            raise ValueError(f"{order.coin}: insufficient or invalid L2 depth")
+        notional = order.size * mid
+        leg_slippage = order.size * abs(vwap - mid)
+        leg_fee = order.size * vwap * fee_bps / 10_000.0
+        planned_notional += notional
+        slippage_usd += leg_slippage
+        fee_usd += leg_fee
+        legs.append({
+            "coin": order.coin,
+            "side": "buy" if order.is_buy else "sell",
+            "size": order.size,
+            "mid": mid,
+            "estimated_vwap": vwap,
+            "planned_notional_usd": notional,
+            "slippage_usd": leg_slippage,
+            "fee_usd": leg_fee,
+        })
+    if planned_notional <= 0:
+        raise ValueError("planned notional is zero")
+    total_cost = slippage_usd + fee_usd
+    return {
+        "planned_notional_usd": planned_notional,
+        "slippage_usd": slippage_usd,
+        "fee_usd": fee_usd,
+        "estimated_cost_usd": total_cost,
+        "estimated_cost_bps": total_cost / planned_notional * 10_000.0,
+        "estimated_taker_fee_bps": fee_bps,
+        "legs": legs,
+    }
+
+
+def _check_cost_gate(
+    adapter: HLAdapter, orders: list[Order]
+) -> tuple[dict[str, Any] | None, str | None]:
+    limit = adapter.config.max_transaction_cost_bps
+    if limit is None:
+        return None, None
+    try:
+        estimate = _estimate_transaction_cost(adapter, orders)
+    except Exception as exc:
+        logger.warning("transaction-cost estimate unavailable: %s", exc)
+        return {"max_transaction_cost_bps": limit, "error": str(exc)}, "cost_estimate_unavailable"
+    estimate["max_transaction_cost_bps"] = limit
+    if estimate["estimated_cost_bps"] > limit:
+        logger.info(
+            "transaction-cost gate blocked: %.2f bps > %.2f bps",
+            estimate["estimated_cost_bps"],
+            limit,
+        )
+        return estimate, "estimated_cost_above_limit"
+    return estimate, None
+
+
 def execute_target(
     target: TargetSnapshot,
     config: ExecutionConfig,
@@ -355,14 +424,16 @@ def execute_target(
     if not isinstance(target, TargetSnapshot):
         raise TypeError("target must be a TargetSnapshot")
     with execution_run_log(target.strategy or "model"):
+        try:
+            from causal_portfolio.execution import trace
+
+            trace.start_cycle(target)
+        except Exception:
+            logger.exception("trace cycle initialization failed (continuing)")
         adapter = HLAdapter(config)
-        plan = plan_rebalance(
-            target,
-            adapter.fetch_state(),
-            adapter.fetch_mids(),
-            adapter.fetch_meta(),
-            config,
-        )
+        state = adapter.fetch_state()
+        mids = adapter.fetch_mids()
+        plan = plan_rebalance(target, state, mids, adapter.fetch_meta(), config)
         return execute_plan(
             adapter,
             plan,
@@ -417,6 +488,13 @@ def execute_plan(
         len(plan.orders),
         adapter.config.dry_run,
     )
+    if write_audit and plan.target_snapshot is not None:
+        try:
+            from causal_portfolio.execution import trace
+
+            trace.start_cycle(plan.target_snapshot)
+        except Exception:
+            logger.exception("trace cycle initialization failed (continuing)")
     result = _execute_plan_inner(adapter, plan, acknowledge_mainnet=acknowledge_mainnet)
     audit_path = None
     if write_audit:
@@ -436,6 +514,12 @@ def execute_plan(
         target_id,
         audit_path,
     )
+    try:
+        from causal_portfolio.execution import trace
+
+        trace.record_execution_result(result)
+    except Exception:
+        logger.exception("trace execution write failed (continuing)")
     try:
         from causal_portfolio.execution import notify
         notify.notify_result(result)
@@ -509,6 +593,15 @@ def _execute_plan_inner(
                        len(plan.orders),
                        sum(abs(d) for d in plan.deltas_usd.values()))
 
+    cost_estimate, cost_gate_reason = _check_cost_gate(adapter, plan.orders)
+    if cost_gate_reason is not None:
+        return SubmitResult(
+            plan=plan,
+            submitted=False,
+            cost_estimate=cost_estimate,
+            cost_gate_reason=cost_gate_reason,
+        )
+
     submission_error = None
     submission_started = False
     mid_state = plan.current_state
@@ -525,6 +618,7 @@ def _execute_plan_inner(
             return SubmitResult(
                 plan=plan, submitted=False, post_state=mid_state,
                 error="cancel-race detected: positions moved between cancel and submit",
+                cost_estimate=cost_estimate,
             )
 
         submission_started = True
@@ -547,7 +641,13 @@ def _execute_plan_inner(
             or post is None
             or not _position_sizes_changed(plan, mid_state, post)
         ):
-            return SubmitResult(plan=plan, submitted=False, post_state=post, error=str(e))
+            return SubmitResult(
+                plan=plan,
+                submitted=False,
+                post_state=post,
+                error=str(e),
+                cost_estimate=cost_estimate,
+            )
         logger.warning("submission response failed after positions changed; reconciling")
         response = None
         submission_error = str(e)
@@ -568,7 +668,8 @@ def _execute_plan_inner(
             logger.info("post-repair: " + format_drift_summary(drifts))
         return SubmitResult(plan=plan, submitted=True,
                             response=response, post_state=post, drifts=drifts,
-                            post_submit_error=submission_error, repair=repair)
+                            post_submit_error=submission_error, repair=repair,
+                            cost_estimate=cost_estimate)
     except Exception as e:
         logger.exception("post-submit state/reconciliation failed")
         post_submit_error = str(e)
@@ -580,6 +681,7 @@ def _execute_plan_inner(
             response=response,
             post_state=post,
             post_submit_error=post_submit_error,
+            cost_estimate=cost_estimate,
         )
 
 
@@ -624,6 +726,15 @@ def _repair_failed_legs(
             })
             if not repair_plan.orders:
                 attempt["note"] = "residual not tradeable (dust/caps)"
+                attempts.append(attempt)
+                break
+            cost_estimate, cost_gate_reason = _check_cost_gate(
+                adapter, repair_plan.orders
+            )
+            if cost_estimate is not None:
+                attempt["cost_estimate"] = cost_estimate
+            if cost_gate_reason is not None:
+                attempt["cost_gate_reason"] = cost_gate_reason
                 attempts.append(attempt)
                 break
             logger.warning(

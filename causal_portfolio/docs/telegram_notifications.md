@@ -54,18 +54,13 @@ text is never parsed as markup.
 
 ## 6. Recurring PnL updates (every 30 minutes)
 
-Two ways to run it, pick one:
+Windows Task Scheduler runs `causal_portfolio/execution/run_pnl_notifier.cmd`
+every 30 minutes under `CPCM_Portfolio_30m_HL_Testnet`. The wrapper is one-shot;
+the scheduler owns recurrence. Each tick logs SQLite portfolio metrics, updates
+the local control panel, then posts PnL and the next-rebalance countdown.
 
-- **Standalone loop** (simplest — no OS scheduler needed):
-  ```bash
-  python -m causal_portfolio.execution.notify --pnl-loop --interval-minutes 30
-  ```
-  Leave it running (a terminal, `nssm`, or a Task Scheduler "at log on"
-  trigger with no repeat). Ctrl-C exits cleanly. Windows wrapper:
-  `causal_portfolio/execution/run_pnl_notifier.cmd`.
-- **Task Scheduler repeat trigger**: schedule
-  `python -m causal_portfolio.execution.notify --pnl` on a 30-minute repeat
-  trigger instead, if you'd rather not keep a process running.
+`--pnl-loop --interval-minutes 30` remains available for non-Windows hosts but
+is not the deployed Windows path.
 
 ## What gets sent automatically
 
@@ -74,8 +69,7 @@ Two ways to run it, pick one:
   silent; live submissions and all failures notify.
 - **Model updates** (`rppca_daily.run_once`): target date + weight vector on
   every target write.
-- **PnL updates**: only when you start `--pnl-loop` (or schedule `--pnl`) per
-  step 6 above — not automatic on its own.
+- **PnL updates**: the scheduled one-shot task posts every 30 minutes.
 
 Unconfigured env = notifications silently disabled. Telegram errors are logged
 and swallowed; the HTTP timeout caps notification delay at 15 seconds.

@@ -171,6 +171,7 @@ class RebalancePlan:
     notes: list[str] = field(default_factory=list)
     network: str | None = None
     target_snapshot: TargetSnapshot | None = None
+    mids: dict[str, float] = field(default_factory=dict)
 
     def summary(self) -> str:
         n_orders = len(self.orders)
@@ -205,3 +206,7 @@ class SubmitResult:
     # Leg-failure fallback summary: {"attempts": [...], "resolved": bool}
     # when a repair pass ran, else None. `drifts` reflects post-repair state.
     repair: dict | None = None
+    # Pre-submit all-in fee + L2 impact estimate. Dict mirrors `repair` so the
+    # audit format can evolve without breaking positional result compatibility.
+    cost_estimate: dict | None = None
+    cost_gate_reason: str | None = None

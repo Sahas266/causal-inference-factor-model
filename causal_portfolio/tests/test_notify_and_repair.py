@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -268,10 +268,35 @@ def test_format_pnl_flags_missing_mid():
     assert "mid price unavailable" in text
 
 
-def test_send_pnl_update_uses_live_state_and_mids(monkeypatch):
+def test_format_pnl_shows_next_rebalance_countdown_and_overdue():
+    state = AccountState("0xAAA1234", 1_000.0, 0.0)
+    now = datetime(2026, 7, 22, 12, tzinfo=timezone.utc)
+
+    upcoming = notify.format_pnl(
+        state,
+        {},
+        next_rebalance=now + timedelta(hours=1, minutes=30),
+        now=now,
+    )
+    overdue = notify.format_pnl(
+        state,
+        {},
+        next_rebalance=now - timedelta(minutes=1),
+        now=now,
+    )
+    unknown = notify.format_pnl(state, {}, now=now)
+
+    assert "1h 30m" in upcoming
+    assert "2026-07-22 13:30 UTC" in upcoming
+    assert "OVERDUE" in overdue
+    assert "Next rebalance: <b>unknown</b>" in unknown
+
+
+def test_send_pnl_update_uses_live_state_and_mids(monkeypatch, tmp_path):
     state = AccountState(address="0xAAA", account_value_usd=1.0, margin_used_usd=0.0)
     mids = {"BTC": 100_000.0}
     monkeypatch.setattr(notify, "_fetch_pnl_snapshot", lambda mainnet: (state, mids))
+    monkeypatch.setenv("CPCM_EXECUTION_CONTROL_PANEL_DIR", str(tmp_path / "panel"))
     captured = {}
     monkeypatch.setattr(
         notify, "send",
@@ -281,6 +306,7 @@ def test_send_pnl_update_uses_live_state_and_mids(monkeypatch):
     assert notify.send_pnl_update() is True
     assert captured["kw"] == {"parse_mode": "HTML"}
     assert "CPCM PnL Update" in captured["text"]
+    assert (tmp_path / "panel" / "index.html").exists()
 
 
 def test_run_pnl_loop_sleeps_between_sends(monkeypatch):

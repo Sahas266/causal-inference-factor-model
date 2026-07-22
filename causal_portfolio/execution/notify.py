@@ -26,6 +26,7 @@ import html
 import logging
 import os
 import time
+from datetime import datetime, timezone
 from typing import Any
 
 logger = logging.getLogger("cpcm.execution.notify")
@@ -96,6 +97,28 @@ def _status_emoji(result: Any) -> str:
     return "💤"  # dry-run / no-op
 
 
+def format_next_rebalance(
+    next_rebalance: datetime | None,
+    *,
+    now: datetime | None = None,
+) -> str:
+    """HTML-safe countdown line for Telegram summaries."""
+    if next_rebalance is None:
+        return "Next rebalance: <b>unknown</b>"
+    if next_rebalance.tzinfo is None:
+        next_rebalance = next_rebalance.replace(tzinfo=timezone.utc)
+    next_rebalance = next_rebalance.astimezone(timezone.utc)
+    current = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    label = next_rebalance.strftime("%Y-%m-%d %H:%M UTC")
+    seconds = (next_rebalance - current).total_seconds()
+    if seconds <= 0:
+        return f"Next rebalance: <b>OVERDUE</b> ({label})"
+    minutes = int(seconds // 60)
+    hours, minutes = divmod(minutes, 60)
+    duration = f"{hours}h {minutes}m" if hours else f"{minutes}m"
+    return f"Next rebalance: <b>{duration}</b> ({label})"
+
+
 def format_result(result: Any) -> str:
     """HTML-formatted summary of a SubmitResult for the channel."""
     plan = result.plan
@@ -111,6 +134,17 @@ def format_result(result: Any) -> str:
         f"Submitted: <b>{result.submitted}</b> · Orders: <b>{len(plan.orders)}</b>",
         f"Gross: <b>${gross:,.0f}</b> · Equity: <b>${plan.current_state.account_value_usd:,.0f}</b>",
     ]
+    if result.cost_estimate:
+        estimate = result.cost_estimate
+        measured = estimate.get("estimated_cost_bps")
+        limit = estimate.get("max_transaction_cost_bps")
+        if measured is not None:
+            lines.append(
+                f"Estimated cost: <b>{measured:.2f} bps</b>"
+                + (f" / {_esc(limit)} bps max" if limit is not None else "")
+            )
+    if result.cost_gate_reason:
+        lines.append(f"⏸ <b>Cost gate:</b> {_esc(result.cost_gate_reason)}")
     repair = getattr(result, "repair", None)
     if repair:
         r_emoji = "✅" if repair.get("resolved") else "⚠️"
@@ -146,6 +180,7 @@ def notify_result(result: Any) -> bool:
         or result.error
         or result.post_submit_error
         or result.audit_error
+        or result.cost_gate_reason
     )
     if not noteworthy:
         return False
@@ -173,7 +208,13 @@ def format_state(state: Any) -> str:
     return "\n".join(lines)
 
 
-def format_pnl(state: Any, mids: dict[str, float]) -> str:
+def format_pnl(
+    state: Any,
+    mids: dict[str, float],
+    *,
+    next_rebalance: datetime | None = None,
+    now: datetime | None = None,
+) -> str:
     """HTML-formatted unrealized PnL per position, marked to `mids`.
 
     PnL for coin c = (mid - entry_px) * size — valid for both longs and
@@ -183,6 +224,7 @@ def format_pnl(state: Any, mids: dict[str, float]) -> str:
     lines = [
         f"💰 <b>CPCM PnL Update</b> — <code>{_esc(state.address[:8])}...</code>",
         f"Equity: <b>${state.account_value_usd:,.2f}</b>",
+        format_next_rebalance(next_rebalance, now=now),
     ]
     if not state.positions:
         lines.append("")
@@ -223,7 +265,24 @@ def _fetch_pnl_snapshot(mainnet: bool) -> tuple[Any, dict[str, float]]:
 def send_pnl_update(*, mainnet: bool = False) -> bool:
     """Fetch live state + mids and send one formatted PnL message."""
     state, mids = _fetch_pnl_snapshot(mainnet)
-    return send(format_pnl(state, mids), parse_mode="HTML")
+    next_rebalance = None
+    try:
+        from causal_portfolio.execution import trace
+
+        trace.record_portfolio_snapshot(state, mids)
+        next_rebalance = trace.expected_next_rebalance()
+    except Exception:
+        logger.exception("portfolio trace write failed (continuing)")
+    try:
+        from causal_portfolio.execution.control_panel import write_control_panel
+
+        write_control_panel(state, mids)
+    except Exception:
+        logger.exception("control-panel write failed (continuing)")
+    return send(
+        format_pnl(state, mids, next_rebalance=next_rebalance),
+        parse_mode="HTML",
+    )
 
 
 def run_pnl_loop(*, interval_minutes: float, mainnet: bool = False) -> None:
@@ -262,11 +321,6 @@ def main(argv: list[str] | None = None) -> int:
                    help="Read state from mainnet (read-only; default testnet)")
     args = p.parse_args(argv)
 
-    if not is_configured():
-        print(f"Not configured: set {TOKEN_ENV} and {CHAT_ENV} (see "
-              "causal_portfolio/docs/telegram_notifications.md)")
-        return 1
-
     if args.pnl_loop:
         try:
             run_pnl_loop(interval_minutes=args.interval_minutes, mainnet=args.mainnet)
@@ -283,8 +337,16 @@ def main(argv: list[str] | None = None) -> int:
         adapter = HLAdapter(ExecutionConfig(testnet=not args.mainnet))
         ok = send(format_state(adapter.fetch_state()), parse_mode="HTML")
     elif args.message:
+        if not is_configured():
+            print(f"Not configured: set {TOKEN_ENV} and {CHAT_ENV} (see "
+                  "causal_portfolio/docs/telegram_notifications.md)")
+            return 1
         ok = send(args.message)
     else:
+        if not is_configured():
+            print(f"Not configured: set {TOKEN_ENV} and {CHAT_ENV} (see "
+                  "causal_portfolio/docs/telegram_notifications.md)")
+            return 1
         ok = send("CPCM notification test ping")
     print("sent" if ok else "send failed")
     return 0 if ok else 1
