@@ -1,4 +1,4 @@
-# Execution Threshold and Rebalance Observability Design
+# Execution Cost Gate and Rebalance Observability Design
 
 Date: 2026-07-21  
 Baseline: `execution` at `cdd3c148`
@@ -6,7 +6,7 @@ Baseline: `execution` at `cdd3c148`
 ## Objective
 
 Complete the execution-layer work without replacing behavior that already
-exists. Add a configurable portfolio-level no-trade threshold, show the next
+exists. Add a configurable execution-cost gate, show the next
 rebalance in Telegram updates, run RP-PCA once daily, publish PnL and portfolio
 metrics every 30 minutes, retain a compact price-to-model-to-execution trace
 for every rebalance, and generate a framework-free control panel.
@@ -22,8 +22,8 @@ for every rebalance, and generate a framework-free control panel.
 | Explain suspicious `$1,000` leg failures | Done: `$0` matched leaked synthetic test data; `$1,200` matched stale-target repair accounting | Keep tests isolated; future events become traceable locally |
 | Inspect Telegram history for debugging | Bot API cannot provide a general history of the bot's own old posts | Use local audit and SQLite trace going forward |
 | Maintain a streamed-work todo list | Active in the task plan | Update through delivery |
-| Cost-aware rebalance threshold in execution | Missing; only backtest L1 helper exists | Add execution-level L1 no-trade band |
-| Beautify Telegram messages | Done in 0.1.2 using escaped Telegram HTML | Reuse; add countdown and threshold no-op text |
+| Cost-aware rebalance threshold in execution | Missing; execution has price bands but no pre-trade all-in cost gate | Add a model-agnostic 15 bp transaction-cost ceiling |
+| Beautify Telegram messages | Done in 0.1.2 using escaped Telegram HTML | Reuse; add countdown and cost-gate no-op text |
 | PnL every 30 minutes | Formatter, `--pnl`, and loop exist; nothing is scheduled or running | Schedule the one-shot `--pnl` command every 30 minutes |
 | RP-PCA rebalance once daily | Existing testnet task runs daily at 12:54 ET and is healthy | Preserve and verify the existing task; never create a duplicate |
 | Time to next rebalance | Missing | Store next rebalance time and render a countdown |
@@ -35,35 +35,49 @@ for every rebalance, and generate a framework-free control panel.
 The existing daily testnet task is healthy: it last completed successfully on
 2026-07-21 at 12:54 ET and is scheduled daily at 12:54 ET.
 
-## 1. Execution-Level No-Trade Threshold
+## 1. Execution-Level Transaction-Cost Gate
 
-Add `rebalance_threshold_l1: float = 0.0` to `ExecutionConfig`. The default
-preserves all existing callers. Reject negative values.
+Replace the proposed L1 threshold with one model-agnostic transaction-cost
+gate. Add `max_transaction_cost_bps: float | None = None` and
+`estimated_taker_fee_bps: float = 4.5` to `ExecutionConfig`; reject negative
+values. `None` preserves existing library callers, while the deployed RP-PCA
+task explicitly sets the maximum to **15 bps**.
 
-This threshold is deliberately model-agnostic. It may consume only the target
-weights supplied through `TargetSnapshot`, live `AccountState`, the executor's
-mapped and capped target notionals, and `ExecutionConfig`. It must not import
+The gate may consume only the rounded, capped orders, live account state,
+current mids, live L2 books, and execution configuration. It must not import
 model or backtest code, inspect strategy metadata, or use covariance, factor
 exposure, forecasts, expected returns, or model confidence. Every model routed
 through `execute_target()` receives the same execution policy.
 
-`plan_rebalance()` already computes capped target notionals and live position
-deltas. Immediately after that calculation, compute:
+After `plan_rebalance()` has applied caps, minimum sizes, and precision, the
+Hyperliquid adapter walks the existing L2 snapshots for each order's full size
+and computes:
 
 ```text
-turnover_l1 = sum(abs(delta_usd)) / equity_used
+planned_notional = sum(order_size * mid)
+slippage_usd = sum(order_size * abs(estimated_vwap - mid))
+fee_usd = sum(order_size * estimated_vwap * estimated_taker_fee_bps / 10_000)
+estimated_cost_bps = (slippage_usd + fee_usd) / planned_notional * 10_000
 ```
 
-If the configured threshold is positive and `turnover_l1` is below it, return
-the normal auditable plan with no orders and a machine-readable
-`below_rebalance_threshold` skip reason. Equality executes. This location
-includes held assets absent from the new target and uses the same capped target
-the executor would otherwise trade.
+Execute when `estimated_cost_bps <= max_transaction_cost_bps`. Above the
+maximum, return the normal auditable no-order result with machine-readable
+`estimated_cost_above_limit`. When the gate is enabled, a missing, crossed, or
+insufficient-depth book fails closed with `cost_estimate_unavailable`; no order
+is submitted.
 
-Expose the setting through the execution CLI and RP-PCA CLI. Do not silently
-choose a nonzero production value: the generic library remains at zero. Testnet
-operators can set a value after the new trace shows actual turnover and costs.
-Threshold no-ops must notify Telegram and be stored as model decisions.
+Keep `min_order_notional_usd=$10` only as a venue-validity guard so undersized
+orders are surfaced before exchange rejection; it is not a rebalance
+threshold. Preserve the existing full reduce-only close exemption. Keep
+`slippage_bps` and `smart_max_band_bps` as submission price-safety limits; they
+are not cost estimates.
+
+Expose both cost settings through the execution and RP-PCA CLIs. Store the
+estimate inputs, estimated cost, decision, and later realized fill cost in
+SQLite, and include cost-gate no-ops in Telegram. Start RP-PCA at 15 bps: local
+evidence shows a 4.5 bp testnet taker fee and observed IOC all-in costs around
+8.7-10.2 bps. After roughly 30 logged rebalances, compare pre-trade estimates
+with realized costs and adjust the value manually; do not auto-tune it.
 
 ## 2. Telegram PnL and Rebalance Countdown
 
@@ -132,7 +146,8 @@ connections and ordinary transactions are sufficient for the daily writer and
   unrealized PnL for the union of current target and held coins. One aggregate
   row also records equity, margin used/free, gross/net exposure, total
   unrealized PnL, and position count.
-- `threshold_noop`: records the measured L1 turnover and configured threshold.
+- `cost_gate_noop`: records planned notional, fee and slippage estimates,
+  estimated all-in cost bps, configured maximum, and the skip reason.
 
 Trace writes are observability, not trading gates. Ordinary write failures log
 a warning and execution continues. Rotation is the exception: failure preserves
@@ -162,7 +177,7 @@ The panel shows:
 - equity, unrealized PnL, margin/free margin, gross/net exposure;
 - target versus actual weight for every target or held asset;
 - current mid, position notional, and per-position PnL;
-- latest threshold decision and execution/repair status.
+- latest cost-gate decision and execution/repair status.
 
 Use a brutally minimal dark data-console direction: semantic HTML, high
 contrast, 4/8px spacing, tabular numbers, responsive tables, visible keyboard
@@ -193,7 +208,8 @@ weights, planned trades, actual state, repairs, and PnL.
 
 Add focused regressions for:
 
-- below/equal/above threshold behavior and explicit threshold no-op reason;
+- below/equal/above cost-limit behavior, unavailable-book fail-closed behavior,
+  and explicit cost-gate no-op reasons;
 - archive rotation preserving the old database and refusing overwrite;
 - model, plan/result, and 30-minute snapshot rows;
 - aggregate PnL and portfolio metrics on every 30-minute tick;
@@ -217,7 +233,7 @@ compatible Hyperliquid SDK dependency range.
   defensible expected-benefit value. Model-specific tracking-error,
   factor-capture, covariance, or alpha gates belong upstream and may influence
   the submitted `TargetSnapshot`, but cannot alter the generic execution
-  threshold. The L1 band is the existing repo pattern.
+  cost gate.
 - Tick or order-book history: 30-minute mids are enough for this requested
   rebalance-level map. The separate DuckDB market-making recorder owns
   microstructure data.
