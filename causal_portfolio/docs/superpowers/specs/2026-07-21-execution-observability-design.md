@@ -40,6 +40,13 @@ The existing daily testnet task is healthy: it last completed successfully on
 Add `rebalance_threshold_l1: float = 0.0` to `ExecutionConfig`. The default
 preserves all existing callers. Reject negative values.
 
+This threshold is deliberately model-agnostic. It may consume only the target
+weights supplied through `TargetSnapshot`, live `AccountState`, the executor's
+mapped and capped target notionals, and `ExecutionConfig`. It must not import
+model or backtest code, inspect strategy metadata, or use covariance, factor
+exposure, forecasts, expected returns, or model confidence. Every model routed
+through `execute_target()` receives the same execution policy.
+
 `plan_rebalance()` already computes capped target notionals and live position
 deltas. Immediately after that calculation, compute:
 
@@ -207,7 +214,10 @@ compatible Hyperliquid SDK dependency range.
 ## Non-Goals
 
 - Predicting whether expected alpha exceeds fees: targets do not carry a
-  defensible expected-benefit value. The L1 band is the existing repo pattern.
+  defensible expected-benefit value. Model-specific tracking-error,
+  factor-capture, covariance, or alpha gates belong upstream and may influence
+  the submitted `TargetSnapshot`, but cannot alter the generic execution
+  threshold. The L1 band is the existing repo pattern.
 - Tick or order-book history: 30-minute mids are enough for this requested
   rebalance-level map. The separate DuckDB market-making recorder owns
   microstructure data.
