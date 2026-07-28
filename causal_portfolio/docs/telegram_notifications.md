@@ -58,6 +58,8 @@ Windows Task Scheduler runs `causal_portfolio/execution/run_pnl_notifier.cmd`
 every 30 minutes under `CPCM_Portfolio_30m_HL_Testnet`. The wrapper is one-shot;
 the scheduler owns recurrence. Each tick logs SQLite portfolio metrics, updates
 the local control panel, then posts PnL and the next-rebalance countdown.
+If Hyperliquid is unreachable, the tick records a health event, refreshes the
+panel with the failure status, and exits non-zero instead of inventing PnL.
 
 `--pnl-loop --interval-minutes 30` remains available for non-Windows hosts but
 is not the deployed Windows path.

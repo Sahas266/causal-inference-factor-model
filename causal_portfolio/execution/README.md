@@ -159,6 +159,10 @@ to a 15 bp all-in cost ceiling:
 python -m causal_portfolio.models.rppca_daily --loop --every-hours 24 --execute --target-out tmp/rppca_daily_target.json
 ```
 
+The deployed Windows task is `CPCM_RPPCA_Daily_HL_Testnet`. It runs once daily,
+starts after a missed schedule, wakes the machine, and retries transient
+failures up to three times at 15-minute intervals.
+
 Mainnet is non-interactive for scheduling, so it requires both explicit flags:
 
 ```bash
@@ -204,6 +208,7 @@ the direct command is useful for an execution-only development environment.
 |---|---|---|
 | `dry_run` | True | Must explicitly opt-in to live trading |
 | `testnet` | True | Mainnet only via explicit flag |
+| `network_timeout_seconds` | 15 | Bound each SDK HTTP request |
 | `leverage` | 1.0 | No implicit leverage |
 | `max_position_pct` | 0.30 | Cap any single asset at 30% of equity |
 | `max_single_trade_pct` | 0.10 | One trade can't move more than 10% of equity |

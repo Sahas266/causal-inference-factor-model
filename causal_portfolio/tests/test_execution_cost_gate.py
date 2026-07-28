@@ -117,3 +117,7 @@ def test_cost_config_rejects_negative_values():
         ExecutionConfig(max_transaction_cost_bps=float("nan"))
     with pytest.raises(ValueError, match="estimated_taker_fee_bps"):
         ExecutionConfig(estimated_taker_fee_bps=float("inf"))
+    with pytest.raises(ValueError, match="network_timeout_seconds"):
+        ExecutionConfig(network_timeout_seconds=0)
+    with pytest.raises(ValueError, match="network_timeout_seconds"):
+        ExecutionConfig(network_timeout_seconds=float("nan"))

@@ -122,7 +122,13 @@ def forward_fill_prices(
     if prices.empty:
         raise ValueError("no price data loaded")
     daily = prices.sort_index().resample("D").last()
-    last_data_date = daily.dropna(how="all").index.max()
+    last_dates = {column: daily[column].last_valid_index() for column in daily.columns}
+    missing_history = [column for column, value in last_dates.items() if value is None]
+    if missing_history:
+        raise ValueError(f"no price history for: {', '.join(missing_history)}")
+    # A target is only as fresh as its stalest required input. Using the newest
+    # date where *any* asset traded lets one fresh series hide stale sleeves.
+    last_data_date = min(last_dates.values())
     end_date = pd.Timestamp(end).tz_localize(None).normalize()
     full_index = pd.date_range(daily.index.min().normalize(), end_date, freq="D")
     limit = None if max_ffill_days < 0 else max_ffill_days
@@ -260,7 +266,9 @@ def run_once(args: argparse.Namespace) -> RPPCAResult:
     write_target(
         weights,
         target_path=target_path,
-        rebalance_date=pd.Timestamp(end),
+        # Signal freshness follows the latest real observation, not the date
+        # to which prices were forward-filled for matrix alignment.
+        rebalance_date=last_data_date,
         generated_at=now,
         metadata={
             "assets": assets,

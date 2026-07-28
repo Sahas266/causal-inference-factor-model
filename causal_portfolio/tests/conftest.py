@@ -39,8 +39,9 @@ def _isolate_runtime_state(monkeypatch, _runtime_state_root, request):
     directory for all ~560 tests on every run, which measurably slowed the
     suite and piled up thousands of retained directories.)
     """
-    from causal_portfolio.execution import audit
+    from causal_portfolio.execution import audit, run_logging
 
     slot = _runtime_state_root / re.sub(r"[^A-Za-z0-9_.-]+", "_", request.node.nodeid)
     monkeypatch.setattr(audit, "LOG_DIR", slot / "logs")
+    monkeypatch.setattr(run_logging, "LOG_DIR", slot / "logs")
     monkeypatch.setenv("CPCM_EXECUTION_CONTROL_PANEL_DIR", str(slot / "panel"))

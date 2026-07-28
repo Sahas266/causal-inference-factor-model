@@ -7,6 +7,23 @@ backwards-compatible features, PATCH = fixes. Exchange SDK compatibility line:
 `hyperliquid-python-sdk~=0.24.0` (minor bump = at least MINOR here, re-run the
 testnet gate first).
 
+## [0.2.1] - 2026-07-28
+
+### Fixed
+- Enrich an already-open trace cycle with the executing asset map, model
+  prices, and later-declared rebalance cadence.
+- Accept explicit `weight_*` CSV columns for custom model asset maps.
+- Mark aggregate PnL unavailable when any open position lacks a mid instead
+  of publishing an available-only subtotal as the total.
+- Split long Telegram messages without truncating HTML markup.
+- Stamp RP-PCA signal freshness from the latest real price observation rather
+  than the forward-fill horizon.
+- Bound SDK HTTP requests, expose failed portfolio ticks in SQLite/the panel,
+  retry transient Windows trace-rotation locks, and fail closed without the
+  repository virtual environment.
+- Isolate all execution run logs from the operator's runtime tree during tests.
+- Give the model-agnostic package layout its own release version.
+
 ## [0.2.0] - 2026-07-22
 
 ### Added

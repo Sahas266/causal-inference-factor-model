@@ -48,16 +48,20 @@ def _first_timestamp(mapping: dict[str, Any], keys: tuple[str, ...]) -> datetime
 def _csv_asset_name(column: str) -> str | None:
     """Return the target ticker represented by a CSV column, or None.
 
-    Dated CSV execution targets are intentionally strict: every unprefixed
-    column must be a known executable asset, a known metadata column, or an
-    underscore-prefixed metadata field. This prevents accidental numeric
-    analytics columns such as `turnover` from becoming phantom target assets.
+    Dated CSV execution targets are intentionally strict: an unprefixed column
+    must be a default executable asset or metadata. Explicit `weight_*`
+    columns may name any model asset; the caller's ExecutionConfig.asset_map
+    remains the authority that makes it executable. This keeps analytics such
+    as `turnover` from becoming phantom targets without hardcoding universes.
     """
     normalized = column.strip().lower()
     if normalized in _NON_ASSET_COLUMNS or normalized.startswith("_"):
         return None
     if normalized.startswith("weight_"):
         normalized = normalized.removeprefix("weight_")
+        if not normalized:
+            raise ValueError("Target CSV column 'weight_' has no asset name")
+        return normalized
     if normalized in _KNOWN_TARGET_ASSETS:
         return normalized
     raise ValueError(
@@ -119,10 +123,17 @@ def _load_csv(path: Path) -> TargetSnapshot:
     as_of, latest = max(dated_rows, key=lambda item: item[0])
 
     raw_weights: dict[str, float] = {}
+    asset_columns: dict[str, str] = {}
     for column in fieldnames:
         asset = _csv_asset_name(column)
         if asset is None:
             continue
+        if asset in asset_columns:
+            raise ValueError(
+                f"Duplicate target asset {asset!r} after column normalization: "
+                f"{asset_columns[asset]!r} and {column!r}"
+            )
+        asset_columns[asset] = column
         value = latest.get(column)
         if value is None or value.strip() == "":
             raise ValueError(f"Latest target row has a blank weight for {column!r}")

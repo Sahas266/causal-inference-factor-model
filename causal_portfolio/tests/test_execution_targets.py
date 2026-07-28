@@ -98,6 +98,14 @@ def test_load_csv_accepts_weight_prefix_and_rejects_unknown_metadata(tmp_path):
     target = load_target_snapshot(prefixed)
     assert target.weights == {"btc": 0.25}
 
+    custom = tmp_path / "custom.csv"
+    custom.write_text(
+        "rebalance_date,weight_bonk,_note\n"
+        "2026-06-22,0.15,custom asset map\n",
+        encoding="utf-8",
+    )
+    assert load_target_snapshot(custom).weights == {"bonk": 0.15}
+
     bad = tmp_path / "bad.csv"
     bad.write_text(
         "rebalance_date,BTC,turnover\n"
@@ -106,6 +114,15 @@ def test_load_csv_accepts_weight_prefix_and_rejects_unknown_metadata(tmp_path):
     )
     with pytest.raises(ValueError, match="Unknown target CSV column"):
         load_target_snapshot(bad)
+
+    duplicate = tmp_path / "duplicate.csv"
+    duplicate.write_text(
+        "rebalance_date,weight_bonk,weight_BONK\n"
+        "2026-06-22,0.15,0.25\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="Duplicate target asset 'bonk'"):
+        load_target_snapshot(duplicate)
 
 
 def test_target_id_is_stable_across_source_paths():

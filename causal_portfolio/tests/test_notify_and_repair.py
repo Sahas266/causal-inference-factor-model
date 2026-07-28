@@ -266,6 +266,8 @@ def test_format_pnl_flags_missing_mid():
     )
     text = notify.format_pnl(state, mids={})
     assert "mid price unavailable" in text
+    assert "Total unrealized PnL unavailable" in text
+    assert "Total unrealized PnL: $" not in text
 
 
 def test_format_pnl_shows_next_rebalance_countdown_and_overdue():
@@ -309,6 +311,44 @@ def test_send_pnl_update_uses_live_state_and_mids(monkeypatch, tmp_path):
     assert (tmp_path / "panel" / "index.html").exists()
 
 
+def test_failed_pnl_tick_is_visible_in_trace_and_panel(monkeypatch, tmp_path):
+    from causal_portfolio.execution import audit, trace
+
+    log_dir = tmp_path / "logs"
+    panel_dir = tmp_path / "panel"
+    monkeypatch.setattr(audit, "LOG_DIR", log_dir)
+    monkeypatch.setenv("CPCM_EXECUTION_CONTROL_PANEL_DIR", str(panel_dir))
+    target = TargetSnapshot(
+        {"btc": 0.1},
+        as_of=datetime.now(timezone.utc),
+        strategy="health-test",
+    )
+    trace.start_cycle(target, log_dir=log_dir)
+    state = AccountState(
+        address="0xAAA",
+        account_value_usd=1_000.0,
+        margin_used_usd=0.0,
+        positions={"BTC": Position("BTC", 0.001, 100_000.0, 100.0)},
+    )
+    trace.record_portfolio_snapshot(state, {"BTC": 100_000.0}, log_dir=log_dir)
+
+    def fail(_mainnet):
+        raise ConnectionError("testnet offline")
+
+    monkeypatch.setattr(notify, "_fetch_pnl_snapshot", fail)
+
+    with pytest.raises(ConnectionError, match="testnet offline"):
+        notify.send_pnl_update()
+
+    data = trace.panel_data(log_dir)
+    assert data["status"] == {}
+    assert data["health"]["kind"] == "portfolio_snapshot_error"
+    assert data["health"]["error_type"] == "ConnectionError"
+    html = (panel_dir / "index.html").read_text(encoding="utf-8")
+    assert "portfolio_snapshot_error" in html
+    assert "testnet offline" in html
+
+
 def test_run_pnl_loop_sleeps_between_sends(monkeypatch):
     calls = []
     monkeypatch.setattr(notify, "send_pnl_update", lambda **kw: calls.append(kw) or True)
@@ -341,6 +381,66 @@ def test_send_posts_to_telegram(monkeypatch):
     assert notify.send("hello") is True
     assert "123:abc" in calls["url"]
     assert calls["json"] == {"chat_id": "-100", "text": "hello"}
+
+
+def test_send_splits_long_html_at_complete_lines(monkeypatch):
+    monkeypatch.setenv(notify.TOKEN_ENV, "123:abc")
+    monkeypatch.setenv(notify.CHAT_ENV, "-100")
+    payloads = []
+
+    def fake_post(_url, json=None, timeout=None):
+        payloads.append(json)
+        return MagicMock(status_code=200)
+
+    monkeypatch.setattr("requests.post", fake_post)
+    text = "\n".join(f"<b>asset {i}</b> " + "x" * 80 for i in range(100))
+
+    assert notify.send(text, parse_mode="HTML") is True
+    assert len(payloads) > 1
+    assert "".join(item["text"] for item in payloads) == text
+    assert all(len(item["text"]) <= notify._MAX_LEN for item in payloads)
+    assert all(item["parse_mode"] == "HTML" for item in payloads)
+    assert all(
+        item["text"].count("<b>") == item["text"].count("</b>")
+        for item in payloads
+    )
+
+
+def test_send_long_single_html_line_falls_back_to_plain_text(monkeypatch):
+    monkeypatch.setenv(notify.TOKEN_ENV, "123:abc")
+    monkeypatch.setenv(notify.CHAT_ENV, "-100")
+    payloads = []
+
+    def fake_post(_url, json=None, timeout=None):
+        payloads.append(json)
+        return MagicMock(status_code=200)
+
+    monkeypatch.setattr("requests.post", fake_post)
+    text = "x" * notify._MAX_LEN + "<b>ok</b>"
+
+    assert notify.send(text, parse_mode="HTML") is True
+    assert len(payloads) == 2
+    assert "".join(item["text"] for item in payloads) == "x" * notify._MAX_LEN + "ok"
+    assert all("parse_mode" not in item for item in payloads)
+
+
+def test_send_html_tag_spanning_chunks_falls_back_to_plain_text(monkeypatch):
+    monkeypatch.setenv(notify.TOKEN_ENV, "123:abc")
+    monkeypatch.setenv(notify.CHAT_ENV, "-100")
+    payloads = []
+
+    def fake_post(_url, json=None, timeout=None):
+        payloads.append(json)
+        return MagicMock(status_code=200)
+
+    monkeypatch.setattr("requests.post", fake_post)
+    plain_text = "x\n" * (notify._MAX_LEN // 2 + 10)
+    text = f"<b>{plain_text}</b>"
+
+    assert notify.send(text, parse_mode="HTML") is True
+    assert len(payloads) > 1
+    assert "".join(item["text"] for item in payloads) == plain_text
+    assert all("parse_mode" not in item for item in payloads)
 
 
 def test_send_does_not_log_bot_token_on_request_error(monkeypatch, caplog):

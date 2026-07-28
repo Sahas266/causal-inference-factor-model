@@ -26,11 +26,12 @@ body{max-width:1100px;margin:auto;padding:24px}header{display:flex;justify-conte
 <main id="main-content">
 <section aria-labelledby="metrics-title"><h2 id="metrics-title">Portfolio</h2><div id="metrics" class="grid"></div></section>
 <section aria-labelledby="weights-title"><h2 id="weights-title">Weights</h2><div class="table-wrap"><table><caption class="skip">Target weights compared with current portfolio weights</caption><thead><tr><th scope="col">Asset</th><th scope="col">Target weight</th><th scope="col">Actual weight</th><th scope="col">Mid</th><th scope="col">Position</th><th scope="col">Unrealized PnL</th></tr></thead><tbody id="assets"></tbody></table></div></section>
+<section aria-labelledby="health-title"><h2 id="health-title">Portfolio data health</h2><div id="health" class="status" aria-live="polite"></div></section>
 <section aria-labelledby="status-title"><h2 id="status-title">Latest execution</h2><div id="status" class="status" aria-live="polite"></div></section>
 </main>
 <script id="panel-data" type="application/json">__DATA__</script>
 <script>
-const data=JSON.parse(document.getElementById('panel-data').textContent);const $=id=>document.getElementById(id);const money=v=>v==null?'—':new Intl.NumberFormat('en-US',{style:'currency',currency:'USD'}).format(v);const pct=v=>v==null?'—':`${(v*100).toFixed(2)}%`;const metric=(label,value)=>{const box=document.createElement('div');box.className='card';const name=document.createElement('div');name.className='muted';name.textContent=label;const val=document.createElement('div');val.className='value';val.textContent=value;box.append(name,val);return box};const meta=data.meta||{},m=data.metrics||{};$('identity').textContent=`${meta.strategy||'unknown'} · target ${meta.target_id||'unknown'} · updated ${m.updated_at||'never'}`;[['Equity',money(m.equity_usd)],['Unrealized PnL',money(m.unrealized_pnl_usd)],['Free margin',money(m.free_margin_usd)],['Gross exposure',money(m.gross_exposure_usd)],['Net exposure',money(m.net_exposure_usd)]].forEach(x=>$('metrics').append(metric(...x)));for(const a of data.assets||[]){const tr=document.createElement('tr');[a.coin,pct(a.target_weight),pct(a.actual_weight),money(a.mid_price),money(a.position_usd),money(a.unrealized_pnl_usd)].forEach((value,i)=>{const td=document.createElement('td');td.textContent=value;if(i===5&&a.unrealized_pnl_usd!=null)td.className=a.unrealized_pnl_usd>=0?'positive':'negative';tr.append(td)});$('assets').append(tr)}const next=meta.expected_next_rebalance?new Date(meta.expected_next_rebalance):null;if(!next||Number.isNaN(next.valueOf())){$('countdown').textContent='Next rebalance: unknown'}else{const delta=next-Date.now();$('countdown').textContent=delta<=0?`Next rebalance: OVERDUE (${next.toISOString()})`:`Next rebalance: ${Math.floor(delta/3600000)}h ${Math.floor((delta%3600000)/60000)}m (${next.toISOString()})`}$('status').textContent=Object.keys(data.status||{}).length?JSON.stringify(data.status):'No execution recorded';
+const data=JSON.parse(document.getElementById('panel-data').textContent);const $=id=>document.getElementById(id);const money=v=>v==null?'—':new Intl.NumberFormat('en-US',{style:'currency',currency:'USD'}).format(v);const pct=v=>v==null?'—':`${(v*100).toFixed(2)}%`;const metric=(label,value)=>{const box=document.createElement('div');box.className='card';const name=document.createElement('div');name.className='muted';name.textContent=label;const val=document.createElement('div');val.className='value';val.textContent=value;box.append(name,val);return box};const meta=data.meta||{},m=data.metrics||{};$('identity').textContent=`${meta.strategy||'unknown'} · target ${meta.target_id||'unknown'} · updated ${m.updated_at||'never'}`;[['Equity',money(m.equity_usd)],['Unrealized PnL',money(m.unrealized_pnl_usd)],['Free margin',money(m.free_margin_usd)],['Gross exposure',money(m.gross_exposure_usd)],['Net exposure',money(m.net_exposure_usd)]].forEach(x=>$('metrics').append(metric(...x)));for(const a of data.assets||[]){const tr=document.createElement('tr');[a.coin,pct(a.target_weight),pct(a.actual_weight),money(a.mid_price),money(a.position_usd),money(a.unrealized_pnl_usd)].forEach((value,i)=>{const td=document.createElement('td');td.textContent=value;if(i===5&&a.unrealized_pnl_usd!=null)td.className=a.unrealized_pnl_usd>=0?'positive':'negative';tr.append(td)});$('assets').append(tr)}const next=meta.expected_next_rebalance?new Date(meta.expected_next_rebalance):null;if(!next||Number.isNaN(next.valueOf())){$('countdown').textContent='Next rebalance: unknown'}else{const delta=next-Date.now();$('countdown').textContent=delta<=0?`Next rebalance: OVERDUE (${next.toISOString()})`:`Next rebalance: ${Math.floor(delta/3600000)}h ${Math.floor((delta%3600000)/60000)}m (${next.toISOString()})`}$('health').textContent=Object.keys(data.health||{}).length?JSON.stringify(data.health):'No portfolio tick recorded';$('status').textContent=Object.keys(data.status||{}).length?JSON.stringify(data.status):'No execution recorded';
 </script>
 </body>
 </html>
@@ -43,7 +44,7 @@ def _default_output_dir() -> Path:
 
 
 def write_control_panel(
-    state: AccountState,
+    state: AccountState | None,
     mids: dict[str, float],
     *,
     log_dir: Path | None = None,
@@ -53,7 +54,7 @@ def write_control_panel(
     from causal_portfolio.execution.trace import panel_data
 
     data = panel_data(log_dir)
-    if not data["metrics"]:
+    if not data["metrics"] and state is not None:
         notionals = [position.notional_usd for position in state.positions.values()]
         data["metrics"] = {
             "updated_at": datetime.now(timezone.utc).isoformat(),

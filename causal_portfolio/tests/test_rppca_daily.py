@@ -46,8 +46,12 @@ def test_rppca_daily_generates_loadable_forward_filled_target(tmp_path):
 
     assert target.exists()
     assert loaded.strategy == "RP-PCA daily tangency"
-    assert loaded.as_of == datetime(2026, 2, 2, tzinfo=timezone.utc)
+    assert loaded.as_of == datetime(2026, 1, 30, tzinfo=timezone.utc)
     assert loaded.metadata["last_data_date"] == "2026-01-30"
+    assert loaded.freshness_error(
+        72,
+        now=datetime(2026, 2, 2, 12, tzinfo=timezone.utc),
+    ) is not None
     assert set(loaded.weights) <= {"btc", "eth", "sol"}
 
 
@@ -95,6 +99,27 @@ def test_forward_fill_prices_enforces_limit(tmp_path):
 
     with pytest.raises(ValueError, match="increase --max-ffill-days"):
         forward_fill_prices(prices, end="2026-01-10", max_ffill_days=2)
+
+
+def test_forward_fill_freshness_uses_stalest_asset_observation():
+    import pandas as pd
+
+    prices = pd.DataFrame(
+        {
+            "btc": [100.0, 101.0, 102.0],
+            "eth": [50.0, None, None],
+        },
+        index=pd.DatetimeIndex(["2026-01-01", "2026-01-02", "2026-01-03"]),
+    )
+
+    filled, last_data_date = forward_fill_prices(
+        prices,
+        end="2026-01-03",
+        max_ffill_days=7,
+    )
+
+    assert filled.iloc[-1].notna().all()
+    assert last_data_date == pd.Timestamp("2026-01-01")
 
 
 def test_default_end_resolves_at_run_time():

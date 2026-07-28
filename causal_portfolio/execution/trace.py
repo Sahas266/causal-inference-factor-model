@@ -7,6 +7,7 @@ import logging
 import math
 import re
 import sqlite3
+import time
 from contextlib import contextmanager
 from dataclasses import asdict, is_dataclass
 from datetime import datetime, timezone
@@ -20,6 +21,8 @@ from causal_portfolio.execution.types import AccountState, RebalancePlan, Submit
 logger = logging.getLogger("cpcm.execution.trace")
 
 ACTIVE_NAME = "rebalance-current.sqlite3"
+_ARCHIVE_RETRIES = 20
+_ARCHIVE_RETRY_SECONDS = 0.1
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (
     key TEXT PRIMARY KEY,
@@ -94,6 +97,18 @@ def archive_path(log_dir: Path, started_utc: str, target_id: str) -> Path:
         stamp = re.sub(r"[^0-9A-Za-z]+", "", started_utc)[:32] or "unknown"
     safe_target = re.sub(r"[^0-9A-Za-z_-]+", "", target_id) or "unversioned"
     return Path(log_dir) / f"rebalance-{stamp}-{safe_target}.sqlite3"
+
+
+def _archive_active(path: Path, archive: Path) -> None:
+    """Retry brief Windows sharing violations from a concurrent PnL tick."""
+    for attempt in range(_ARCHIVE_RETRIES):
+        try:
+            path.replace(archive)
+            return
+        except OSError:
+            if attempt == _ARCHIVE_RETRIES - 1:
+                raise
+            time.sleep(_ARCHIVE_RETRY_SECONDS)
 
 
 @contextmanager
@@ -192,11 +207,31 @@ def _record_model_target(
     asset_map: dict[str, str] | None = None,
 ) -> None:
     with _connect(path) as conn:
-        exists = conn.execute(
-            "SELECT 1 FROM events WHERE kind='model_target' AND target_id=? LIMIT 1",
+        existing = conn.execute(
+            "SELECT id, coin, price_source, mid_price, payload_json FROM events "
+            "WHERE kind='model_target' AND target_id=? ORDER BY id",
             (target.target_id,),
-        ).fetchone()
-        if exists:
+        ).fetchall()
+        if existing:
+            # A model may open the trace before an ExecutionConfig exists, then
+            # execute_target() reopens the same cycle with the authoritative
+            # venue map. Enrich those original rows instead of keeping the
+            # guessed/default map forever.
+            for row_id, ticker, old_source, old_mid, payload_json in existing:
+                payload = json.loads(payload_json)
+                payload["metadata"] = target.metadata
+                if asset_map is not None:
+                    payload["hl_coin"] = asset_map.get(ticker)
+                conn.execute(
+                    "UPDATE events SET price_source=?, mid_price=?, payload_json=? "
+                    "WHERE id=?",
+                    (
+                        price_source if price_source is not None else old_source,
+                        (model_prices or {}).get(ticker, old_mid),
+                        _json(payload),
+                        row_id,
+                    ),
+                )
             return
         ts = _utc_now().isoformat()
         for ticker, weight in sorted(target.weights.items()):
@@ -255,7 +290,7 @@ def start_cycle(
                     logger.error("trace archive exists; preserving active cycle: %s", archive)
                     return None
                 try:
-                    path.replace(archive)
+                    _archive_active(path, archive)
                 except OSError:
                     logger.exception("trace archive failed; preserving active cycle")
                     return None
@@ -277,6 +312,18 @@ def start_cycle(
                     ),
                     "started_utc": _utc_now().isoformat(),
                 })
+            else:
+                # Same target, richer provenance: preserve the cycle start but
+                # accept cadence supplied after the first best-effort open.
+                next_rebalance = None
+                if expected_next_rebalance is not None:
+                    next_rebalance = expected_next_rebalance.astimezone(
+                        timezone.utc
+                    ).isoformat()
+                elif not meta.get("expected_next_rebalance"):
+                    next_rebalance = target.metadata.get("expected_next_rebalance")
+                if next_rebalance:
+                    _write_meta(conn, {"expected_next_rebalance": next_rebalance})
         _record_model_target(path, target, model_prices, price_source, asset_map)
         return path
     except Exception:
@@ -443,9 +490,12 @@ def record_portfolio_snapshot(
             coins = sorted(set(targets) | set(state.positions))
             ts = _utc_now().isoformat()
             total_pnl = 0.0
+            missing_mid_coins: list[str] = []
             for coin in coins:
                 position = state.positions.get(coin)
                 mid = mids.get(coin)
+                if position is not None and mid is None:
+                    missing_mid_coins.append(coin)
                 pnl = (
                     (mid - position.entry_px) * position.size
                     if position is not None and mid is not None
@@ -482,6 +532,7 @@ def record_portfolio_snapshot(
             notionals = [position.notional_usd for position in state.positions.values()]
             gross = sum(abs(value) for value in notionals)
             net = sum(notionals)
+            complete_total_pnl = None if missing_mid_coins else total_pnl
             _insert_event(
                 conn,
                 target_id=target_id,
@@ -492,15 +543,44 @@ def record_portfolio_snapshot(
                 free_margin_usd=state.free_margin_usd,
                 gross_exposure_usd=gross,
                 net_exposure_usd=net,
-                unrealized_pnl_usd=total_pnl,
+                unrealized_pnl_usd=complete_total_pnl,
                 payload={
-                    "total_unrealized_pnl_usd": total_pnl,
+                    "total_unrealized_pnl_usd": complete_total_pnl,
+                    "priced_unrealized_pnl_usd": total_pnl,
+                    "missing_mid_coins": missing_mid_coins,
                     "position_count": len(state.positions),
                 },
             )
         return True
     except Exception:
         logger.exception("trace portfolio write failed (continuing)")
+        return False
+
+
+def record_portfolio_error(
+    error: BaseException,
+    *,
+    log_dir: Path | None = None,
+) -> bool:
+    """Record a failed scheduled portfolio tick without inventing metrics."""
+    path = _matching_active(None, log_dir)
+    if path is None:
+        return False
+    try:
+        meta = read_meta(path)
+        with _connect(path) as conn:
+            _insert_event(
+                conn,
+                target_id=meta.get("target_id"),
+                kind="portfolio_snapshot_error",
+                payload={
+                    "error_type": type(error).__name__,
+                    "message": str(error)[:2_000],
+                },
+            )
+        return True
+    except Exception:
+        logger.exception("trace portfolio error write failed (continuing)")
         return False
 
 
@@ -518,7 +598,13 @@ def panel_data(log_dir: Path | None = None) -> dict[str, Any]:
     path = active_path(log_dir)
     meta = read_meta(path)
     if not meta:
-        return {"meta": {}, "metrics": {}, "assets": [], "status": {}}
+        return {
+            "meta": {},
+            "metrics": {},
+            "assets": [],
+            "status": {},
+            "health": {},
+        }
     with _connect(path) as conn:
         latest = conn.execute(
             "SELECT ts_utc FROM events WHERE kind='portfolio_snapshot' AND coin IS NULL "
@@ -573,4 +659,21 @@ def panel_data(log_dir: Path | None = None) -> dict[str, Any]:
             if status_row
             else {}
         )
-    return {"meta": meta, "metrics": metrics, "assets": assets, "status": status}
+        health_row = conn.execute(
+            "SELECT kind, ts_utc, payload_json FROM events "
+            "WHERE kind='portfolio_snapshot_error' "
+            "OR (kind='portfolio_snapshot' AND coin IS NULL) "
+            "ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        health = (
+            {"kind": health_row[0], "ts_utc": health_row[1], **json.loads(health_row[2])}
+            if health_row
+            else {}
+        )
+    return {
+        "meta": meta,
+        "metrics": metrics,
+        "assets": assets,
+        "status": status,
+        "health": health,
+    }

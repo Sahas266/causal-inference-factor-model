@@ -4,6 +4,7 @@ import json
 import sqlite3
 from contextlib import closing
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 from causal_portfolio.execution import trace
 from causal_portfolio.execution.control_panel import write_control_panel
@@ -70,6 +71,28 @@ def test_cycle_rotates_once_and_never_overwrites_archive(tmp_path):
     assert trace.start_cycle(third, log_dir=tmp_path) is None
     assert trace.read_meta(active)["target_id"] == second.target_id
     assert reserved.read_text(encoding="utf-8") == "reserved"
+
+
+def test_cycle_rotation_retries_transient_windows_lock(tmp_path, monkeypatch):
+    first = _target(0.1)
+    second = _target(0.2, hour=13)
+    active = trace.start_cycle(first, log_dir=tmp_path)
+    original_replace = Path.replace
+    attempts = 0
+
+    def flaky_replace(path, target):
+        nonlocal attempts
+        if path == active and attempts < 2:
+            attempts += 1
+            raise PermissionError("sharing violation")
+        attempts += 1
+        return original_replace(path, target)
+
+    monkeypatch.setattr(Path, "replace", flaky_replace)
+    monkeypatch.setattr(trace.time, "sleep", lambda _seconds: None)
+
+    assert trace.start_cycle(second, log_dir=tmp_path) == active
+    assert attempts == 3
 
 
 def test_portfolio_snapshot_and_control_panel_are_persisted(tmp_path):
@@ -140,3 +163,41 @@ def test_execution_result_records_pretrade_and_realized_cost(tmp_path):
     assert payload["cost_estimate"]["estimated_cost_bps"] == 14.5
     assert payload["realized_fill_cost"]["all_in_cost_bps"] > 14.0
     assert payload["drifts"][0]["drift_pct"] is None
+
+    assert trace.record_portfolio_snapshot(
+        state, {"BTC": 100_000.0}, log_dir=tmp_path
+    )
+    data = trace.panel_data(tmp_path)
+    assert data["status"]["kind"] == "execution_result"
+    assert data["health"]["kind"] == "portfolio_snapshot"
+
+
+def test_missing_mid_never_publishes_partial_pnl_as_total(tmp_path):
+    target = _target(0.1)
+    active = trace.start_cycle(target, log_dir=tmp_path)
+    state = AccountState(
+        "0xAAA",
+        10_000.0,
+        100.0,
+        {
+            "BTC": Position("BTC", 0.01, 100_000.0, 1_010.0),
+            "ETH": Position("ETH", 1.0, 3_000.0, 3_100.0),
+        },
+    )
+
+    assert trace.record_portfolio_snapshot(
+        state, {"BTC": 101_000.0}, log_dir=tmp_path
+    )
+
+    with closing(sqlite3.connect(active)) as conn:
+        total, payload_json = conn.execute(
+            "SELECT unrealized_pnl_usd, payload_json FROM events "
+            "WHERE kind='portfolio_snapshot' AND coin IS NULL "
+            "ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+    payload = json.loads(payload_json)
+    assert total is None
+    assert payload["total_unrealized_pnl_usd"] is None
+    assert payload["priced_unrealized_pnl_usd"] == 10.0
+    assert payload["missing_mid_coins"] == ["ETH"]
+    assert trace.panel_data(tmp_path)["metrics"]["unrealized_pnl_usd"] is None

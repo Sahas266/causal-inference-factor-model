@@ -105,6 +105,9 @@ class ExecutionConfig:
     twap_slices: int = 5
     max_twap_minutes: float = 30.0
 
+    # Appended to preserve positional compatibility for the older fields.
+    network_timeout_seconds: float = 15.0
+
     def __post_init__(self):
         # Light validation. Don't catch every bad combination — just the obvious
         # foot-guns that would silently corrupt a rebalance plan.
@@ -151,6 +154,14 @@ class ExecutionConfig:
             raise ValueError(f"smart_max_band_bps must be > 0, got {self.smart_max_band_bps}")
         if self.repair_attempts < 0:
             raise ValueError(f"repair_attempts must be >= 0, got {self.repair_attempts}")
+        if (
+            not math.isfinite(self.network_timeout_seconds)
+            or self.network_timeout_seconds <= 0
+        ):
+            raise ValueError(
+                "network_timeout_seconds must be > 0, got "
+                f"{self.network_timeout_seconds}"
+            )
         if self.max_signal_age_hours <= 0:
             raise ValueError(
                 f"max_signal_age_hours must be > 0, got {self.max_signal_age_hours}"

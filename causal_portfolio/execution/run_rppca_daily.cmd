@@ -6,7 +6,11 @@ pushd "%REPO_ROOT%" || exit /b 1
 
 set "CPCM_LOCAL_DB=%REPO_ROOT%\causal_portfolio\data\cpcm_local.duckdb"
 set "PYTHON_EXE=%REPO_ROOT%\venv\Scripts\python.exe"
-if not exist "%PYTHON_EXE%" set "PYTHON_EXE=python"
+if not exist "%PYTHON_EXE%" (
+    echo Missing repository Python: "%PYTHON_EXE%" 1>&2
+    popd
+    exit /b 1
+)
 
 if "%~1"=="" (
     if not exist "causal_portfolio\execution\logs" mkdir "causal_portfolio\execution\logs"

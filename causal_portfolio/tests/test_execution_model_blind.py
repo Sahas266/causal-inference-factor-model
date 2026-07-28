@@ -31,8 +31,14 @@ def test_custom_asset_map_keeps_target_and_position_on_one_row(tmp_path):
     target = _snapshot({"bonk": 0.5}, strategy="any-model")
     trace.start_cycle(
         target,
-        asset_map={"bonk": "kBONK"},          # venue casing the default lacks
         model_prices={"bonk": 0.00002},
+        log_dir=tmp_path,
+    )
+    # The model can open the cycle before an execution config exists. The
+    # authoritative map arrives when execute_target opens the same target.
+    trace.start_cycle(
+        target,
+        asset_map={"bonk": "kBONK"},          # venue casing the default lacks
         log_dir=tmp_path,
     )
     state = AccountState(
@@ -99,6 +105,43 @@ def test_cadence_may_also_arrive_as_target_metadata(tmp_path):
     stored = trace.expected_next_rebalance(tmp_path)
     assert stored is not None
     assert abs((stored - expected).total_seconds()) < 1
+
+
+def test_existing_cycle_accepts_later_declared_cadence(tmp_path):
+    target = _snapshot({"btc": 0.1}, strategy="late-cadence")
+    trace.start_cycle(target, log_dir=tmp_path)
+    assert trace.expected_next_rebalance(tmp_path) is None
+
+    expected = datetime.now(timezone.utc) + timedelta(hours=8)
+    trace.start_cycle(
+        target,
+        expected_next_rebalance=expected,
+        log_dir=tmp_path,
+    )
+
+    stored = trace.expected_next_rebalance(tmp_path)
+    assert stored is not None
+    assert abs((stored - expected).total_seconds()) < 1
+
+
+def test_existing_explicit_cadence_is_not_replaced_by_metadata(tmp_path):
+    explicit = datetime.now(timezone.utc) + timedelta(hours=8)
+    metadata_value = explicit + timedelta(days=1)
+    target = _snapshot(
+        {"btc": 0.1},
+        strategy="stable-cadence",
+        metadata={"expected_next_rebalance": metadata_value.isoformat()},
+    )
+    trace.start_cycle(
+        target,
+        expected_next_rebalance=explicit,
+        log_dir=tmp_path,
+    )
+    trace.start_cycle(target, log_dir=tmp_path)
+
+    stored = trace.expected_next_rebalance(tmp_path)
+    assert stored is not None
+    assert abs((stored - explicit).total_seconds()) < 1
 
 
 def test_missing_cadence_degrades_instead_of_guessing(tmp_path):

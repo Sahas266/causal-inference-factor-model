@@ -100,7 +100,11 @@ class HLAdapter:
         self.base_url = TESTNET_URL if config.testnet else MAINNET_URL
         logger.info("HLAdapter on %s for %s", self.base_url, self.address[:8] + "...")
 
-        self.info = Info(self.base_url, skip_ws=True)
+        self.info = Info(
+            self.base_url,
+            skip_ws=True,
+            timeout=config.network_timeout_seconds,
+        )
 
         # Exchange client only needs a wallet for write operations. Reads work
         # without one. We construct it lazily so dry-run / read-only flows
@@ -118,7 +122,12 @@ class HLAdapter:
                     "HL_PRIVATE_KEY or HYPERLIQUID_PRIVATE_KEY env var"
                 )
             wallet = self._Account.from_key(self.secret_key)
-            self._exchange = self._Exchange(wallet, self.base_url, account_address=self.address)
+            self._exchange = self._Exchange(
+                wallet,
+                self.base_url,
+                account_address=self.address,
+                timeout=self.config.network_timeout_seconds,
+            )
         return self._exchange
 
     # ── reads ───────────────────────────────────────────────────────

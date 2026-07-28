@@ -25,6 +25,7 @@ from __future__ import annotations
 import html
 import logging
 import os
+import re
 import time
 from datetime import datetime, timezone
 from typing import Any
@@ -35,6 +36,7 @@ TOKEN_ENV = "TELEGRAM_BOT_TOKEN"
 CHAT_ENV = "TELEGRAM_CHAT_ID"
 _API_URL = "https://api.telegram.org/bot{token}/sendMessage"
 _MAX_LEN = 4096  # Telegram hard limit per message
+_HTML_TAGS = re.compile(r"</?(?:b|code)>")
 
 
 def _credentials() -> tuple[str, str] | None:
@@ -58,6 +60,50 @@ def _esc(value: Any) -> str:
     return html.escape(str(value))
 
 
+def _has_balanced_html(text: str) -> bool:
+    """Return whether supported Telegram tags are balanced and correctly nested."""
+    stack: list[str] = []
+    for match in _HTML_TAGS.finditer(text):
+        token = match.group(0)
+        if token.startswith("</"):
+            tag = token[2:-1]
+            if not stack or stack.pop() != tag:
+                return False
+        else:
+            stack.append(token[1:-1])
+    return not stack
+
+
+def _message_chunks(text: str, parse_mode: str | None) -> tuple[list[str], str | None]:
+    """Split at safe boundaries instead of truncating Telegram HTML."""
+    if len(text) <= _MAX_LEN:
+        return [text], parse_mode
+    if parse_mode == "HTML":
+        lines = text.splitlines(keepends=True)
+        if any(len(line) > _MAX_LEN for line in lines):
+            # Internal formatted messages use only these two tags. A single
+            # pathological line is safer as plain text than broken HTML.
+            text = html.unescape(_HTML_TAGS.sub("", text))
+            parse_mode = None
+        else:
+            chunks: list[str] = []
+            current = ""
+            for line in lines:
+                if current and len(current) + len(line) > _MAX_LEN:
+                    chunks.append(current)
+                    current = ""
+                current += line
+            if current:
+                chunks.append(current)
+            if all(_has_balanced_html(chunk) for chunk in chunks):
+                return chunks, parse_mode
+            # A tag spans a chunk boundary. Send the complete content as plain
+            # text so Telegram cannot reject a malformed HTML fragment.
+            text = html.unescape(_HTML_TAGS.sub("", text))
+            parse_mode = None
+    return [text[i:i + _MAX_LEN] for i in range(0, len(text), _MAX_LEN)], parse_mode
+
+
 def send(text: str, *, parse_mode: str | None = None) -> bool:
     """Send one Telegram message. Returns True on success. Never raises."""
     creds = _credentials()
@@ -65,21 +111,23 @@ def send(text: str, *, parse_mode: str | None = None) -> bool:
         logger.debug("telegram not configured; dropping notification")
         return False
     token, chat_id = creds
-    payload: dict[str, Any] = {"chat_id": chat_id, "text": text[:_MAX_LEN]}
-    if parse_mode:
-        payload["parse_mode"] = parse_mode
     try:
         import requests
 
-        resp = requests.post(
-            _API_URL.format(token=token),
-            json=payload,
-            timeout=15,
-        )
-        if resp.status_code != 200:
-            logger.warning("telegram send failed: HTTP %s %s",
-                           resp.status_code, resp.text[:200])
-            return False
+        chunks, effective_mode = _message_chunks(text, parse_mode)
+        for chunk in chunks:
+            payload: dict[str, Any] = {"chat_id": chat_id, "text": chunk}
+            if effective_mode:
+                payload["parse_mode"] = effective_mode
+            resp = requests.post(
+                _API_URL.format(token=token),
+                json=payload,
+                timeout=15,
+            )
+            if resp.status_code != 200:
+                logger.warning("telegram send failed: HTTP %s %s",
+                               resp.status_code, resp.text[:200])
+                return False
         return True
     except Exception as e:
         # Request errors can include the token-bearing URL in their message.
@@ -233,9 +281,11 @@ def format_pnl(
 
     lines.append("")
     total_pnl = 0.0
+    missing_mid_coins: list[str] = []
     for coin, pos in sorted(state.positions.items()):
         mid = mids.get(coin)
         if mid is None:
+            missing_mid_coins.append(coin)
             lines.append(f"⚪ <b>{_esc(coin)}</b>: mid price unavailable")
             continue
         pnl = (mid - pos.entry_px) * pos.size
@@ -248,9 +298,17 @@ def format_pnl(
             f"{emoji} <b>{_esc(coin)}</b> ({direction}): "
             f"${pnl:+,.2f} ({pnl_pct:+.2f}%)"
         )
-    total_emoji = "🟢" if total_pnl >= 0 else "🔴"
     lines.append("")
-    lines.append(f"{total_emoji} <b>Total unrealized PnL: ${total_pnl:+,.2f}</b>")
+    if missing_mid_coins:
+        lines.append(
+            "⚠️ <b>Total unrealized PnL unavailable</b> · missing mids: "
+            + ", ".join(_esc(coin) for coin in missing_mid_coins)
+        )
+        if len(missing_mid_coins) < len(state.positions):
+            lines.append(f"Priced positions subtotal: <b>${total_pnl:+,.2f}</b>")
+    else:
+        total_emoji = "🟢" if total_pnl >= 0 else "🔴"
+        lines.append(f"{total_emoji} <b>Total unrealized PnL: ${total_pnl:+,.2f}</b>")
     return "\n".join(lines)
 
 
@@ -264,7 +322,22 @@ def _fetch_pnl_snapshot(mainnet: bool) -> tuple[Any, dict[str, float]]:
 
 def send_pnl_update(*, mainnet: bool = False) -> bool:
     """Fetch live state + mids and send one formatted PnL message."""
-    state, mids = _fetch_pnl_snapshot(mainnet)
+    try:
+        state, mids = _fetch_pnl_snapshot(mainnet)
+    except Exception as error:
+        try:
+            from causal_portfolio.execution import trace
+
+            trace.record_portfolio_error(error)
+        except Exception:
+            logger.exception("portfolio failure trace write failed (continuing)")
+        try:
+            from causal_portfolio.execution.control_panel import write_control_panel
+
+            write_control_panel(None, {})
+        except Exception:
+            logger.exception("control-panel failure update failed (continuing)")
+        raise
     next_rebalance = None
     try:
         from causal_portfolio.execution import trace
