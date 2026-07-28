@@ -110,6 +110,34 @@ should change the submitted `TargetSnapshot` instead.
 `causal_portfolio/tests/test_execution_is_model_agnostic.py` enforces this by
 static import analysis; it fails with the offending file and line.
 
+### Model-blind at runtime, not just at import
+
+The layer also holds no runtime assumption about *which* model is driving it:
+
+- **Asset universe.** `ExecutionConfig.asset_map` is the single source of
+  ticker-to-venue-coin mapping, and everything downstream — planner, trace,
+  control panel — resolves through the map that actually executed. Tickers
+  outside `DEFAULT_ASSET_MAP` are fully supported; pass your own map.
+- **Rebalance cadence.** Execution never assumes or derives one. A model
+  declares its own next rebalance, either via
+  `trace.start_cycle(..., expected_next_rebalance=...)` or by putting
+  `expected_next_rebalance` in `TargetSnapshot.metadata`. Undeclared reads as
+  `unknown` in the countdown; it is never guessed. Five-minute, daily, and
+  monthly cadences are all first-class.
+- **Strategy identity.** `TargetSnapshot.strategy` is provenance only — it
+  names the run log and appears in the panel, and is never branched on.
+- **Cost and safety policy** is uniform across models by design: the cost gate
+  reads only orders, mids, books, and config. Model-specific gating belongs
+  upstream, in the weights you submit.
+
+`max_signal_age_hours` (default 72) bounds how stale a *signal* may be at
+submission, which is independent of rebalance frequency — a monthly model
+executing promptly has an age near zero. Raise it explicitly if you
+intentionally execute on older signals.
+
+`causal_portfolio/tests/test_execution_model_blind.py` covers these at
+runtime, including a custom-asset-map regression.
+
 ## Daily local RP-PCA runner
 
 RP-PCA is a model, so it lives in `causal_portfolio/models/` and is **not**

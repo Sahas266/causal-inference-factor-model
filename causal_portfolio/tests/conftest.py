@@ -1,3 +1,5 @@
+import re
+
 import pytest
 
 
@@ -13,8 +15,14 @@ def _no_telegram(monkeypatch):
     monkeypatch.setenv("TELEGRAM_CHAT_ID", "")
 
 
+@pytest.fixture(scope="session")
+def _runtime_state_root(tmp_path_factory):
+    """One session directory for the redirected execution runtime tree."""
+    return tmp_path_factory.mktemp("cpcm-runtime")
+
+
 @pytest.fixture(autouse=True)
-def _isolate_runtime_state(monkeypatch, tmp_path):
+def _isolate_runtime_state(monkeypatch, _runtime_state_root, request):
     """Keep every test out of the operator's live ~/.cpcm-execution tree.
 
     execute_plan()/send_pnl_update() call trace.* and write_control_panel()
@@ -24,10 +32,15 @@ def _isolate_runtime_state(monkeypatch, tmp_path):
     database and overwrites the real control panel with synthetic data.
     Tests that need their own directory still monkeypatch it themselves;
     this is the floor, not a replacement.
+
+    The per-test slot is only a path, never created here: the code under test
+    mkdirs lazily, so the vast majority of tests that never touch this tree
+    cost nothing. (Depending on `tmp_path` instead would materialize a
+    directory for all ~560 tests on every run, which measurably slowed the
+    suite and piled up thousands of retained directories.)
     """
     from causal_portfolio.execution import audit
 
-    monkeypatch.setattr(audit, "LOG_DIR", tmp_path / "cpcm-logs")
-    monkeypatch.setenv(
-        "CPCM_EXECUTION_CONTROL_PANEL_DIR", str(tmp_path / "cpcm-panel")
-    )
+    slot = _runtime_state_root / re.sub(r"[^A-Za-z0-9_.-]+", "_", request.node.nodeid)
+    monkeypatch.setattr(audit, "LOG_DIR", slot / "logs")
+    monkeypatch.setenv("CPCM_EXECUTION_CONTROL_PANEL_DIR", str(slot / "panel"))

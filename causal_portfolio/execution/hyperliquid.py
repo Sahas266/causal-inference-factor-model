@@ -427,7 +427,7 @@ def execute_target(
         try:
             from causal_portfolio.execution import trace
 
-            trace.start_cycle(target)
+            trace.start_cycle(target, asset_map=config.asset_map)
         except Exception:
             logger.exception("trace cycle initialization failed (continuing)")
         adapter = HLAdapter(config)
@@ -492,7 +492,9 @@ def execute_plan(
         try:
             from causal_portfolio.execution import trace
 
-            trace.start_cycle(plan.target_snapshot)
+            trace.start_cycle(
+                plan.target_snapshot, asset_map=adapter.config.asset_map
+            )
         except Exception:
             logger.exception("trace cycle initialization failed (continuing)")
     result = _execute_plan_inner(adapter, plan, acknowledge_mainnet=acknowledge_mainnet)

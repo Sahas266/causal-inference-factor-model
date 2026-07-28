@@ -189,6 +189,7 @@ def _record_model_target(
     target: TargetSnapshot,
     model_prices: dict[str, float] | None,
     price_source: str | None,
+    asset_map: dict[str, str] | None = None,
 ) -> None:
     with _connect(path) as conn:
         exists = conn.execute(
@@ -209,7 +210,13 @@ def _record_model_target(
                 mid_price=(model_prices or {}).get(ticker),
                 target_weight=weight,
                 payload={
-                    "hl_coin": DEFAULT_ASSET_MAP.get(ticker),
+                    # Must be the SAME map the planner used, not the module
+                    # default: a config with a custom asset_map would otherwise
+                    # store hl_coin=None here, and record_portfolio_snapshot's
+                    # ticker.upper() fallback would key the target row
+                    # differently from the position row, splitting the panel's
+                    # target-vs-actual comparison into phantom rows.
+                    "hl_coin": (asset_map or DEFAULT_ASSET_MAP).get(ticker),
                     "metadata": target.metadata,
                 },
             )
@@ -221,9 +228,16 @@ def start_cycle(
     expected_next_rebalance: datetime | None = None,
     model_prices: dict[str, float] | None = None,
     price_source: str | None = None,
+    asset_map: dict[str, str] | None = None,
     log_dir: Path | None = None,
 ) -> Path | None:
-    """Start/reuse a target cycle; archive an older cycle without overwrite."""
+    """Start/reuse a target cycle; archive an older cycle without overwrite.
+
+    `asset_map` should be the executing ExecutionConfig.asset_map so the trace
+    resolves model tickers to venue coins exactly as the planner did. It
+    defaults to DEFAULT_ASSET_MAP only so a model can open a cycle before an
+    execution config exists.
+    """
     if expected_next_rebalance is not None and expected_next_rebalance.tzinfo is None:
         expected_next_rebalance = expected_next_rebalance.replace(tzinfo=timezone.utc)
     path = active_path(log_dir)
@@ -263,7 +277,7 @@ def start_cycle(
                     ),
                     "started_utc": _utc_now().isoformat(),
                 })
-        _record_model_target(path, target, model_prices, price_source)
+        _record_model_target(path, target, model_prices, price_source, asset_map)
         return path
     except Exception:
         logger.exception("trace cycle initialization failed (continuing without trace)")
