@@ -358,6 +358,20 @@ def test_send_does_not_log_bot_token_on_request_error(monkeypatch, caplog):
     assert token not in caplog.text
 
 
+def test_pnl_cli_reports_unreachable_exchange_without_traceback(monkeypatch, capsys):
+    """A scheduled 30-minute run must not spew a traceback per network blip."""
+    monkeypatch.setenv(notify.TOKEN_ENV, "123:abc")
+    monkeypatch.setenv(notify.CHAT_ENV, "-100")
+
+    def unreachable(**_kwargs):
+        raise ConnectionError("connect timeout")
+
+    monkeypatch.setattr(notify, "send_pnl_update", unreachable)
+
+    assert notify.main(["--pnl"]) == 1
+    assert "exchange unreachable: ConnectionError" in capsys.readouterr().out
+
+
 def test_dotenv_search_starts_from_working_directory(monkeypatch, tmp_path):
     seen = {}
     env_path = tmp_path / ".env"

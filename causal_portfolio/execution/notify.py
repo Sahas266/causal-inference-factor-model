@@ -328,14 +328,24 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         return 0  # unreachable; run_pnl_loop only exits via KeyboardInterrupt
 
-    if args.pnl:
-        ok = send_pnl_update(mainnet=args.mainnet)
-    elif args.state:
-        from causal_portfolio.execution.config import ExecutionConfig
-        from causal_portfolio.execution.hyperliquid import HLAdapter
+    if args.pnl or args.state:
+        # The exchange is unreachable often enough (DNS blocks, captive
+        # portals, HL maintenance) that a scheduled 30-minute run must not
+        # spew a traceback per tick. Report one concise line and exit
+        # non-zero so Task Scheduler still records the failure.
+        try:
+            if args.pnl:
+                ok = send_pnl_update(mainnet=args.mainnet)
+            else:
+                from causal_portfolio.execution.config import ExecutionConfig
+                from causal_portfolio.execution.hyperliquid import HLAdapter
 
-        adapter = HLAdapter(ExecutionConfig(testnet=not args.mainnet))
-        ok = send(format_state(adapter.fetch_state()), parse_mode="HTML")
+                adapter = HLAdapter(ExecutionConfig(testnet=not args.mainnet))
+                ok = send(format_state(adapter.fetch_state()), parse_mode="HTML")
+        except Exception as e:
+            logger.warning("exchange unreachable: %s: %s", type(e).__name__, e)
+            print(f"exchange unreachable: {type(e).__name__}")
+            return 1
     elif args.message:
         if not is_configured():
             print(f"Not configured: set {TOKEN_ENV} and {CHAT_ENV} (see "
