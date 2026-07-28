@@ -4,8 +4,8 @@ from datetime import datetime, timezone
 
 import pytest
 
-import causal_portfolio.execution.rppca_daily as rppca_daily
-from causal_portfolio.execution.rppca_daily import (
+import causal_portfolio.models.rppca_daily as rppca_daily
+from causal_portfolio.models.rppca_daily import (
     build_parser,
     forward_fill_prices,
     refresh_local_prices,

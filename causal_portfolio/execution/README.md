@@ -85,29 +85,56 @@ result = execute_target(target, ExecutionConfig())  # dry-run testnet by default
 JSON/CSV producers call `load_target_snapshot()` first, then pass the returned
 `TargetSnapshot` to `execute_target()`.
 
+## Model-agnostic boundary
+
+`causal_portfolio.execution` depends on stdlib, `requests`, and the Hyperliquid
+SDK — and on nothing else in this repository. Models depend on execution; the
+dependency never runs the other way. In particular execution must not import
+`causal_portfolio.{data,factors,solvers,backtest,models}`, numpy, or pandas,
+because none of those ship in the wheel and any one of them would tie the
+engine to a specific model.
+
+Practically this means every model — RP-PCA, CPCM, or anything added later —
+reaches Hyperliquid through the same call and receives the same execution
+policy (caps, precision, cost gate, repair, audit, trace, notifications):
+
+```text
+model -> TargetSnapshot -> execute_target(target, ExecutionConfig) -> SubmitResult
+```
+
+The transaction-cost gate is deliberately part of that shared policy: it reads
+only the rounded orders, live mids, live L2 books, and config, never strategy
+metadata, forecasts, or covariance. Model-specific gating belongs upstream and
+should change the submitted `TargetSnapshot` instead.
+
+`causal_portfolio/tests/test_execution_is_model_agnostic.py` enforces this by
+static import analysis; it fails with the offending file and line.
+
 ## Daily local RP-PCA runner
 
-This runner belongs to the repository checkout. An installed
-`cpcm-execution[model]` supports `--prices-csv`; its default DuckDB loader also
-needs the repo-only `causal_portfolio.data` package.
+RP-PCA is a model, so it lives in `causal_portfolio/models/` and is **not**
+packaged — the wheel ships no model code. Running it needs a repository
+checkout; `pip install cpcm-execution[model]` only adds the numeric stack
+(numpy/pandas) that the runner needs, and its default DuckDB loader
+additionally needs the repo-only `causal_portfolio.data` package.
 
 Generate an RP-PCA target from the local DuckDB snapshot or a wide price CSV:
 
 ```bash
-python -m causal_portfolio.execution.rppca_daily --target-out tmp/rppca_daily_target.json
+python -m causal_portfolio.models.rppca_daily --target-out tmp/rppca_daily_target.json
 ```
 
 Run locally every 24 hours and execute on Hyperliquid testnet. RP-PCA defaults
 to a 15 bp all-in cost ceiling:
 
 ```bash
-python -m causal_portfolio.execution.rppca_daily --loop --every-hours 24 --execute --target-out tmp/rppca_daily_target.json
+python -m causal_portfolio.models.rppca_daily --loop --every-hours 24 --execute --target-out tmp/rppca_daily_target.json
 ```
 
 Mainnet is non-interactive for scheduling, so it requires both explicit flags:
 
 ```bash
-python -m causal_portfolio.execution.rppca_daily --loop --execute --mainnet --ack-mainnet
+python -m causal_portfolio.models.rppca_daily --loop --execute --mainnet --ack-mainnet
 ```
 
 The runner forward-fills local daily prices but stamps the target with the

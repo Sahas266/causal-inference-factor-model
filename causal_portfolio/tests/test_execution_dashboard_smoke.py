@@ -1,6 +1,6 @@
 """Smoke tests for the execution dashboard data functions.
 
-These exercise causal_portfolio.execution.dashboard_data against the local
+These exercise causal_portfolio.execution_dashboard_data against the local
 DuckDB and mocked adapters. No Streamlit runtime needed — the data functions
 live in a plain module the UI imports.
 """
@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from causal_portfolio.execution import dashboard_data as dd
+from causal_portfolio import execution_dashboard_data as dd
 
 
 def test_run_strategy_bh_btc():
@@ -87,7 +87,7 @@ def test_load_audit_history_network_filter(monkeypatch):
 
 def test_build_plan_preview_uses_default_caps(monkeypatch):
     """Preview must use the same safety caps the CLI defaults to."""
-    import causal_portfolio.execution.dashboard_data as mod
+    import causal_portfolio.execution_dashboard_data as mod
     from causal_portfolio.execution.config import ExecutionConfig
 
     captured = {}

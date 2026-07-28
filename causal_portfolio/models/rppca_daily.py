@@ -21,7 +21,7 @@ from causal_portfolio.execution.config import ExecutionConfig
 from causal_portfolio.execution.run_logging import execution_run_log
 from causal_portfolio.execution.targets import load_target_snapshot
 
-logger = logging.getLogger("cpcm.execution.rppca_daily")
+logger = logging.getLogger("cpcm.models.rppca_daily")
 
 DEFAULT_ASSETS = ["btc", "eth", "sol", "bnb", "avax", "uni", "aave", "link", "doge"]
 COINGECKO_IDS = {

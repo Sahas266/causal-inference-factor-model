@@ -10,9 +10,9 @@ if not exist "%PYTHON_EXE%" set "PYTHON_EXE=python"
 
 if "%~1"=="" (
     if not exist "causal_portfolio\execution\logs" mkdir "causal_portfolio\execution\logs"
-    "%PYTHON_EXE%" -m causal_portfolio.execution.rppca_daily --refresh-prices --target-out tmp\rppca_daily_target.json --target-gross 0.3 --max-transaction-cost-bps 15 --estimated-taker-fee-bps 4.5 --execute >> "causal_portfolio\execution\logs\rppca_daily_task.log" 2>&1
+    "%PYTHON_EXE%" -m causal_portfolio.models.rppca_daily --refresh-prices --target-out tmp\rppca_daily_target.json --target-gross 0.3 --max-transaction-cost-bps 15 --estimated-taker-fee-bps 4.5 --execute >> "causal_portfolio\execution\logs\rppca_daily_task.log" 2>&1
 ) else (
-    "%PYTHON_EXE%" -m causal_portfolio.execution.rppca_daily %*
+    "%PYTHON_EXE%" -m causal_portfolio.models.rppca_daily %*
 )
 
 set "EXIT_CODE=%ERRORLEVEL%"

@@ -14,7 +14,7 @@ Honest framing baked in: buy-and-hold BTC is the default because it is the
 one thing in our research that robustly beat everything else. The backtest
 panel shows the numbers so the strategy choice is transparent.
 
-The data functions live in causal_portfolio.execution.dashboard_data (no
+The data functions live in causal_portfolio.execution_dashboard_data (no
 Streamlit dependency, unit-tested). This file is UI only.
 
 Run:
@@ -32,7 +32,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from causal_portfolio.execution import dashboard_data as dd
+from causal_portfolio import execution_dashboard_data as dd
 
 st.set_page_config(page_title="CPCM Execution", page_icon="⚡", layout="wide")
 

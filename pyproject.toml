@@ -1,6 +1,14 @@
 # Packages ONLY the execution layer (causal_portfolio.execution) as an
-# installable library. The research stack (data/factors/solvers/backtest)
-# stays repo-only. Version single-sourced from execution/__init__.py.
+# installable library. Version single-sourced from execution/__init__.py.
+#
+# Architectural boundary — causal_portfolio.execution is model-agnostic:
+# it depends on stdlib, requests, and the Hyperliquid SDK, and on NOTHING
+# else in this repository. Models depend on execution, never the reverse.
+# Concretely, causal_portfolio.execution must not import causal_portfolio.
+# {data,factors,solvers,backtest,models}, numpy, or pandas. Models live in
+# causal_portfolio.models and reach the exchange only through the standard
+# handoff execute_target(TargetSnapshot, ExecutionConfig) -> SubmitResult.
+# test_execution_is_model_agnostic.py enforces this; keep it passing.
 [build-system]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
@@ -20,7 +28,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# CSV-backed rppca_daily runner; DuckDB loading needs the full repository.
+# Models are NOT packaged (they live in the repo under causal_portfolio.models
+# and would violate the model-agnostic boundary above). This extra exists so a
+# repo checkout can install the model runner's numeric stack alongside the
+# library; the wheel itself ships no model code.
 model = ["numpy", "pandas"]
 
 [project.scripts]
