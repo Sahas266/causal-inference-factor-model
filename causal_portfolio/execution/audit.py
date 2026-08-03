@@ -76,6 +76,7 @@ def append(result: SubmitResult, log_dir: Path | None = None) -> Path:
         "repair": _serialize(result.repair),
         "cost_estimate": _serialize(result.cost_estimate),
         "cost_gate_reason": result.cost_gate_reason,
+        "completeness_ratio": result.completeness_ratio,
     }
     with path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(record, default=str) + "\n")

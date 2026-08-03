@@ -623,6 +623,14 @@ def test_config_validation():
         ExecutionConfig(min_position_change_pct=float("nan"))
     with pytest.raises(ValueError, match="min_position_change_pct"):
         ExecutionConfig(min_position_change_pct=float("inf"))
+    with pytest.raises(ValueError, match="min_rebalance_completeness"):
+        ExecutionConfig(min_rebalance_completeness=-0.1)
+    with pytest.raises(ValueError, match="min_rebalance_completeness"):
+        ExecutionConfig(min_rebalance_completeness=1.1)
+    with pytest.raises(ValueError, match="min_rebalance_completeness"):
+        ExecutionConfig(min_rebalance_completeness=float("nan"))
+    with pytest.raises(ValueError, match="min_rebalance_completeness"):
+        ExecutionConfig(min_rebalance_completeness=float("inf"))
 
 
 def test_twap_config_validation():

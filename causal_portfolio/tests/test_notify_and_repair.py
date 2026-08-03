@@ -20,6 +20,7 @@ from causal_portfolio.execution.types import (
     Order,
     Position,
     RebalancePlan,
+    SkipReason,
     SubmitResult,
     TargetSnapshot,
 )
@@ -245,11 +246,16 @@ def test_partial_cost_gate_notification_warns_and_reports_submitted_count():
     plan = replace(plan, orders=[
         *plan.orders,
         Order("ETH", False, 0.1, 3_000.0, "0x" + "2" * 32, reduce_only=True),
-    ])
+    ], skipped=[(
+        "BTC",
+        SkipReason.EXCEEDS_TRANSACTION_COST,
+        "estimated cost 20.00 bps exceeds 15.00 bps limit",
+    )])
     result = _result(
         plan=plan,
         cost_gate_reason="estimated_cost_above_limit",
         submitted_orders=[plan.orders[1]],
+        completeness_ratio=0.5,
     )
 
     text = notify.format_result(result)
@@ -257,6 +263,26 @@ def test_partial_cost_gate_notification_warns_and_reports_submitted_count():
     assert text.startswith("⚠️")
     assert not text.startswith("✅")
     assert "1 of 2 submitted" in text
+    assert "Exposure completeness: <b>50.0%</b>" in text
+    assert "transaction_cost_limit_exceeded" in text
+
+
+def test_partial_completeness_gate_notification_warns():
+    plan = _plan()
+    plan = replace(plan, skipped=[(
+        "BTC",
+        SkipReason.INSUFFICIENT_PLAN_COMPLETENESS,
+        "plan completeness 10.0% below minimum 80.0%",
+    )])
+
+    text = notify.format_result(_result(
+        plan=plan,
+        submitted_orders=[],
+        completeness_ratio=0.1,
+    ))
+
+    assert text.startswith("⚠️")
+    assert "insufficient_plan_completeness" in text
 
 
 def test_format_pnl_reports_per_position_and_total():

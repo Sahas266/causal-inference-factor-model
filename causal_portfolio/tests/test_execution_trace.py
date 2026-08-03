@@ -14,6 +14,7 @@ from causal_portfolio.execution.types import (
     Position,
     RebalancePlan,
     ReconcileDrift,
+    SkipReason,
     SubmitResult,
     TargetSnapshot,
 )
@@ -191,7 +192,11 @@ def test_execution_trace_distinguishes_planned_and_submitted_orders(tmp_path):
         {"BTC": 1_000.0, "ETH": 0.0},
         {"BTC": 1_000.0, "ETH": -300.0},
         planned,
-        [],
+        [(
+            "BTC",
+            SkipReason.EXCEEDS_TRANSACTION_COST,
+            "estimated cost above limit",
+        )],
         10_000.0,
         target_snapshot=target,
         mids={"BTC": 100_000.0, "ETH": 3_000.0},
@@ -201,6 +206,7 @@ def test_execution_trace_distinguishes_planned_and_submitted_orders(tmp_path):
         submitted=True,
         cost_gate_reason="estimated_cost_above_limit",
         submitted_orders=[planned[1]],
+        completeness_ratio=0.5,
     )
 
     assert trace.record_execution_result(result, log_dir=tmp_path)
@@ -208,6 +214,8 @@ def test_execution_trace_distinguishes_planned_and_submitted_orders(tmp_path):
     payload = json.loads(_events(active, "execution_result")[0][1])
     assert payload["planned_order_count"] == 2
     assert payload["submitted_order_count"] == 1
+    assert payload["completeness_ratio"] == 0.5
+    assert payload["skipped"][0][1] == "transaction_cost_limit_exceeded"
     assert [order["coin"] for order in payload["submitted_orders"]] == ["ETH"]
     plan_payloads = {
         coin: json.loads(event) for coin, event in _events(active, "execution_plan")

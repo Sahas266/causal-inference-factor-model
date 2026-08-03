@@ -30,6 +30,8 @@ import time
 from datetime import datetime, timezone
 from typing import Any
 
+from causal_portfolio.execution.types import SkipReason
+
 logger = logging.getLogger("cpcm.execution.notify")
 
 TOKEN_ENV = "TELEGRAM_BOT_TOKEN"
@@ -140,6 +142,11 @@ def _status_emoji(result: Any) -> str:
         return "🛑"
     if result.cost_gate_reason:
         return "⚠️" if result.submitted else "⏸️"
+    if any(
+        reason == SkipReason.INSUFFICIENT_PLAN_COMPLETENESS
+        for _coin, reason, _detail in result.plan.skipped
+    ):
+        return "⚠️" if result.submitted else "⏸️"
     if result.drifts or (result.repair and not result.repair.get("resolved", True)):
         return "⚠️"
     if result.submitted:
@@ -191,6 +198,9 @@ def format_result(result: Any) -> str:
         f"<b>{submitted_count} of {len(plan.orders)} submitted</b>",
         f"Gross: <b>${gross:,.0f}</b> · Equity: <b>${plan.current_state.account_value_usd:,.0f}</b>",
     ]
+    completeness_ratio = getattr(result, "completeness_ratio", None)
+    if completeness_ratio is not None:
+        lines.append(f"Exposure completeness: <b>{completeness_ratio:.1%}</b>")
     if result.cost_estimate:
         estimate = result.cost_estimate
         measured = estimate.get("estimated_cost_bps")
@@ -202,6 +212,13 @@ def format_result(result: Any) -> str:
             )
     if result.cost_gate_reason:
         lines.append(f"⏸ <b>Cost gate:</b> {_esc(result.cost_gate_reason)}")
+    if plan.skipped:
+        lines.append("")
+        lines.append(f"⚠️ <b>Skipped legs ({len(plan.skipped)})</b>")
+        for coin, reason, detail in plan.skipped:
+            lines.append(
+                f"  • {_esc(coin)}: {_esc(reason.value)} — {_esc(detail)}"
+            )
     repair = getattr(result, "repair", None)
     if repair:
         r_emoji = "✅" if repair.get("resolved") else "⚠️"

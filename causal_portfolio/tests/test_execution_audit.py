@@ -59,6 +59,7 @@ def test_append_creates_jsonl_file(tmp_path):
         plan=plan,
         submitted=True,
         submitted_orders=[plan.orders[1]],
+        completeness_ratio=0.5,
         post_submit_error="post-state unavailable",
         repair={"attempts": [{"attempt": 1}], "resolved": False},
     )
@@ -71,6 +72,7 @@ def test_append_creates_jsonl_file(tmp_path):
     assert record["submitted"] is True
     assert record["planned_order_count"] == 2
     assert record["submitted_order_count"] == 1
+    assert record["completeness_ratio"] == 0.5
     assert [order["coin"] for order in record["submitted_orders"]] == ["ETH"]
     assert record["error"] is None
     assert record["post_submit_error"] == "post-state unavailable"

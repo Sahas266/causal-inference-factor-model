@@ -448,6 +448,8 @@ def record_execution_result(
                 "repair": result.repair,
                 "cost_estimate": result.cost_estimate,
                 "cost_gate_reason": result.cost_gate_reason,
+                "completeness_ratio": result.completeness_ratio,
+                "skipped": plan.skipped,
                 "planned_order_count": len(plan.orders),
                 "submitted_order_count": len(submitted_order_list),
                 "submitted_orders": submitted_order_list,

@@ -6,6 +6,7 @@ Mocks the HLAdapter so we can exercise the gating logic without network.
 from __future__ import annotations
 
 import logging
+from dataclasses import replace
 from datetime import datetime, timezone
 from unittest.mock import MagicMock
 
@@ -20,6 +21,7 @@ from causal_portfolio.execution.types import (
     Order,
     Position,
     RebalancePlan,
+    SkipReason,
     TargetSnapshot,
 )
 
@@ -57,6 +59,48 @@ def _mock_adapter(address: str, config: ExecutionConfig):
         positions={},
     )
     return a
+
+
+def _partial_plan(allowed_usd: float, skipped_usd: float, *, reduce_only=False):
+    positions = {}
+    if reduce_only:
+        positions = {
+            "BTC": Position("BTC", allowed_usd / 100_000.0, 100_000.0, allowed_usd),
+            "ETH": Position("ETH", skipped_usd / 100_000.0, 100_000.0, skipped_usd),
+        }
+    state = AccountState("0xAAA", 10_000.0, 0.0, positions=positions)
+    return RebalancePlan(
+        timestamp_ms=1000,
+        target_weights={"btc": 0.0 if reduce_only else allowed_usd / 10_000.0},
+        current_state=state,
+        target_usd={
+            "BTC": 0.0 if reduce_only else allowed_usd,
+            "ETH": 0.0 if reduce_only else skipped_usd,
+        },
+        deltas_usd={
+            "BTC": -allowed_usd if reduce_only else allowed_usd,
+            "ETH": -skipped_usd if reduce_only else skipped_usd,
+        },
+        orders=[Order(
+            "BTC",
+            not reduce_only,
+            allowed_usd / 100_000.0,
+            100_000.0,
+            "0x" + "1" * 32,
+            reduce_only=reduce_only,
+        )],
+        skipped=[(
+            "ETH",
+            SkipReason.EXCEEDS_TRADE_CAP,
+            "synthetic planner skip",
+        )],
+        equity_used=10_000.0,
+        network="testnet",
+        target_snapshot=TargetSnapshot(
+            {"btc": 0.0 if reduce_only else allowed_usd / 10_000.0},
+            as_of=datetime.now(timezone.utc),
+        ),
+    )
 
 
 # ── Gate 1: address mismatch ────────────────────────────────────────
@@ -256,11 +300,136 @@ def test_empty_live_plan_is_audited_without_exchange_calls(monkeypatch):
 
     assert not result.submitted
     assert result.error is None
+    assert result.completeness_ratio == 0.0
     adapter.cancel_all_open.assert_not_called()
     adapter.fetch_state.assert_not_called()
     adapter.submit_orders.assert_not_called()
     adapter.submit_orders_book_aware.assert_not_called()
     audit_append.assert_called_once_with(result)
+
+
+def test_completeness_gate_refuses_large_missing_share():
+    plan = _partial_plan(allowed_usd=100.0, skipped_usd=900.0)
+    plan = replace(
+        plan,
+        target_weights={"btc": 0.01, "wlfi": 0.09},
+        target_usd={"BTC": 100.0},
+        deltas_usd={"BTC": 100.0},
+        skipped=[("wlfi", SkipReason.NOT_LISTED, "no HL listing")],
+    )
+    adapter = _mock_adapter("0xAAA", ExecutionConfig(
+        testnet=True,
+        dry_run=False,
+        smart_execution=False,
+        repair_attempts=0,
+        min_rebalance_completeness=0.80,
+    ))
+
+    result = execute_plan(adapter, plan, write_audit=False)
+
+    assert not result.submitted
+    assert result.completeness_ratio == pytest.approx(0.10)
+    assert "completeness" in result.error
+    adapter.cancel_all_open.assert_not_called()
+
+
+def test_completeness_gate_allows_only_dust_missing():
+    plan = _partial_plan(allowed_usd=1_000.0, skipped_usd=1.0)
+    adapter = _mock_adapter("0xAAA", ExecutionConfig(
+        testnet=True,
+        dry_run=False,
+        smart_execution=False,
+        repair_attempts=0,
+        min_rebalance_completeness=0.95,
+    ))
+
+    result = execute_plan(adapter, plan, write_audit=False)
+
+    assert result.submitted
+    assert result.completeness_ratio == pytest.approx(1_000 / 1_001)
+    adapter.submit_orders.assert_called_once()
+
+
+def test_completeness_gate_never_blocks_all_reduce_only_plan():
+    plan = _partial_plan(allowed_usd=100.0, skipped_usd=900.0, reduce_only=True)
+    adapter = _mock_adapter("0xAAA", ExecutionConfig(
+        testnet=True,
+        dry_run=False,
+        smart_execution=False,
+        repair_attempts=0,
+        min_rebalance_completeness=0.99,
+    ))
+    adapter.fetch_state.return_value = plan.current_state
+
+    result = execute_plan(adapter, plan, write_audit=False)
+
+    assert result.submitted
+    assert result.completeness_ratio == 1.0
+    adapter.submit_orders.assert_called_once()
+
+
+def test_completeness_gate_blocks_only_increases_and_submits_reduce_only():
+    state = AccountState(
+        "0xAAA",
+        10_000.0,
+        0.0,
+        positions={"BTC": Position("BTC", 0.001, 100_000.0, 100.0)},
+    )
+    plan = RebalancePlan(
+        timestamp_ms=1000,
+        target_weights={"btc": 0.0, "eth": 0.01, "sol": 0.09},
+        current_state=state,
+        target_usd={"BTC": 0.0, "ETH": 100.0, "SOL": 900.0},
+        deltas_usd={"BTC": -100.0, "ETH": 100.0, "SOL": 900.0},
+        orders=[
+            Order(
+                "BTC", False, 0.001, 100_000.0, "0x" + "1" * 32,
+                reduce_only=True,
+            ),
+            Order("ETH", True, 0.1, 1_000.0, "0x" + "2" * 32),
+        ],
+        skipped=[("SOL", SkipReason.EXCEEDS_TRADE_CAP, "synthetic planner skip")],
+        equity_used=10_000.0,
+        network="testnet",
+        target_snapshot=TargetSnapshot(
+            {"btc": 0.0, "eth": 0.01, "sol": 0.09},
+            as_of=datetime.now(timezone.utc),
+        ),
+    )
+    adapter = _mock_adapter("0xAAA", ExecutionConfig(
+        testnet=True,
+        dry_run=False,
+        smart_execution=False,
+        repair_attempts=0,
+        min_rebalance_completeness=0.80,
+    ))
+    adapter.fetch_state.return_value = state
+
+    result = execute_plan(adapter, plan, write_audit=False)
+
+    assert result.submitted
+    assert result.error is None
+    assert result.completeness_ratio == pytest.approx(0.10)
+    assert [order.coin for order in result.submitted_orders] == ["BTC"]
+    assert ("ETH", SkipReason.INSUFFICIENT_PLAN_COMPLETENESS) in {
+        (coin, reason) for coin, reason, _detail in result.plan.skipped
+    }
+
+
+def test_completeness_gate_default_preserves_partial_submit():
+    plan = _partial_plan(allowed_usd=100.0, skipped_usd=900.0)
+    adapter = _mock_adapter("0xAAA", ExecutionConfig(
+        testnet=True,
+        dry_run=False,
+        smart_execution=False,
+        repair_attempts=0,
+    ))
+
+    result = execute_plan(adapter, plan, write_audit=False)
+
+    assert result.submitted
+    assert result.completeness_ratio == pytest.approx(0.10)
+    adapter.submit_orders.assert_called_once()
 
 
 # ── Gate 3: dry-run honored ──────────────────────────────────────────

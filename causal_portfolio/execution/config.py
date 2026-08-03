@@ -112,6 +112,10 @@ class ExecutionConfig:
     # position. 0 preserves the historical behavior (submit every tradeable leg).
     min_position_change_pct: float = 0.0
 
+    # Refuse partial non-reducing plans below this executed share of intended
+    # gross trade notional. 0 preserves the historical partial-submit behavior.
+    min_rebalance_completeness: float = 0.0
+
     def __post_init__(self):
         # Light validation. Don't catch every bad combination — just the obvious
         # foot-guns that would silently corrupt a rebalance plan.
@@ -173,6 +177,14 @@ class ExecutionConfig:
             raise ValueError(
                 "min_position_change_pct must be >= 0, got "
                 f"{self.min_position_change_pct}"
+            )
+        if (
+            not math.isfinite(self.min_rebalance_completeness)
+            or not 0 <= self.min_rebalance_completeness <= 1
+        ):
+            raise ValueError(
+                "min_rebalance_completeness must be in [0, 1], got "
+                f"{self.min_rebalance_completeness}"
             )
         if self.max_signal_age_hours <= 0:
             raise ValueError(

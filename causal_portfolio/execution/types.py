@@ -33,6 +33,9 @@ class SkipReason(str, Enum):
     BELOW_MIN_SIZE = "size_rounded_to_zero"
     BELOW_MIN_NOTIONAL = "below_min_order_notional"
     BELOW_NO_TRADE_BAND = "below_no_trade_band"
+    COST_ESTIMATE_UNAVAILABLE = "transaction_cost_estimate_unavailable"
+    EXCEEDS_TRANSACTION_COST = "transaction_cost_limit_exceeded"
+    INSUFFICIENT_PLAN_COMPLETENESS = "insufficient_plan_completeness"
     EXCEEDS_TRADE_CAP = "single_trade_cap_exceeded"
     EXCEEDS_LEVERAGE_LIMIT = "asset_leverage_limit_exceeded"
     LONG_ONLY_VIOLATION = "negative_weight_with_long_only"
@@ -214,3 +217,5 @@ class SubmitResult:
     # Initial orders actually handed to the exchange. None keeps old manually
     # constructed results distinguishable from a known empty submission.
     submitted_orders: list[Order] | None = None
+    # Submitted share of intended exposure-increasing gross trade notional.
+    completeness_ratio: float | None = None
