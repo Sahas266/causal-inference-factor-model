@@ -355,40 +355,15 @@ class HLAdapter:
         return round_size(size, sz_decimals) if size > 0 else 0.0
 
 
-def _estimate_transaction_cost(adapter: HLAdapter, orders: list[Order]) -> dict[str, Any]:
-    """Estimate all-in taker fee and full-size L2 impact before submission."""
-    mids = adapter.fetch_mids()
-    fee_bps = adapter.config.estimated_taker_fee_bps
-    planned_notional = 0.0
-    slippage_usd = 0.0
-    fee_usd = 0.0
-    legs: list[dict[str, Any]] = []
-    for order in orders:
-        mid = mids.get(order.coin)
-        if mid is None or mid <= 0:
-            raise ValueError(f"{order.coin}: mid price unavailable")
-        book = adapter.fetch_l2_book(order.coin, depth=100)
-        vwap = estimate_vwap(book, order.is_buy, order.size)
-        if vwap is None:
-            raise ValueError(f"{order.coin}: insufficient or invalid L2 depth")
-        notional = order.size * mid
-        leg_slippage = order.size * abs(vwap - mid)
-        leg_fee = order.size * vwap * fee_bps / 10_000.0
-        planned_notional += notional
-        slippage_usd += leg_slippage
-        fee_usd += leg_fee
-        legs.append({
-            "coin": order.coin,
-            "side": "buy" if order.is_buy else "sell",
-            "size": order.size,
-            "mid": mid,
-            "estimated_vwap": vwap,
-            "planned_notional_usd": notional,
-            "slippage_usd": leg_slippage,
-            "fee_usd": leg_fee,
-        })
+def _aggregate_transaction_cost(
+    legs: list[dict[str, Any]], fee_bps: float
+) -> dict[str, Any]:
+    """Aggregate already-sampled per-leg costs without another book fetch."""
+    planned_notional = sum(leg["planned_notional_usd"] for leg in legs)
     if planned_notional <= 0:
         raise ValueError("planned notional is zero")
+    slippage_usd = sum(leg["slippage_usd"] for leg in legs)
+    fee_usd = sum(leg["fee_usd"] for leg in legs)
     total_cost = slippage_usd + fee_usd
     return {
         "planned_notional_usd": planned_notional,
@@ -401,26 +376,106 @@ def _estimate_transaction_cost(adapter: HLAdapter, orders: list[Order]) -> dict[
     }
 
 
+def _estimate_transaction_cost(adapter: HLAdapter, orders: list[Order]) -> dict[str, Any]:
+    """Estimate all-in taker fee and full-size L2 impact before submission."""
+    mids = adapter.fetch_mids()
+    fee_bps = adapter.config.estimated_taker_fee_bps
+    legs: list[dict[str, Any]] = []
+    for order in orders:
+        mid = mids.get(order.coin)
+        if mid is None or mid <= 0:
+            raise ValueError(f"{order.coin}: mid price unavailable")
+        book = adapter.fetch_l2_book(order.coin, depth=100)
+        vwap = estimate_vwap(book, order.is_buy, order.size)
+        if vwap is None:
+            raise ValueError(f"{order.coin}: insufficient or invalid L2 depth")
+        notional = order.size * mid
+        leg_slippage = order.size * abs(vwap - mid)
+        leg_fee = order.size * vwap * fee_bps / 10_000.0
+        legs.append({
+            "coin": order.coin,
+            "side": "buy" if order.is_buy else "sell",
+            "reduce_only": order.reduce_only,
+            "size": order.size,
+            "mid": mid,
+            "estimated_vwap": vwap,
+            "planned_notional_usd": notional,
+            "slippage_usd": leg_slippage,
+            "fee_usd": leg_fee,
+        })
+    return _aggregate_transaction_cost(legs, fee_bps)
+
+
 def _check_cost_gate(
     adapter: HLAdapter, orders: list[Order]
-) -> tuple[dict[str, Any] | None, str | None]:
+) -> tuple[dict[str, Any] | None, str | None, list[Order]]:
     limit = adapter.config.max_transaction_cost_bps
     if limit is None:
-        return None, None
+        return None, None, orders
+
+    # Reduce-only orders are fully exempt: failing closed on an exit preserves
+    # the risk the order was meant to remove. Only exposure increases are gated.
+    gated_orders = [order for order in orders if not order.reduce_only]
+    exempt_orders = [order for order in orders if order.reduce_only]
     try:
         estimate = _estimate_transaction_cost(adapter, orders)
     except Exception as exc:
         logger.warning("transaction-cost estimate unavailable: %s", exc)
-        return {"max_transaction_cost_bps": limit, "error": str(exc)}, "cost_estimate_unavailable"
+        failed_estimate = {"max_transaction_cost_bps": limit, "error": str(exc)}
+        if gated_orders:
+            if exempt_orders:
+                failed_estimate.update({
+                    "reduce_only_exempt": True,
+                    "submitted_scope": "reduce_only",
+                    "blocked_exposure_increasing_estimate": dict(failed_estimate),
+                })
+            return failed_estimate, "cost_estimate_unavailable", exempt_orders
+        failed_estimate.update({
+            "reduce_only_exempt": True,
+            "submitted_scope": "reduce_only",
+        })
+        return failed_estimate, None, orders
+
     estimate["max_transaction_cost_bps"] = limit
-    if estimate["estimated_cost_bps"] > limit:
+    if not gated_orders:
+        estimate.update({
+            "reduce_only_exempt": True,
+            "submitted_scope": "reduce_only",
+        })
+        return estimate, None, orders
+
+    gated_estimate = _aggregate_transaction_cost(
+        [leg for leg in estimate["legs"] if not leg["reduce_only"]],
+        estimate["estimated_taker_fee_bps"],
+    )
+    gated_estimate["max_transaction_cost_bps"] = limit
+    if gated_estimate["estimated_cost_bps"] > limit:
         logger.info(
             "transaction-cost gate blocked: %.2f bps > %.2f bps",
-            estimate["estimated_cost_bps"],
+            gated_estimate["estimated_cost_bps"],
             limit,
         )
-        return estimate, "estimated_cost_above_limit"
-    return estimate, None
+        if not exempt_orders:
+            return gated_estimate, "estimated_cost_above_limit", []
+        submitted_estimate = _aggregate_transaction_cost(
+            [leg for leg in estimate["legs"] if leg["reduce_only"]],
+            estimate["estimated_taker_fee_bps"],
+        )
+        submitted_estimate.update({
+            "max_transaction_cost_bps": limit,
+            "reduce_only_exempt": True,
+            "submitted_scope": "reduce_only",
+            "blocked_exposure_increasing_estimate": gated_estimate,
+        })
+        return submitted_estimate, "estimated_cost_above_limit", exempt_orders
+
+    if not exempt_orders:
+        return estimate, None, orders
+    estimate.update({
+        "exposure_increasing_estimated_cost_bps": gated_estimate["estimated_cost_bps"],
+        "reduce_only_exempt": True,
+    })
+    return estimate, None, orders
 
 
 def execute_target(
@@ -548,6 +603,7 @@ def _execute_plan_inner(
             plan=plan, submitted=False,
             error=(f"address mismatch: plan built for {plan.current_state.address!r} "
                    f"but adapter writes from {adapter.address!r}"),
+            submitted_orders=[],
         )
 
     adapter_network = "testnet" if adapter.config.testnet else "mainnet"
@@ -557,15 +613,16 @@ def _execute_plan_inner(
             submitted=False,
             error=(f"network mismatch: plan built for {plan.network!r} "
                    f"but adapter is on {adapter_network!r}"),
+            submitted_orders=[],
         )
 
     if adapter.config.dry_run:
         logger.info("DRY RUN — not submitting %d orders", len(plan.orders))
-        return SubmitResult(plan=plan, submitted=False)
+        return SubmitResult(plan=plan, submitted=False, submitted_orders=[])
 
     if not plan.orders:
         logger.info("no orders to submit")
-        return SubmitResult(plan=plan, submitted=False)
+        return SubmitResult(plan=plan, submitted=False, submitted_orders=[])
 
     if not adapter.config.allow_stale_signal:
         if plan.target_snapshot is None:
@@ -589,6 +646,7 @@ def _execute_plan_inner(
                 error=(f"signal freshness check failed for target "
                        f"{target_id}: {freshness_error}. "
                        f"Set allow_stale_signal=True only for an intentional override."),
+                submitted_orders=[],
             )
 
     # Gate 4: mainnet writes need explicit acknowledgement
@@ -597,6 +655,7 @@ def _execute_plan_inner(
             plan=plan, submitted=False,
             error=("LIVE MAINNET write blocked: acknowledge_mainnet must be the "
                    "literal boolean True."),
+            submitted_orders=[],
         )
 
     if adapter.config.is_live_mainnet():
@@ -604,13 +663,16 @@ def _execute_plan_inner(
                        len(plan.orders),
                        sum(abs(d) for d in plan.deltas_usd.values()))
 
-    cost_estimate, cost_gate_reason = _check_cost_gate(adapter, plan.orders)
-    if cost_gate_reason is not None:
+    cost_estimate, cost_gate_reason, orders_to_submit = _check_cost_gate(
+        adapter, plan.orders
+    )
+    if not orders_to_submit:
         return SubmitResult(
             plan=plan,
             submitted=False,
             cost_estimate=cost_estimate,
             cost_gate_reason=cost_gate_reason,
+            submitted_orders=[],
         )
 
     submission_error = None
@@ -630,15 +692,17 @@ def _execute_plan_inner(
                 plan=plan, submitted=False, post_state=mid_state,
                 error="cancel-race detected: positions moved between cancel and submit",
                 cost_estimate=cost_estimate,
+                cost_gate_reason=cost_gate_reason,
+                submitted_orders=[],
             )
 
         submission_started = True
         if adapter.config.twap_minutes > 0:
-            response = _submit_orders_twap(adapter, plan.orders)
+            response = _submit_orders_twap(adapter, orders_to_submit)
         elif adapter.config.smart_execution:
-            response = adapter.submit_orders_book_aware(plan.orders)
+            response = adapter.submit_orders_book_aware(orders_to_submit)
         else:
-            response = adapter.submit_orders(plan.orders)
+            response = adapter.submit_orders(orders_to_submit)
     except Exception as e:
         logger.exception("submission failed before completion")
         # Best-effort post-state snapshot: orders may have partially gone out
@@ -658,6 +722,8 @@ def _execute_plan_inner(
                 post_state=post,
                 error=str(e),
                 cost_estimate=cost_estimate,
+                cost_gate_reason=cost_gate_reason,
+                submitted_orders=[],
             )
         logger.warning("submission response failed after positions changed; reconciling")
         response = None
@@ -680,7 +746,9 @@ def _execute_plan_inner(
         return SubmitResult(plan=plan, submitted=True,
                             response=response, post_state=post, drifts=drifts,
                             post_submit_error=submission_error, repair=repair,
-                            cost_estimate=cost_estimate)
+                            cost_estimate=cost_estimate,
+                            cost_gate_reason=cost_gate_reason,
+                            submitted_orders=list(orders_to_submit))
     except Exception as e:
         logger.exception("post-submit state/reconciliation failed")
         post_submit_error = str(e)
@@ -693,6 +761,8 @@ def _execute_plan_inner(
             post_state=post,
             post_submit_error=post_submit_error,
             cost_estimate=cost_estimate,
+            cost_gate_reason=cost_gate_reason,
+            submitted_orders=list(orders_to_submit),
         )
 
 
@@ -739,22 +809,23 @@ def _repair_failed_legs(
                 attempt["note"] = "residual not tradeable (dust/caps)"
                 attempts.append(attempt)
                 break
-            cost_estimate, cost_gate_reason = _check_cost_gate(
+            cost_estimate, cost_gate_reason, repair_orders = _check_cost_gate(
                 adapter, repair_plan.orders
             )
             if cost_estimate is not None:
                 attempt["cost_estimate"] = cost_estimate
             if cost_gate_reason is not None:
                 attempt["cost_gate_reason"] = cost_gate_reason
+            if not repair_orders:
                 attempts.append(attempt)
                 break
             logger.warning(
                 "leg repair attempt %d/%d: %d residual order(s) for %s",
-                i + 1, cfg.repair_attempts, len(repair_plan.orders),
-                [o.coin for o in repair_plan.orders],
+                i + 1, cfg.repair_attempts, len(repair_orders),
+                [o.coin for o in repair_orders],
             )
             submission_started = True
-            response = adapter.submit_orders_book_aware(repair_plan.orders)
+            response = adapter.submit_orders_book_aware(repair_orders)
             attempt["response"] = response
             post = adapter.fetch_state()
             drifts = reconcile(

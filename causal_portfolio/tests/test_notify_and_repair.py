@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import sys
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -237,6 +238,25 @@ def test_notify_skips_clean_dry_run(monkeypatch):
     text, kwargs = sent[0]
     assert "Target" in text and "Submitted: <b>True</b>" in text
     assert kwargs == {"parse_mode": "HTML"}
+
+
+def test_partial_cost_gate_notification_warns_and_reports_submitted_count():
+    plan = _plan()
+    plan = replace(plan, orders=[
+        *plan.orders,
+        Order("ETH", False, 0.1, 3_000.0, "0x" + "2" * 32, reduce_only=True),
+    ])
+    result = _result(
+        plan=plan,
+        cost_gate_reason="estimated_cost_above_limit",
+        submitted_orders=[plan.orders[1]],
+    )
+
+    text = notify.format_result(result)
+
+    assert text.startswith("⚠️")
+    assert not text.startswith("✅")
+    assert "1 of 2 submitted" in text
 
 
 def test_format_pnl_reports_per_position_and_total():

@@ -138,6 +138,8 @@ def send(text: str, *, parse_mode: str | None = None) -> bool:
 def _status_emoji(result: Any) -> str:
     if result.error:
         return "🛑"
+    if result.cost_gate_reason:
+        return "⚠️" if result.submitted else "⏸️"
     if result.drifts or (result.repair and not result.repair.get("resolved", True)):
         return "⚠️"
     if result.submitted:
@@ -176,10 +178,17 @@ def format_result(result: Any) -> str:
         else "unversioned"
     )
     gross = sum(abs(d) for d in plan.deltas_usd.values())
+    submitted_orders = getattr(result, "submitted_orders", None)
+    submitted_count = (
+        len(submitted_orders)
+        if submitted_orders is not None
+        else len(plan.orders) if result.submitted else 0
+    )
     lines = [
         f"{_status_emoji(result)} <b>CPCM Execution</b> — {_esc(plan.network or '?')}",
         f"Target <code>{_esc(target_id)}</code>",
-        f"Submitted: <b>{result.submitted}</b> · Orders: <b>{len(plan.orders)}</b>",
+        f"Submitted: <b>{result.submitted}</b> · Orders: "
+        f"<b>{submitted_count} of {len(plan.orders)} submitted</b>",
         f"Gross: <b>${gross:,.0f}</b> · Equity: <b>${plan.current_state.account_value_usd:,.0f}</b>",
     ]
     if result.cost_estimate:

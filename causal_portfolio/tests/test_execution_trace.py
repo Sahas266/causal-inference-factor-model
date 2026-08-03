@@ -172,6 +172,52 @@ def test_execution_result_records_pretrade_and_realized_cost(tmp_path):
     assert data["health"]["kind"] == "portfolio_snapshot"
 
 
+def test_execution_trace_distinguishes_planned_and_submitted_orders(tmp_path):
+    target = TargetSnapshot(
+        {"btc": 0.1, "eth": 0.0},
+        as_of=datetime(2026, 7, 22, 12, tzinfo=timezone.utc),
+        strategy="unit-model",
+    )
+    active = trace.start_cycle(target, log_dir=tmp_path)
+    state = AccountState("0xAAA", 10_000.0, 0.0)
+    planned = [
+        Order("BTC", True, 0.01, 100_000.0, "0x" + "1" * 32),
+        Order("ETH", False, 0.1, 3_000.0, "0x" + "2" * 32, reduce_only=True),
+    ]
+    plan = RebalancePlan(
+        1,
+        target.weights,
+        state,
+        {"BTC": 1_000.0, "ETH": 0.0},
+        {"BTC": 1_000.0, "ETH": -300.0},
+        planned,
+        [],
+        10_000.0,
+        target_snapshot=target,
+        mids={"BTC": 100_000.0, "ETH": 3_000.0},
+    )
+    result = SubmitResult(
+        plan=plan,
+        submitted=True,
+        cost_gate_reason="estimated_cost_above_limit",
+        submitted_orders=[planned[1]],
+    )
+
+    assert trace.record_execution_result(result, log_dir=tmp_path)
+
+    payload = json.loads(_events(active, "execution_result")[0][1])
+    assert payload["planned_order_count"] == 2
+    assert payload["submitted_order_count"] == 1
+    assert [order["coin"] for order in payload["submitted_orders"]] == ["ETH"]
+    plan_payloads = {
+        coin: json.loads(event) for coin, event in _events(active, "execution_plan")
+    }
+    assert plan_payloads["BTC"]["submitted_order"] is None
+    assert plan_payloads["ETH"]["submitted_order"]["coin"] == "ETH"
+    assert len(_events(active, "cost_gate_partial")) == 1
+    assert _events(active, "cost_gate_noop") == []
+
+
 def test_missing_mid_never_publishes_partial_pnl_as_total(tmp_path):
     target = _target(0.1)
     active = trace.start_cycle(target, log_dir=tmp_path)

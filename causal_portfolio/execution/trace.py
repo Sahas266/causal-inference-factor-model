@@ -352,7 +352,12 @@ def _realized_fill_cost(result: SubmitResult) -> dict[str, float] | None:
             if coin and fill.get("px") is not None:
                 fills.append((coin, float(fill["sz"]), float(fill["px"])))
     if not fills:
-        for order, status in zip(result.plan.orders, data.get("statuses", [])):
+        submitted_orders = (
+            result.submitted_orders
+            if result.submitted_orders is not None
+            else result.plan.orders
+        )
+        for order, status in zip(submitted_orders, data.get("statuses", [])):
             fill = status.get("filled") if isinstance(status, dict) else None
             if fill and fill.get("avgPx") is not None:
                 fills.append((
@@ -394,10 +399,17 @@ def record_execution_result(
     try:
         ts = _utc_now().isoformat()
         orders = {order.coin: order for order in plan.orders}
+        submitted_order_list = (
+            result.submitted_orders
+            if result.submitted_orders is not None
+            else plan.orders if result.submitted else []
+        )
+        submitted_orders = {order.coin: order for order in submitted_order_list}
         with _connect(path) as conn:
             for coin in sorted(set(plan.target_usd) | set(plan.deltas_usd)):
                 position = plan.current_state.positions.get(coin)
                 order = orders.get(coin)
+                submitted_order = submitted_orders.get(coin)
                 _insert_event(
                     conn,
                     target_id=target_id,
@@ -418,6 +430,9 @@ def record_execution_result(
                     equity_usd=plan.current_state.account_value_usd,
                     payload={
                         "order": asdict(order) if order else None,
+                        "submitted_order": (
+                            asdict(submitted_order) if submitted_order else None
+                        ),
                         "notes": plan.notes,
                         "skipped": [row for row in plan.skipped if row[0] == coin],
                     },
@@ -433,6 +448,9 @@ def record_execution_result(
                 "repair": result.repair,
                 "cost_estimate": result.cost_estimate,
                 "cost_gate_reason": result.cost_gate_reason,
+                "planned_order_count": len(plan.orders),
+                "submitted_order_count": len(submitted_order_list),
+                "submitted_orders": submitted_order_list,
                 "realized_fill_cost": _realized_fill_cost(result),
             }
             _insert_event(
@@ -449,7 +467,7 @@ def record_execution_result(
                 _insert_event(
                     conn,
                     target_id=target_id,
-                    kind="cost_gate_noop",
+                    kind="cost_gate_partial" if result.submitted else "cost_gate_noop",
                     ts_utc=ts,
                     equity_usd=plan.current_state.account_value_usd,
                     payload={

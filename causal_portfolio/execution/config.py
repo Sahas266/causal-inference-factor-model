@@ -108,6 +108,10 @@ class ExecutionConfig:
     # Appended to preserve positional compatibility for the older fields.
     network_timeout_seconds: float = 15.0
 
+    # Skip same-direction resizes smaller than this fraction of the existing
+    # position. 0 preserves the historical behavior (submit every tradeable leg).
+    min_position_change_pct: float = 0.0
+
     def __post_init__(self):
         # Light validation. Don't catch every bad combination — just the obvious
         # foot-guns that would silently corrupt a rebalance plan.
@@ -161,6 +165,14 @@ class ExecutionConfig:
             raise ValueError(
                 "network_timeout_seconds must be > 0, got "
                 f"{self.network_timeout_seconds}"
+            )
+        if (
+            not math.isfinite(self.min_position_change_pct)
+            or self.min_position_change_pct < 0
+        ):
+            raise ValueError(
+                "min_position_change_pct must be >= 0, got "
+                f"{self.min_position_change_pct}"
             )
         if self.max_signal_age_hours <= 0:
             raise ValueError(

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -15,6 +16,7 @@ from causal_portfolio.execution.rebalancer import plan_rebalance
 from causal_portfolio.execution.types import (
     AccountState,
     AssetMeta,
+    Order,
     Position,
     ReconcileDrift,
     SubmitResult,
@@ -49,9 +51,14 @@ def test_serialize_handles_dataclass_and_enum():
 
 def test_append_creates_jsonl_file(tmp_path):
     plan = _build_plan_with_orders()
+    plan = replace(plan, orders=[
+        *plan.orders,
+        Order("ETH", False, 0.1, 3_000.0, "0x" + "2" * 32, reduce_only=True),
+    ])
     result = SubmitResult(
         plan=plan,
         submitted=True,
+        submitted_orders=[plan.orders[1]],
         post_submit_error="post-state unavailable",
         repair={"attempts": [{"attempt": 1}], "resolved": False},
     )
@@ -62,6 +69,9 @@ def test_append_creates_jsonl_file(tmp_path):
     assert len(lines) == 1
     record = json.loads(lines[0])
     assert record["submitted"] is True
+    assert record["planned_order_count"] == 2
+    assert record["submitted_order_count"] == 1
+    assert [order["coin"] for order in record["submitted_orders"]] == ["ETH"]
     assert record["error"] is None
     assert record["post_submit_error"] == "post-state unavailable"
     assert record["repair"] == {"attempts": [{"attempt": 1}], "resolved": False}

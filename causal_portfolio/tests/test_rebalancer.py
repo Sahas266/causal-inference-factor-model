@@ -174,6 +174,74 @@ def test_tiny_weight_fires_order_no_dust_filter(basic_meta, basic_mids):
     assert plan.orders[0].coin == "BTC"
 
 
+def test_no_trade_band_skips_tiny_same_direction_resize(basic_meta, basic_mids):
+    cfg = ExecutionConfig(
+        dry_run=True,
+        max_position_pct=1.0,
+        max_single_trade_pct=1.0,
+        min_position_change_pct=0.10,
+    )
+    state = _state(10_000, positions={"BTC": _pos("BTC", size=0.1, px=60_000)})
+
+    plan = plan_rebalance(
+        target_weights={"btc": 0.59},
+        state=state,
+        mids=basic_mids,
+        meta=basic_meta,
+        config=cfg,
+        timestamp_ms=1000,
+    )
+
+    assert plan.orders == []
+    assert ("BTC", SkipReason.BELOW_NO_TRADE_BAND) in {
+        (coin, reason) for coin, reason, _ in plan.skipped
+    }
+
+
+def test_no_trade_band_default_preserves_same_direction_resize(basic_meta, basic_mids):
+    cfg = ExecutionConfig(
+        dry_run=True,
+        max_position_pct=1.0,
+        max_single_trade_pct=1.0,
+    )
+    state = _state(10_000, positions={"BTC": _pos("BTC", size=0.1, px=60_000)})
+
+    plan = plan_rebalance(
+        target_weights={"btc": 0.59},
+        state=state,
+        mids=basic_mids,
+        meta=basic_meta,
+        config=cfg,
+        timestamp_ms=1000,
+    )
+
+    assert [order.coin for order in plan.orders] == ["BTC"]
+
+
+def test_no_trade_band_never_blocks_direction_flip(basic_meta, basic_mids):
+    cfg = ExecutionConfig(
+        dry_run=True,
+        max_position_pct=1.0,
+        max_single_trade_pct=1.0,
+        min_order_notional_usd=0.0,
+        min_position_change_pct=10.0,
+    )
+    state = _state(10_000, positions={"ETH": _pos("ETH", size=0.001, px=3_000)})
+
+    plan = plan_rebalance(
+        target_weights={"eth": -0.0001},
+        state=state,
+        mids=basic_mids,
+        meta=basic_meta,
+        config=cfg,
+        timestamp_ms=1000,
+    )
+
+    eth_order = next(order for order in plan.orders if order.coin == "ETH")
+    assert not eth_order.is_buy
+    assert not eth_order.reduce_only
+
+
 def test_below_min_notional_is_skipped_before_exchange_reject(basic_meta, basic_mids):
     """Small non-reducing sleeves should be visible in dry-run as skips."""
     cfg = ExecutionConfig(dry_run=True, min_order_notional_usd=10.0)
@@ -198,6 +266,7 @@ def test_full_reduce_close_allowed_below_min_notional(basic_meta, basic_mids):
         dry_run=True,
         min_order_notional_usd=10.0,
         max_single_trade_pct=1.0,
+        min_position_change_pct=10.0,
     )
     state = _state(10_000, positions={"ETH": _pos("ETH", size=0.001, px=3_000)})
     plan = plan_rebalance(
@@ -548,6 +617,12 @@ def test_config_validation():
         ExecutionConfig(slippage_bps=-1)
     with pytest.raises(ValueError, match="min_order_notional_usd"):
         ExecutionConfig(min_order_notional_usd=-1)
+    with pytest.raises(ValueError, match="min_position_change_pct"):
+        ExecutionConfig(min_position_change_pct=-1)
+    with pytest.raises(ValueError, match="min_position_change_pct"):
+        ExecutionConfig(min_position_change_pct=float("nan"))
+    with pytest.raises(ValueError, match="min_position_change_pct"):
+        ExecutionConfig(min_position_change_pct=float("inf"))
 
 
 def test_twap_config_validation():

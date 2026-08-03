@@ -9,7 +9,7 @@ Algorithm:
   3. Re-normalize so |w| sums to ≤ 1.0 (or less if caps clipped)
   4. target_usd[c] = equity * leverage * w[c]
   5. delta_usd[c] = target_usd[c] - current_usd[c]
-  6. Filter: single-trade cap (no dust filter — closing positions of any size must work)
+  6. Filter: no-trade band and single-trade cap (full closes remain exempt)
   7. Convert USD → signed size via mids; round to sz_decimals
   8. Drop coins where rounded size = 0
   9. Build IOC limit orders with deterministic cloid
@@ -199,6 +199,24 @@ def plan_rebalance(
         if abs(delta) == 0:
             continue
 
+        current_notional = current_usd.get(coin, 0.0)
+        target_notional = target_usd.get(coin, 0.0)
+        # A fraction of the existing position is scale-aware and directly
+        # targets resize churn; opens, flips, and closes are directional calls.
+        if (
+            current_notional * target_notional > 0
+            and abs(delta) / abs(current_notional) < config.min_position_change_pct
+        ):
+            skipped.append((
+                coin,
+                SkipReason.BELOW_NO_TRADE_BAND,
+                (
+                    f"|delta|/|current|={abs(delta) / abs(current_notional):.2%} "
+                    f"below no-trade band {config.min_position_change_pct:.2%}"
+                ),
+            ))
+            continue
+
         if abs(delta) > single_trade_cap_usd:
             # Don't silently shrink — surface to operator. Skip this coin.
             skipped.append((
@@ -232,8 +250,6 @@ def plan_rebalance(
         # without flipping sign (target == 0, a full close, always qualifies).
         # HL allows wider price bands for reduce-only orders — they can't
         # accidentally open new exposure.
-        current_notional = current_usd.get(coin, 0.0)
-        target_notional = target_usd.get(coin, 0.0)
         is_reduce_only = _is_same_side_reduce(current_notional, target_notional)
         is_full_reduce_close = is_reduce_only and target_notional == 0
 

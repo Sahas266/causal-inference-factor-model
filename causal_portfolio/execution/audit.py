@@ -49,6 +49,11 @@ def append(result: SubmitResult, log_dir: Path | None = None) -> Path:
     log_dir.mkdir(parents=True, exist_ok=True)
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     path = log_dir / f"rebalance-{today}.jsonl"
+    submitted_orders = (
+        result.submitted_orders
+        if result.submitted_orders is not None
+        else result.plan.orders if result.submitted else []
+    )
 
     record = {
         "ts_utc": datetime.now(timezone.utc).isoformat(),
@@ -59,6 +64,9 @@ def append(result: SubmitResult, log_dir: Path | None = None) -> Path:
             else None
         ),
         "submitted": result.submitted,
+        "planned_order_count": len(result.plan.orders),
+        "submitted_order_count": len(submitted_orders),
+        "submitted_orders": _serialize(submitted_orders),
         "error": result.error,
         "post_submit_error": result.post_submit_error,
         "plan": _serialize(result.plan),

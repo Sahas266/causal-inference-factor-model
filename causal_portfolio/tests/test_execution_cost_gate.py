@@ -8,7 +8,13 @@ import pytest
 from causal_portfolio.execution.config import ExecutionConfig
 from causal_portfolio.execution.hyperliquid import execute_plan
 from causal_portfolio.execution.orderbook import L2Book, L2Level, estimate_vwap
-from causal_portfolio.execution.types import AccountState, Order, RebalancePlan, TargetSnapshot
+from causal_portfolio.execution.types import (
+    AccountState,
+    Order,
+    Position,
+    RebalancePlan,
+    TargetSnapshot,
+)
 
 
 def _plan() -> RebalancePlan:
@@ -89,6 +95,66 @@ def test_cost_gate_blocks_expensive_book_before_cancel_or_submit():
     assert result.cost_estimate["estimated_cost_bps"] > 15.0
     adapter.cancel_all_open.assert_not_called()
     adapter.submit_orders.assert_not_called()
+
+
+def test_cost_gate_submits_expensive_reduce_only_leg_but_blocks_increase():
+    cfg = ExecutionConfig(
+        dry_run=False,
+        smart_execution=False,
+        repair_attempts=0,
+        max_transaction_cost_bps=15.0,
+        estimated_taker_fee_bps=0.0,
+    )
+    state = AccountState(
+        "0xAAA",
+        10_000.0,
+        0.0,
+        positions={"ETH": Position("ETH", 0.01, 100_000.0, 1_000.0)},
+    )
+    plan = RebalancePlan(
+        timestamp_ms=1,
+        target_weights={"btc": 0.1, "eth": 0.0},
+        current_state=state,
+        target_usd={"BTC": 1_000.0, "ETH": 0.0},
+        deltas_usd={"BTC": 1_000.0, "ETH": -1_000.0},
+        orders=[
+            Order("BTC", True, 0.01, 100_000.0, "0x" + "1" * 32),
+            Order("ETH", False, 0.01, 100_000.0, "0x" + "2" * 32, reduce_only=True),
+        ],
+        skipped=[],
+        equity_used=10_000.0,
+        network="testnet",
+        target_snapshot=TargetSnapshot(
+            {"btc": 0.1, "eth": 0.0}, as_of=datetime.now(timezone.utc)
+        ),
+    )
+    adapter = MagicMock(address="0xAAA", config=cfg)
+    adapter.fetch_mids.return_value = {"BTC": 100_000.0, "ETH": 100_000.0}
+    adapter.fetch_l2_book.side_effect = lambda coin, depth: L2Book(
+        coin,
+        bids=[L2Level(99_800.0, 1.0)],
+        asks=[L2Level(100_200.0, 1.0)],
+    )
+    adapter.fetch_state.side_effect = [state, state]
+    adapter.submit_orders.return_value = {"status": "ok"}
+
+    result = execute_plan(adapter, plan, write_audit=False)
+
+    assert result.submitted is True
+    assert result.cost_gate_reason == "estimated_cost_above_limit"
+    submitted_orders = adapter.submit_orders.call_args.args[0]
+    assert [order.coin for order in submitted_orders] == ["ETH"]
+    assert result.submitted_orders == submitted_orders
+    assert len(result.submitted_orders) == 1 < len(result.plan.orders)
+    assert adapter.fetch_mids.call_count == 1
+    assert adapter.fetch_l2_book.call_count == len(plan.orders)
+    assert result.cost_estimate["submitted_scope"] == "reduce_only"
+    assert [leg["coin"] for leg in result.cost_estimate["legs"]] == ["ETH"]
+    assert result.cost_estimate["estimated_cost_bps"] > 15.0
+    assert (
+        result.cost_estimate["blocked_exposure_increasing_estimate"]["legs"][0]["coin"]
+        == "BTC"
+    )
 
 
 def test_cost_gate_fails_closed_when_book_depth_is_insufficient():

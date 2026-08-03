@@ -32,6 +32,7 @@ class SkipReason(str, Enum):
     NOT_LISTED = "not_listed_on_hl"
     BELOW_MIN_SIZE = "size_rounded_to_zero"
     BELOW_MIN_NOTIONAL = "below_min_order_notional"
+    BELOW_NO_TRADE_BAND = "below_no_trade_band"
     EXCEEDS_TRADE_CAP = "single_trade_cap_exceeded"
     EXCEEDS_LEVERAGE_LIMIT = "asset_leverage_limit_exceeded"
     LONG_ONLY_VIOLATION = "negative_weight_with_long_only"
@@ -210,3 +211,6 @@ class SubmitResult:
     # audit format can evolve without breaking positional result compatibility.
     cost_estimate: dict | None = None
     cost_gate_reason: str | None = None
+    # Initial orders actually handed to the exchange. None keeps old manually
+    # constructed results distinguishable from a known empty submission.
+    submitted_orders: list[Order] | None = None
