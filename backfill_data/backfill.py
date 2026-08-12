@@ -24,7 +24,7 @@ sys.path.insert(0, str(BACKFILL_DIR))
 
 from src.core.orchestrator import BackfillOrchestrator
 from src.core.utils.logger import setup_logger
-from src.core.utils.config_loader import ConfigLoader
+from src.core.utils.config_loader import ConfigLoader, iter_endpoint_config_files
 from dotenv import load_dotenv
 
 
@@ -185,9 +185,13 @@ def load_endpoint_configs(config_path: str, config_loader: ConfigLoader, recursi
         return [config_loader.load_endpoint_config(str(path))]
     elif path.is_dir():
         # Directory of config files
-        pattern = '**/*.json' if recursive else '*.json'
+        config_files = (
+            iter_endpoint_config_files(path)
+            if recursive
+            else sorted(path.glob('*.json'))
+        )
         configs = []
-        for config_file in sorted(path.glob(pattern)):
+        for config_file in config_files:
             try:
                 config = config_loader.load_endpoint_config(str(config_file))
                 configs.append(config)
@@ -338,4 +342,3 @@ def main():
 
 if __name__ == '__main__':
     sys.exit(main())
-

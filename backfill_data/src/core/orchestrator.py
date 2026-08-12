@@ -43,7 +43,12 @@ PROVIDER_PRIORITY = {
 COINMETRICS_PRICE_PRIORITY = 3
 
 
-def _parse_date_range_bound(value: Optional[str], default_hour: int) -> Optional[datetime]:
+def _parse_date_range_bound(
+    value: Optional[str | datetime],
+    default_hour: int,
+    *,
+    now: Optional[datetime] = None,
+) -> Optional[datetime]:
     """
     Parse endpoint date range values (YYYY-MM-DD or ISO) into UTC datetimes.
 
@@ -54,8 +59,19 @@ def _parse_date_range_bound(value: Optional[str], default_hour: int) -> Optional
     Returns:
         Parsed datetime in UTC, or None if no value is provided.
     """
-    if not value:
+    if value is None or value == '':
         return None
+    if isinstance(value, datetime):
+        dt = value
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
+
+    if value.strip().lower() == 'latest':
+        current = now or datetime.now(timezone.utc)
+        if current.tzinfo is None:
+            current = current.replace(tzinfo=timezone.utc)
+        return current.astimezone(timezone.utc)
 
     # Date-only format (YYYY-MM-DD)
     if len(value) == 10:
@@ -67,6 +83,18 @@ def _parse_date_range_bound(value: Optional[str], default_hour: int) -> Optional
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
     return dt.astimezone(timezone.utc)
+
+
+def _completed_range_covers(progress: Dict, requested_end: Optional[datetime]) -> bool:
+    """Return whether a completed checkpoint already covers this request."""
+    if progress.get('status') != 'completed' or requested_end is None:
+        return False
+    previous_end = (progress.get('config') or {}).get('actual_end')
+    try:
+        parsed_end = _parse_date_range_bound(previous_end, default_hour=23)
+    except (TypeError, ValueError):
+        return False
+    return parsed_end is not None and parsed_end >= requested_end
 
 
 class BackfillOrchestrator:
@@ -197,7 +225,9 @@ class BackfillOrchestrator:
                 try:
                     result = future.result()
                     
-                    if result['success']:
+                    if result.get('skipped'):
+                        results['skipped'] += 1
+                    elif result['success']:
                         results['completed'] += 1
                     else:
                         results['failed'] += 1
@@ -208,11 +238,14 @@ class BackfillOrchestrator:
                         results['provider_stats'][provider] = {
                             'completed': 0,
                             'failed': 0,
+                            'skipped': 0,
                             'records': 0
                         }
                     
                     results['provider_stats'][provider]['records'] += result.get('records', 0)
-                    if result['success']:
+                    if result.get('skipped'):
+                        results['provider_stats'][provider]['skipped'] += 1
+                    elif result['success']:
                         results['provider_stats'][provider]['completed'] += 1
                     else:
                         results['provider_stats'][provider]['failed'] += 1
@@ -329,7 +362,8 @@ class BackfillOrchestrator:
             # counters, which would make this skip-check dead code and wipe
             # the completed marker on every re-run.
             progress = self.progress_tracker.get_progress(endpoint_id)
-            if progress and progress.get('status') == 'completed':
+            requested_end = provider_config.get('actual_end')
+            if progress and _completed_range_covers(progress, requested_end):
                 logger.info(f"Endpoint {endpoint_id} already completed, skipping")
                 return {
                     'success': True,
@@ -339,14 +373,24 @@ class BackfillOrchestrator:
                     'skipped': True
                 }
 
-            # Initialize progress tracking
-            self.progress_tracker.initialize_progress(
-                endpoint_id=endpoint_id,
-                provider=provider_name,
-                endpoint_type=provider_config.get('config', {}).get('endpoint_type', 'unknown'),
-                table_name=endpoint_config['table'],
-                config=provider_config
-            )
+            if progress and progress.get('status') == 'completed':
+                logger.info(
+                    "Reopening %s because requested end advanced to %s",
+                    endpoint_id,
+                    requested_end,
+                )
+                self.progress_tracker.reopen_progress(endpoint_id, provider_config)
+            else:
+                # Initialize progress tracking
+                self.progress_tracker.initialize_progress(
+                    endpoint_id=endpoint_id,
+                    provider=provider_name,
+                    endpoint_type=provider_config.get('config', {}).get(
+                        'endpoint_type', 'unknown'
+                    ),
+                    table_name=endpoint_config['table'],
+                    config=provider_config
+                )
 
             # Get date range
             start_time = provider_config.get('actual_start')

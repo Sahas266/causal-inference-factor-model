@@ -4,7 +4,7 @@
       "ticker": "btc",
       "display": "Bitcoin",
       "category": "l1",
-      "date_range": {"start": "2021-01-01", "end": "2026-01-01"},
+      "date_range": {"start": "2021-01-01", "end": "latest"},
       "providers": {
         "coinmetrics": {"asset": "btc", "metrics": "PriceUSD,CapMrktCurUSD,TxCnt,AdrActCnt,SplyCur,BlkCnt,HashRate,ROI30d,FeeTotNtv,IssTotNtv,FlowInExNtv,FlowOutExNtv,TxTfrCnt"},
         "coingecko": {"coin_id": "bitcoin"},
@@ -15,7 +15,7 @@
       "ticker": "eth",
       "display": "Ethereum",
       "category": "l1",
-      "date_range": {"start": "2021-01-01", "end": "2026-01-01"},
+      "date_range": {"start": "2021-01-01", "end": "latest"},
       "skip": true,
       "providers": {
         "coinmetrics": {"asset": "eth", "metrics": "PriceUSD,CapMrktCurUSD,TxCnt,AdrActCnt,SplyCur,BlkCnt,HashRate,ROI30d,FeeTotNtv,IssTotNtv,FlowInExNtv,FlowOutExNtv,TxTfrCnt"},
@@ -78,7 +78,7 @@
       "ticker": "doge",
       "display": "Dogecoin",
       "category": "l1",
-      "date_range": {"start": "2021-01-01", "end": "2026-01-01"},
+      "date_range": {"start": "2021-01-01", "end": "latest"},
       "providers": {
         "coinmetrics": {"asset": "doge", "metrics": "PriceUSD,CapMrktCurUSD,TxCnt,AdrActCnt,SplyCur,BlkCnt,HashRate,FeeTotNtv,IssTotNtv,TxTfrCnt"},
         "coingecko": {"coin_id": "dogecoin"}

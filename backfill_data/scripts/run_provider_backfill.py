@@ -17,6 +17,8 @@ from dotenv import load_dotenv
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
+from src.core.utils.config_loader import iter_endpoint_config_files
+
 def parse_args(default_provider: str) -> argparse.Namespace:
     """Parse command-line arguments for provider-specific backfill runs."""
     parser = argparse.ArgumentParser(
@@ -85,10 +87,12 @@ def _load_all_endpoint_configs(config_dir: Path) -> List[Dict]:
         raise FileNotFoundError(f"Endpoints directory not found: {endpoints_dir}")
 
     configs: List[Dict] = []
-    for endpoint_file in sorted(endpoints_dir.glob("*.json")):
+    for endpoint_file in iter_endpoint_config_files(endpoints_dir):
         with endpoint_file.open("r", encoding="utf-8") as handle:
             endpoint_config = json.load(handle)
-        endpoint_config["_source_file"] = endpoint_file.name
+        endpoint_config["_source_file"] = endpoint_file.relative_to(
+            endpoints_dir
+        ).as_posix()
         configs.append(endpoint_config)
     return configs
 

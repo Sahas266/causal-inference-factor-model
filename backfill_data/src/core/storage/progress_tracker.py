@@ -158,6 +158,24 @@ class ProgressTracker:
         except Exception as e:
             logger.error(f"Failed to update progress for {endpoint_id}: {e}")
             # Don't raise - progress tracking failure shouldn't stop backfill
+
+    def reopen_progress(self, endpoint_id: str, config: Dict) -> None:
+        """Reopen a completed endpoint for a later requested range.
+
+        Preserve its checkpoint and counters so the orchestrator resumes
+        incrementally instead of replaying the full history.
+        """
+        updates = {
+            'status': 'pending',
+            'completed_at': None,
+            'error_message': None,
+            'config': _to_json_safe(config),
+            'updated_at': datetime.utcnow().isoformat(),
+        }
+        self.client.table(self.table).update(updates).eq(
+            'endpoint_id', endpoint_id
+        ).execute()
+        logger.info(f"Reopened progress tracking for {endpoint_id}")
     
     def mark_completed(self, endpoint_id: str) -> None:
         """

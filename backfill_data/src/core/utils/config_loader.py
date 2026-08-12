@@ -9,6 +9,20 @@ import logging
 logger = logging.getLogger('backfill_system.config')
 
 
+def iter_endpoint_config_files(endpoints_dir: Path):
+    """Yield active endpoint configs recursively in deterministic order.
+
+    Directories whose name ends in ``_disabled`` are intentionally omitted
+    from broad discovery. An operator can still load one of those files by
+    specifying its path explicitly.
+    """
+    for config_file in sorted(endpoints_dir.rglob('*.json')):
+        relative = config_file.relative_to(endpoints_dir)
+        if any(part.lower().endswith('_disabled') for part in relative.parts[:-1]):
+            continue
+        yield config_file
+
+
 class ConfigLoader:
     """Utility class for loading and validating configuration files"""
     
@@ -120,9 +134,9 @@ class ConfigLoader:
             return []
         
         configs = []
-        for config_file in endpoints_dir.glob('*.json'):
+        for config_file in iter_endpoint_config_files(endpoints_dir):
             try:
-                config = self.load_endpoint_config(config_file.name)
+                config = self.load_endpoint_config(str(config_file))
                 configs.append(config)
             except Exception as e:
                 logger.error(f"Failed to load endpoint config {config_file}: {e}")
@@ -158,7 +172,8 @@ class ConfigLoader:
             return []
         
         endpoints = [
-            f.stem for f in endpoints_dir.glob('*.json')
+            str(f.relative_to(endpoints_dir).with_suffix('')).replace('\\', '/')
+            for f in iter_endpoint_config_files(endpoints_dir)
         ]
         return endpoints
 
