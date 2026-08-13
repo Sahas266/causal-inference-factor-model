@@ -49,11 +49,7 @@ def append(result: SubmitResult, log_dir: Path | None = None) -> Path:
     log_dir.mkdir(parents=True, exist_ok=True)
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     path = log_dir / f"rebalance-{today}.jsonl"
-    submitted_orders = (
-        result.submitted_orders
-        if result.submitted_orders is not None
-        else result.plan.orders if result.submitted else []
-    )
+    submitted_orders = result.effective_submitted_orders
 
     record = {
         "ts_utc": datetime.now(timezone.utc).isoformat(),

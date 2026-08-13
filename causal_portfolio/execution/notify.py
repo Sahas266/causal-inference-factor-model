@@ -185,12 +185,7 @@ def format_result(result: Any) -> str:
         else "unversioned"
     )
     gross = sum(abs(d) for d in plan.deltas_usd.values())
-    submitted_orders = getattr(result, "submitted_orders", None)
-    submitted_count = (
-        len(submitted_orders)
-        if submitted_orders is not None
-        else len(plan.orders) if result.submitted else 0
-    )
+    submitted_count = len(result.effective_submitted_orders)
     lines = [
         f"{_status_emoji(result)} <b>CPCM Execution</b> — {_esc(plan.network or '?')}",
         f"Target <code>{_esc(target_id)}</code>",

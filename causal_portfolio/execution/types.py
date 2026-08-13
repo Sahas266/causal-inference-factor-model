@@ -216,6 +216,22 @@ class SubmitResult:
     cost_gate_reason: str | None = None
     # Initial orders actually handed to the exchange. None keeps old manually
     # constructed results distinguishable from a known empty submission.
+    # Read it through `effective_submitted_orders`, not directly.
     submitted_orders: list[Order] | None = None
     # Submitted share of intended exposure-increasing gross trade notional.
     completeness_ratio: float | None = None
+
+    @property
+    def effective_submitted_orders(self) -> list[Order]:
+        """Orders that actually reached the exchange, resolving the None case.
+
+        `submitted_orders` is None on results built before the field existed
+        (and by hand in tests), where the best available answer is "all planned
+        orders if we submitted, otherwise none". Since gates can now submit a
+        strict subset of `plan.orders`, every consumer needs the same three-way
+        rule — audit counts, trace fill attribution, and the Telegram summary
+        must not disagree about what went out.
+        """
+        if self.submitted_orders is not None:
+            return self.submitted_orders
+        return list(self.plan.orders) if self.submitted else []

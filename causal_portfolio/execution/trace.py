@@ -352,12 +352,11 @@ def _realized_fill_cost(result: SubmitResult) -> dict[str, float] | None:
             if coin and fill.get("px") is not None:
                 fills.append((coin, float(fill["sz"]), float(fill["px"])))
     if not fills:
-        submitted_orders = (
-            result.submitted_orders
-            if result.submitted_orders is not None
-            else result.plan.orders
-        )
-        for order, status in zip(submitted_orders, data.get("statuses", [])):
+        # HL's statuses array aligns with the orders actually submitted, so a
+        # gated-out leg would otherwise shift attribution onto the wrong coin.
+        for order, status in zip(
+            result.effective_submitted_orders, data.get("statuses", [])
+        ):
             fill = status.get("filled") if isinstance(status, dict) else None
             if fill and fill.get("avgPx") is not None:
                 fills.append((
@@ -399,11 +398,7 @@ def record_execution_result(
     try:
         ts = _utc_now().isoformat()
         orders = {order.coin: order for order in plan.orders}
-        submitted_order_list = (
-            result.submitted_orders
-            if result.submitted_orders is not None
-            else plan.orders if result.submitted else []
-        )
+        submitted_order_list = result.effective_submitted_orders
         submitted_orders = {order.coin: order for order in submitted_order_list}
         with _connect(path) as conn:
             for coin in sorted(set(plan.target_usd) | set(plan.deltas_usd)):
