@@ -72,17 +72,56 @@ canonical names are `uni` and `crv` (see the legacy rename note in CLAUDE.md:
 `backfill_local_duckdb.py` does not apply an asset-name normalization, so new
 rows keep whatever `asset` the endpoint config declares.
 
-## Dune queries with hardcoded date bounds
+## Dune: how a series goes stale
 
-Several saved Dune queries end at a fixed date, so warming their cache
-re-executes them but returns nothing newer.
+Three independent causes, all seen here. Check them in this order.
 
-- **Fixed:** query `6811499` (ETH Daily CEX Flows) had
-  `block_time < TIMESTAMP '2026-01-01'`, changed to `block_time < CURRENT_DATE`.
-  `cex_netflow_usd` now runs to 2026-08-13.
-- **Still bounded:** the remaining ETH, UNI and BNB queries are frozen at
-  2025-12-31 / 2026-01-01, while SOL and AVAX are current. Fixing each means
-  editing its saved SQL on Dune.
+### 1. Hardcoded date bound in the saved SQL — fixed
+
+Sixteen queries ended at `TIMESTAMP '2026-01-01'` (the UNI one twice). All now
+use `CURRENT_DATE`, which also excludes the partial current day:
+
+- ETH: `6811495` `6811496` `6811497` `6811498` `6811499` `6815240` `6815241`
+  `6815242` `6815244` `6831658` `6831661` `6831664`
+- BNB: `6831685` `6831687` `6831689`
+- UNI: `6854380`
+
+### 2. A stale cache, even when the SQL is open-ended
+
+`6830998` / `6830999` already used `CURRENT_DATE` yet BNB was still frozen.
+**Editing or re-saving a Dune query does not invalidate its cached results**,
+and the provider only reads `GET /query/{id}/results`. `warm_dune_queries.py`
+skips anything already cached — right for resuming an interrupted run, wrong
+after a SQL edit. Use `--force` whenever the SQL changed.
+
+### 3. No endpoint config, so nothing ever re-fetches it
+
+`6854380` (Uniswap V3 daily LP flows) had 1,703 historical rows per metric but
+**no file under `config/endpoints/`**, so no backfill touched it and `uni`
+stayed at 2025-12-31. Config added at `config/endpoints/uni/uni_dune_lp_flows.json`.
+If a series is stale and its query looks healthy, check that a config exists at
+all before debugging anything else.
+
+### Broken for a different reason: `6815244`
+
+ETH stablecoin netflow fails on execution, and did so before any edit here:
+
+    delta_prod.stablecoins_ethereum.transfers does not exist or it is private
+
+The source table was removed or made private on Dune. This needs a rewrite
+against a currently available table — which would change what the series
+measures, so it was left alone rather than silently repointed.
+
+### Operational notes
+
+- The Dune **MCP server dropped mid-call** twice on `getDuneQuery` for
+  `6854380`. The REST API with `X-Dune-API-Key` worked; note that REST returns
+  the SQL under `query_sql`, while the MCP tool returns it under `query`.
+- `POST /execute` with `{"performance": "free"}` is rejected on this plan
+  ("performance tier is not available with your subscription"); omit the body
+  and let it default.
+- Execution is free on this plan but slow — the Uniswap V3 LP-flow query takes
+  several minutes, so warm it out of band rather than inside a timed run.
 
 ## Providers that cannot be refreshed at all
 
