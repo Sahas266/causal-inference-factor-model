@@ -24,6 +24,8 @@ from causal_portfolio.market_making.types import BookLevel, BookSnapshot, Quote,
 
 logger = logging.getLogger("cpcm.market_making.hl")
 
+_MISSING_ORDER_ERROR = "Order was never placed, already canceled, or filled."
+
 
 class PostOnlyWouldCrossError(ValueError):
     """A post-only quote would cross the live opposite touch.
@@ -213,15 +215,80 @@ class HLMarketMakerAdapter:
             return {"status": "dry_run", "cancel_cloids": sorted(self._owned)}
         from hyperliquid.utils.types import Cloid
 
+        owned = sorted(self._owned.items())
         requests = [
             {"coin": coin, "cloid": Cloid.from_str(cloid)}
-            for cloid, coin in sorted(self._owned.items())
+            for cloid, coin in owned
         ]
         response = self._ensure_exchange().bulk_cancel_by_cloid(requests)
-        if response.get("status") == "ok":
-            self._owned.clear()
-            self._save_state()
+        statuses = self._response_statuses(
+            response, expected=len(requests), action="quote cancellation"
+        )
+        cancelled = [
+            cloid
+            for (cloid, _), status in zip(owned, statuses)
+            if status == "success"
+        ]
+        confirmed_absent = [
+            cloid
+            for (cloid, _), status in zip(owned, statuses)
+            if status == "success"
+            or (
+                isinstance(status, dict)
+                and isinstance(status.get("error"), str)
+                and status["error"].startswith(_MISSING_ORDER_ERROR)
+            )
+        ]
+        for cloid in confirmed_absent:
+            self._owned.pop(cloid, None)
+        self._save_state()
+        if len(cancelled) != len(requests):
+            raise RuntimeError(
+                "quote cancellation was only partially successful "
+                f"({len(cancelled)}/{len(requests)})"
+            )
         return response
+
+    @staticmethod
+    def _response_statuses(
+        response: Any,
+        *,
+        expected: int,
+        action: str,
+    ) -> list[Any]:
+        """Return a complete, position-aligned Hyperliquid status list."""
+        if not isinstance(response, dict) or response.get("status") != "ok":
+            raise RuntimeError(f"{action} failed at the exchange")
+        response_body = response.get("response")
+        data = response_body.get("data") if isinstance(response_body, dict) else None
+        statuses = data.get("statuses") if isinstance(data, dict) else None
+        if not isinstance(statuses, list) or len(statuses) != expected:
+            raise RuntimeError(
+                f"{action} returned {len(statuses) if isinstance(statuses, list) else 0} "
+                f"statuses for {expected} requests"
+            )
+        return statuses
+
+    def _confirm_cancel_response(
+        self,
+        response: dict[str, Any] | None,
+        *,
+        expected: int,
+    ) -> None:
+        """Defend replacement flow even when cancellation is mocked or overridden."""
+        if expected == 0 and response is None:
+            return
+        if (
+            self.config.dry_run
+            and isinstance(response, dict)
+            and response.get("status") == "dry_run"
+        ):
+            return
+        statuses = self._response_statuses(
+            response, expected=expected, action="quote cancellation"
+        )
+        if any(status != "success" for status in statuses):
+            raise RuntimeError("quote cancellation was not fully successful")
 
     @staticmethod
     def _quotes(pair: QuotePair) -> list[Quote]:
@@ -288,11 +355,24 @@ class HLMarketMakerAdapter:
             for quote in quotes
         ]
         response = self._ensure_exchange().bulk_orders(requests)
-        statuses = response.get("response", {}).get("data", {}).get("statuses", [])
+        statuses = self._response_statuses(
+            response, expected=len(requests), action="quote submission"
+        )
+        resting = 0
         for quote, status in zip(quotes, statuses):
-            if "resting" in status:
+            if (
+                isinstance(status, dict)
+                and set(status) == {"resting"}
+                and isinstance(status["resting"], dict)
+            ):
                 self._owned[quote.cloid] = coin
+                resting += 1
         self._save_state()
+        if resting != len(requests):
+            raise RuntimeError(
+                "quote submission was only partially successful "
+                f"({resting}/{len(requests)} resting)"
+            )
         return response
 
     def _size_decimals(self, coin: str) -> int:
@@ -315,10 +395,15 @@ class HLMarketMakerAdapter:
         acknowledge_mainnet: bool = False,
     ) -> dict[str, Any]:
         if decision.cancel:
-            return {"cancel": self.cancel_strategy_quotes()}
+            owned_before = len(self._owned)
+            cancelled = self.cancel_strategy_quotes()
+            self._confirm_cancel_response(cancelled, expected=owned_before)
+            return {"cancel": cancelled}
         if not decision.replace or decision.quotes is None:
             return {"status": "unchanged"}
+        owned_before = len(self._owned)
         cancelled = self.cancel_strategy_quotes()
+        self._confirm_cancel_response(cancelled, expected=owned_before)
         submitted = self.submit_quote_pair(
             decision.quotes, acknowledge_mainnet=acknowledge_mainnet
         )

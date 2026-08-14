@@ -119,12 +119,14 @@ class MarketMakingService:
             self._last_dead_man_arm = now
 
     def _handle_book(self, book: BookSnapshot) -> None:
-        if book.mid is None or book.is_crossed:
-            return
-        if not self._timestamps or book.timestamp_ms > self._timestamps[-1]:
+        valid_book = book.mid is not None and not book.is_crossed
+        if valid_book and (
+            not self._timestamps or book.timestamp_ms > self._timestamps[-1]
+        ):
             self._timestamps.append(book.timestamp_ms)
             self._prices.append(book.mid)
-        self._refresh_account()
+        if valid_book:
+            self._refresh_account()
         self.engine.set_connected(True)
         start_equity = self._start_equity or self._metrics["account_value_usd"]
         daily_pnl = self._metrics["account_value_usd"] - start_equity
@@ -152,6 +154,8 @@ class MarketMakingService:
                 logger.exception("maker decision failed; cancelling owned quotes")
                 try:
                     self.adapter.cancel_strategy_quotes()
+                    self._refresh_account(force=True)
+                    self.engine.clear()
                 finally:
                     self.engine.set_connected(False)
 
