@@ -65,22 +65,63 @@ def test_direct_refresh_upserts_exact_causal_inputs(tmp_path):
     ]
 
 
-def test_direct_refresh_fails_when_one_source_is_not_at_requested_end(tmp_path):
+def _session_with_latest(dates: dict[str, str]):
     session = SimpleNamespace()
     session.get = lambda *_args, **_kwargs: _Response(
-        {
-            "data": [
-                _record("btc", "2026-08-11", 2.8, 63_500.0),
-                _record("doge", "2026-08-10", 8_800.0, 0.07),
-                _record("eth", "2026-08-11", 118.0, 1_880.0),
-            ]
-        }
+        {"data": [
+            _record("btc", dates["btc"], 2.8, 63_500.0),
+            _record("doge", dates["doge"], 8_800.0, 0.07),
+            _record("eth", dates["eth"], 118.0, 1_880.0),
+        ]}
+    )
+    return session
+
+
+def test_one_day_provider_lag_is_tolerated(tmp_path):
+    """Coin Metrics does not publish a UTC day the moment it closes.
+
+    Requiring data exactly at `end` failed every run launched shortly after
+    midnight UTC and threw away the rows it had already fetched.
+    """
+    session = _session_with_latest(
+        {"btc": "2026-08-11", "doge": "2026-08-10", "eth": "2026-08-11"}
     )
 
-    with pytest.raises(ValueError, match="not_at_end"):
+    written = refresh_causal_sources(
+        tmp_path / "causal.duckdb",
+        start="2026-08-10",
+        end="2026-08-11",
+        session=session,
+    )
+
+    assert written > 0
+
+
+def test_a_series_further_behind_than_the_lag_still_fails(tmp_path):
+    """Real staleness must remain a hard failure, not be waved through."""
+    session = _session_with_latest(
+        {"btc": "2026-08-11", "doge": "2026-08-08", "eth": "2026-08-11"}
+    )
+
+    with pytest.raises(ValueError, match="behind"):
+        refresh_causal_sources(
+            tmp_path / "causal.duckdb",
+            start="2026-08-08",
+            end="2026-08-11",
+            session=session,
+        )
+
+
+def test_zero_lag_restores_the_strict_at_end_requirement(tmp_path):
+    session = _session_with_latest(
+        {"btc": "2026-08-11", "doge": "2026-08-10", "eth": "2026-08-11"}
+    )
+
+    with pytest.raises(ValueError, match="behind"):
         refresh_causal_sources(
             tmp_path / "causal.duckdb",
             start="2026-08-10",
             end="2026-08-11",
             session=session,
+            max_lag_days=0,
         )

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -67,12 +67,21 @@ def refresh_causal_sources(
     end: str,
     session: requests.Session | None = None,
     timeout_seconds: float = 30.0,
+    max_lag_days: int = 1,
 ) -> int:
     """Upsert exact daily causal inputs directly from Coin Metrics.
 
     This operational path intentionally bypasses the Supabase mirror: model
     availability must not depend on a stale or retired warehouse endpoint.
     ``end`` is inclusive and should name the latest fully completed UTC day.
+
+    ``max_lag_days`` tolerates the provider's own publication delay. Coin
+    Metrics does not publish a UTC day the instant it closes, so requiring
+    data exactly at ``end`` fails every run launched shortly after midnight
+    UTC — and, worse, discards the rows it did fetch. A series that falls
+    further behind than this is still a hard failure, because that is a real
+    gap rather than normal lag. Whether the model may then trade on the
+    result is decided separately by its own freshness gate.
     """
     if datetime.fromisoformat(start) > datetime.fromisoformat(end):
         raise ValueError(f"causal refresh start {start} is after end {end}")
@@ -116,13 +125,16 @@ def refresh_causal_sources(
         ("btc", "price")
     }
     missing = sorted(required - set(latest))
+    earliest_allowed = end_date - timedelta(days=max(0, max_lag_days))
     stale = sorted(
-        key for key in required if key in latest and latest[key] != end_date
+        key for key in required
+        if key in latest and latest[key] < earliest_allowed
     )
     if missing or stale:
         raise ValueError(
             "Coin Metrics causal refresh incomplete: "
-            f"missing={missing}, not_at_end={stale}, end={end}"
+            f"missing={missing}, behind={stale}, end={end}, "
+            f"max_lag_days={max_lag_days}"
         )
 
     loader = DuckDBCPCMDataLoader(db_path=str(Path(db_path)), read_only=False)
