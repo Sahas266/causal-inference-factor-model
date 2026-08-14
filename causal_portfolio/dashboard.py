@@ -585,10 +585,30 @@ with t_dag:
     if st.session_state.pipeline_data is None:
         st.info("Run the pipeline first.")
     else:
+        from causal_portfolio.scm.dag_edits import (
+            DagEdits,
+            apply_edits,
+            diff_identification,
+            edge_rows,
+            validate_new_edge,
+        )
+
         data = st.session_state.pipeline_data
-        dag = data["dag"]
+        base_dag = data["dag"]
+        if "dag_edits" not in st.session_state:
+            st.session_state.dag_edits = DagEdits()
+        edits = st.session_state.dag_edits
+        # Everything below — layout, d-separation, identification — reads the
+        # edited graph, so the operator is always inspecting what they built.
+        dag = apply_edits(base_dag, edits)
 
         st.markdown("### CPCM Star-DAG")
+        if not edits.is_empty:
+            st.warning(
+                f"Edited DAG: {len(edits.added)} edge(s) added, "
+                f"{len(edits.removed)} removed. This is your hypothesis, not "
+                "the generated structure."
+            )
         col_ctrl, col_info = st.columns([3, 1])
 
         with col_info:
@@ -642,14 +662,21 @@ with t_dag:
 
         pos = _layout_dag(dag, kinds)
 
-        # Extract edges and nodes for plotly
+        # Extract edges and nodes for plotly. Operator-added edges are drawn
+        # separately so an edited arrow is never mistaken for a generated one.
         edge_x, edge_y = [], []
+        added_x, added_y = [], []
+        added_set = set(edits.added)
         for u, v in dag.edges():
             if u in pos and v in pos:
                 x0, y0 = pos[u]
                 x1, y1 = pos[v]
-                edge_x += [x0, x1, None]
-                edge_y += [y0, y1, None]
+                if (u, v) in added_set:
+                    added_x += [x0, x1, None]
+                    added_y += [y0, y1, None]
+                else:
+                    edge_x += [x0, x1, None]
+                    edge_y += [y0, y1, None]
 
         node_x = [pos[n][0] for n in dag.nodes() if n in pos]
         node_y = [pos[n][1] for n in dag.nodes() if n in pos]
@@ -663,6 +690,12 @@ with t_dag:
             line=dict(width=0.7, color="#444"),
             hoverinfo="none", showlegend=False,
         ))
+        if added_x:
+            fig_dag.add_trace(go.Scatter(
+                x=added_x, y=added_y, mode="lines",
+                line=dict(width=2.0, color="#2ca02c", dash="dot"),
+                hoverinfo="none", name="operator-added", showlegend=True,
+            ))
         fig_dag.add_trace(go.Scatter(
             x=node_x, y=node_y, mode="markers+text",
             marker=dict(size=10, color=node_color, line=dict(width=1, color="#333")),
@@ -679,6 +712,78 @@ with t_dag:
             margin=dict(l=0, r=0, t=10, b=0),
         )
         st.plotly_chart(fig_dag, use_container_width=True)
+
+        # ── DAG editor ────────────────────────────────────────────────
+        with st.expander("✏️ Edit DAG", expanded=not edits.is_empty):
+            st.caption(
+                "Add or remove edges to test a structural hypothesis. Edits "
+                "apply to the visualisation, the d-separation explorer, and "
+                "the identification summary below — they do not change "
+                "scm/graph.py or any saved model."
+            )
+            all_nodes = sorted(base_dag.nodes())
+            col_a, col_b, col_c = st.columns([2, 2, 1])
+            with col_a:
+                new_src = st.selectbox("From", all_nodes, key="dag_edit_src")
+            with col_b:
+                new_dst = st.selectbox(
+                    "To", all_nodes, key="dag_edit_dst",
+                    index=min(1, len(all_nodes) - 1),
+                )
+            with col_c:
+                st.markdown("<br>", unsafe_allow_html=True)
+                if st.button("Add edge", use_container_width=True):
+                    problem = validate_new_edge(dag, new_src, new_dst)
+                    if problem:
+                        st.error(problem)
+                    else:
+                        st.session_state.dag_edits = edits.with_added(new_src, new_dst)
+                        st.rerun()
+
+            current = edge_rows(base_dag, edits)
+            if current:
+                labels = [f"{r['source']} -> {r['target']}" for r in current]
+                to_remove = st.multiselect("Remove edges", labels, key="dag_edit_rm")
+                col_rm, col_reset = st.columns(2)
+                with col_rm:
+                    if st.button("Remove selected", disabled=not to_remove,
+                                 use_container_width=True):
+                        pending = st.session_state.dag_edits
+                        for label in to_remove:
+                            src, dst = label.split(" -> ")
+                            pending = pending.with_removed(src, dst)
+                        st.session_state.dag_edits = pending
+                        st.rerun()
+                with col_reset:
+                    if st.button("Reset to generated DAG", disabled=edits.is_empty,
+                                 use_container_width=True):
+                        st.session_state.dag_edits = edits.cleared()
+                        st.rerun()
+
+                st.dataframe(
+                    pd.DataFrame(current), hide_index=True,
+                    use_container_width=True, height=240,
+                )
+
+            if not edits.is_empty:
+                st.markdown("**Effect on identification**")
+                try:
+                    from causal_portfolio.scm.identification import identify_all_effects
+                    diff = diff_identification(
+                        identify_all_effects(base_dag), identify_all_effects(dag)
+                    )
+                    if any(diff.values()):
+                        for label, items in (
+                            ("✅ Newly identifiable", diff["gained"]),
+                            ("❌ No longer identifiable", diff["lost"]),
+                            ("🔄 Strategy changed", diff["changed"]),
+                        ):
+                            if items:
+                                st.markdown(f"{label}: " + ", ".join(f"`{i}`" for i in items))
+                    else:
+                        st.caption("No change to which effects are identifiable.")
+                except Exception as exc:   # identification is best-effort here
+                    st.caption(f"Identification diff unavailable: {exc}")
 
         # d-separation explorer
         st.markdown("### d-Separation Explorer")

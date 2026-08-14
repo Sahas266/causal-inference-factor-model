@@ -729,8 +729,16 @@ def build_causal_target(
     allow_stale: bool = False,
     validation_override: ForwardValidation | None = None,
     model_price_override: float | None = None,
+    allow_unvalidated_edge: bool = False,
 ) -> CausalDailyResult:
-    """Assess DAG v2 and return a target only after its frozen gate passes."""
+    """Assess DAG v2 and return a target, gated on its frozen validation.
+
+    `allow_unvalidated_edge` downgrades the deployment gate from a refusal to
+    a warning, so the model emits a target while the edge is still unproven.
+    It exists for research and dry-run inspection. The validation result is
+    still computed and still recorded on the result, so nothing is hidden —
+    only the refusal is suspended.
+    """
     if not (0.0 < base_weight <= 0.5):
         raise ValueError(f"base_weight must be in (0, 0.5], got {base_weight}")
     validate_model_signature()
@@ -755,10 +763,17 @@ def build_causal_target(
             if validation.sharpe_lift is None
             else f"{validation.sharpe_lift:+.4f}"
         )
-        raise CausalModelNotDeployable(
-            "DAG v2 is not deployable: frozen forward validation "
+        detail = (
+            "frozen forward validation "
             f"status={validation.status}, observations={validation.n_available}, "
             f"Sharpe lift={lift}, required={VALIDATION_SHARPE_LIFT:+.2f}"
+        )
+        if not allow_unvalidated_edge:
+            raise CausalModelNotDeployable(f"DAG v2 is not deployable: {detail}")
+        logger.warning(
+            "DAG v2 deployment gate OVERRIDDEN — emitting a target on an "
+            "unproven edge: %s",
+            detail,
         )
     if last_date not in signal.index:
         raise ValueError(f"no causal innovation signal for {last_date.date()}")
@@ -1140,6 +1155,7 @@ def run_once(args: argparse.Namespace) -> CausalDailyResult | None:
         allow_stale=args.allow_stale_signal,
         validation_override=validation,
         model_price_override=reference_price,
+        allow_unvalidated_edge=args.allow_unvalidated_edge,
     )
     target_path = Path(args.target_out)
     expected_next = now + timedelta(hours=args.every_hours)
@@ -1264,6 +1280,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--mainnet", action="store_true")
     parser.add_argument("--ack-mainnet", action="store_true")
     parser.add_argument("--allow-stale-signal", action="store_true")
+    parser.add_argument(
+        "--allow-unvalidated-edge",
+        action="store_true",
+        help=(
+            "Emit a target even when the frozen forward validation has not "
+            "passed. The gate is reported as a warning instead of refusing. "
+            "Research/dry-run use: the edge is unproven by definition."
+        ),
+    )
     parser.add_argument("--max-signal-age-hours", type=float, default=72.0)
     parser.add_argument("--twap-minutes", type=float, default=0.0)
     parser.add_argument("--twap-slices", type=int, default=5)
