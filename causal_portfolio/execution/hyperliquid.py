@@ -16,9 +16,11 @@ AND ExecutionConfig.dry_run=False (caller's responsibility to gate).
 from __future__ import annotations
 
 import logging
+import math
 import os
 import time
 from dataclasses import asdict, replace
+from collections.abc import Callable
 from typing import Any
 
 from causal_portfolio.execution.config import ExecutionConfig
@@ -427,6 +429,34 @@ def _estimate_transaction_cost(adapter: HLAdapter, orders: list[Order]) -> dict[
     return estimate
 
 
+def _apply_gate(
+    orders: list[Order],
+    verdict: Callable[[Order], tuple[SkipReason, str] | None],
+) -> tuple[list[Order], list[tuple[str, SkipReason, str]]]:
+    """Partition orders by a gate's verdict, honoring the reduce-only exemption.
+
+    EXECUTION SAFETY INVARIANT, stated once for every gate: no gate may block a
+    reduce-only order. Refusing an exit keeps risk the model decided to shed,
+    which is the hazard the cost exemption was introduced to remove — and which
+    the completeness gate promptly reintroduced by re-deriving the rule itself.
+
+    `verdict` is therefore only ever called for exposure-increasing orders. A
+    gate decides *why* an increase is blocked and structurally cannot see a
+    reduce-only order, so a future gate inherits the invariant instead of having
+    to remember it. Return None to allow, or (SkipReason, detail) to withhold.
+    """
+    allowed: list[Order] = []
+    skipped: list[tuple[str, SkipReason, str]] = []
+    for order in orders:
+        outcome = None if order.reduce_only else verdict(order)
+        if outcome is None:
+            allowed.append(order)
+        else:
+            reason, detail = outcome
+            skipped.append((order.coin, reason, detail))
+    return allowed, skipped
+
+
 def _check_cost_gate(
     adapter: HLAdapter, orders: list[Order]
 ) -> tuple[
@@ -439,25 +469,20 @@ def _check_cost_gate(
     if limit is None:
         return None, None, orders, []
 
-    # Reduce-only orders are fully exempt: failing closed on an exit preserves
-    # the risk the order was meant to remove. Only exposure increases are gated.
     try:
         estimate = _estimate_transaction_cost(adapter, orders)
     except Exception as exc:
         logger.warning("transaction-cost estimate unavailable: %s", exc)
         failed_estimate = {"max_transaction_cost_bps": limit, "error": str(exc)}
-        allowed = [order for order in orders if order.reduce_only]
         # If the shared mids snapshot fails, no increasing leg has a defensible
-        # estimate, so each fails closed; reduce-only exits remain exempt.
-        skipped = [
-            (
-                order.coin,
+        # estimate, so each fails closed. _apply_gate keeps exits exempt.
+        allowed, skipped = _apply_gate(
+            orders,
+            lambda _order: (
                 SkipReason.COST_ESTIMATE_UNAVAILABLE,
                 f"transaction-cost estimate unavailable: {exc}",
-            )
-            for order in orders
-            if not order.reduce_only
-        ]
+            ),
+        )
         if skipped:
             failed_estimate.update({
                 "reduce_only_exempt": bool(allowed),
@@ -474,43 +499,44 @@ def _check_cost_gate(
         })
         return failed_estimate, None, orders, []
 
-    allowed: list[Order] = []
-    submitted_legs: list[dict[str, Any]] = []
-    dropped_legs: list[dict[str, Any]] = []
-    skipped: list[tuple[str, SkipReason, str]] = []
+    legs_by_coin = {
+        order.coin: leg
+        for order, leg in zip(orders, estimate["legs"], strict=True)
+    }
     unavailable = expensive = False
-    for order, leg in zip(orders, estimate["legs"], strict=True):
-        if order.reduce_only:
-            leg["gate_status"] = "reduce_only_exempt"
-            allowed.append(order)
-            submitted_legs.append(leg)
-        elif "error" in leg:
+
+    def cost_verdict(order: Order) -> tuple[SkipReason, str] | None:
+        """Judge one exposure-increasing leg. Never sees a reduce-only order."""
+        nonlocal unavailable, expensive
+        leg = legs_by_coin[order.coin]
+        if "error" in leg:
             unavailable = True
             leg["gate_status"] = "blocked_estimate_unavailable"
             leg["skip_reason"] = SkipReason.COST_ESTIMATE_UNAVAILABLE.value
-            dropped_legs.append(leg)
-            skipped.append((
-                order.coin,
+            return (
                 SkipReason.COST_ESTIMATE_UNAVAILABLE,
                 f"transaction-cost estimate unavailable: {leg['error']}",
-            ))
-        elif leg["estimated_cost_bps"] > limit:
+            )
+        if leg["estimated_cost_bps"] > limit:
             expensive = True
             leg["gate_status"] = "blocked_above_limit"
             leg["skip_reason"] = SkipReason.EXCEEDS_TRANSACTION_COST.value
-            dropped_legs.append(leg)
-            skipped.append((
-                order.coin,
+            return (
                 SkipReason.EXCEEDS_TRANSACTION_COST,
                 (
                     f"estimated cost {leg['estimated_cost_bps']:.2f} bps "
                     f"exceeds {limit:.2f} bps limit"
                 ),
-            ))
-        else:
-            leg["gate_status"] = "allowed"
-            allowed.append(order)
-            submitted_legs.append(leg)
+            )
+        leg["gate_status"] = "allowed"
+        return None
+
+    allowed, skipped = _apply_gate(orders, cost_verdict)
+    for order in orders:
+        if order.reduce_only:
+            legs_by_coin[order.coin]["gate_status"] = "reduce_only_exempt"
+    submitted_legs = [legs_by_coin[order.coin] for order in allowed]
+    dropped_legs = [legs_by_coin[coin] for coin, _reason, _detail in skipped]
 
     if not skipped:
         estimate.update({
@@ -573,13 +599,15 @@ def _plan_completeness(plan: RebalancePlan, orders: list[Order]) -> float:
         for coin, position in plan.current_state.positions.items()
     }
     targets = {coin.casefold(): value for coin, value in plan.target_usd.items()}
-    intended = {}
+    intended: dict[str, float] = {}
+    intended_is_buy: dict[str, bool] = {}
     for coin, delta in plan.deltas_usd.items():
         key = coin.casefold()
         if delta and not _is_same_side_reduce(
             current.get(key, 0.0), targets.get(key, 0.0)
         ):
             intended[key] = abs(delta)
+            intended_is_buy[key] = delta > 0
     target_weights = {
         ticker.casefold(): weight for ticker, weight in plan.target_weights.items()
     }
@@ -588,15 +616,31 @@ def _plan_completeness(plan: RebalancePlan, orders: list[Order]) -> float:
         if key not in intended and key in target_weights:
             target = target_weights[key] * plan.equity_used
             if not _is_same_side_reduce(current.get(key, 0.0), target):
-                intended[key] = abs(target)
+                delta = target - current.get(key, 0.0)
+                intended[key] = abs(delta)
+                intended_is_buy[key] = delta > 0
     total = sum(intended.values())
     if total <= 0:
         return 1.0
-    submitted_coins = {
-        order.coin.casefold() for order in orders if not order.reduce_only
-    }
+    mids = {coin.casefold(): mid for coin, mid in plan.mids.items()}
+    submitted_by_coin: dict[str, float] = {}
+    for order in orders:
+        key = order.coin.casefold()
+        if (
+            order.reduce_only
+            or key not in intended
+            or order.is_buy != intended_is_buy[key]
+        ):
+            continue
+        reference_px = mids.get(key, order.limit_px)
+        if not math.isfinite(reference_px) or reference_px <= 0:
+            continue
+        submitted_by_coin[key] = (
+            submitted_by_coin.get(key, 0.0) + order.size * reference_px
+        )
     submitted = sum(
-        notional for coin, notional in intended.items() if coin in submitted_coins
+        min(submitted_by_coin.get(coin, 0.0), notional)
+        for coin, notional in intended.items()
     )
     return min(submitted / total, 1.0)
 
@@ -612,13 +656,10 @@ def _check_completeness_gate(
         return ratio, orders, None, []
 
     reason = f"plan completeness {ratio:.1%} below minimum {minimum:.1%}"
-    # Execution safety invariant: gates may withhold exposure increases only;
-    # reduce-only exits always survive to submission.
-    allowed = [order for order in orders if order.reduce_only]
-    skipped = [
-        (order.coin, SkipReason.INSUFFICIENT_PLAN_COMPLETENESS, reason)
-        for order in gateable
-    ]
+    allowed, skipped = _apply_gate(
+        orders,
+        lambda _order: (SkipReason.INSUFFICIENT_PLAN_COMPLETENESS, reason),
+    )
     return ratio, allowed, reason, skipped
 
 
@@ -769,7 +810,19 @@ def _execute_plan_inner(
             completeness_ratio=_plan_completeness(plan, plan.orders),
         )
 
-    if not plan.orders:
+    if adapter.config.account_decommission:
+        decommission_error, _fresh_state = _account_decommission_preflight(
+            adapter, plan
+        )
+        if decommission_error is not None:
+            return SubmitResult(
+                plan=plan,
+                submitted=False,
+                error=decommission_error,
+                submitted_orders=[],
+            )
+
+    if not plan.orders and not adapter.config.account_decommission:
         logger.info("no orders to submit")
         return SubmitResult(
             plan=plan,
@@ -817,6 +870,27 @@ def _execute_plan_inner(
                        len(plan.orders),
                        sum(abs(d) for d in plan.deltas_usd.values()))
 
+    if not plan.orders:
+        try:
+            post, decommission_error = _verify_account_decommission(adapter)
+        except Exception as e:
+            logger.exception("account decommission verification failed")
+            return SubmitResult(
+                plan=plan,
+                submitted=False,
+                error=f"account decommission failed: {e}",
+                submitted_orders=[],
+                completeness_ratio=_plan_completeness(plan, []),
+            )
+        return SubmitResult(
+            plan=plan,
+            submitted=False,
+            post_state=post,
+            post_submit_error=decommission_error,
+            submitted_orders=[],
+            completeness_ratio=_plan_completeness(plan, []),
+        )
+
     cost_estimate, cost_gate_reason, orders_to_submit, cost_skips = _check_cost_gate(
         adapter, plan.orders
     )
@@ -850,17 +924,46 @@ def _execute_plan_inner(
     mid_state = plan.current_state
     post = None
     try:
-        adapter.cancel_all_open()
+        if adapter.config.account_decommission:
+            open_order_ids = adapter.fetch_open_order_ids()
+            if open_order_ids:
+                return SubmitResult(
+                    plan=plan,
+                    submitted=False,
+                    error=(
+                        "account decommission blocked by open order ids: "
+                        f"{open_order_ids}"
+                    ),
+                    cost_estimate=cost_estimate,
+                    cost_gate_reason=cost_gate_reason,
+                    submitted_orders=[],
+                    completeness_ratio=completeness_ratio,
+                )
+        else:
+            adapter.cancel_all_open()
 
-        # Cancel-vs-submit race guard: a stale order could fill between the
-        # cancel call and our submit. Re-fetch state and compare to the state
-        # the plan was built from. If positions moved materially, bail out
-        # so the caller can re-plan against fresh state.
+        # Re-fetch immediately before submission. For normal execution this
+        # catches cancel/fill races; decommission mode refuses all resting
+        # orders instead of cancelling account-global orders it cannot own.
         mid_state = adapter.fetch_state()
-        if _detect_cancel_race(plan, mid_state):
+        decommission_state_error = None
+        positions_changed = False
+        if adapter.config.account_decommission:
+            decommission_state_error = _account_decommission_state_error(
+                adapter.config, mid_state, require_flat=False
+            )
+            positions_changed = _position_sizes_changed(
+                plan, plan.current_state, mid_state
+            )
+        else:
+            positions_changed = _detect_cancel_race(plan, mid_state)
+        if decommission_state_error is not None or positions_changed:
             return SubmitResult(
                 plan=plan, submitted=False, post_state=mid_state,
-                error="cancel-race detected: positions moved between cancel and submit",
+                error=(
+                    decommission_state_error
+                    or "cancel-race detected: positions moved before submit"
+                ),
                 cost_estimate=cost_estimate,
                 cost_gate_reason=cost_gate_reason,
                 submitted_orders=[],
@@ -912,12 +1015,33 @@ def _execute_plan_inner(
         )
         logger.info(format_drift_summary(drifts))
         repair = None
-        if drifts and adapter.config.repair_attempts > 0:
+        # A strategy-retirement retry must start again from the full guarded
+        # preflight.  The generic leg repair path intentionally omits
+        # account-wide ownership checks because it is designed for ordinary
+        # rebalances, so never invoke it while decommissioning an account.
+        if (
+            drifts
+            and adapter.config.repair_attempts > 0
+            and not adapter.config.account_decommission
+        ):
             repair, post, drifts = _repair_failed_legs(adapter, plan, post, drifts)
             logger.info("post-repair: " + format_drift_summary(drifts))
+        post_submit_error = submission_error
+        if adapter.config.account_decommission:
+            post, decommission_error = _verify_account_decommission(adapter)
+            drifts = reconcile(
+                plan,
+                post,
+                tolerance_usd=adapter.config.min_order_notional_usd,
+            )
+            post_submit_error = "; ".join(
+                error
+                for error in (post_submit_error, decommission_error)
+                if error
+            ) or None
         return SubmitResult(plan=plan, submitted=True,
                             response=response, post_state=post, drifts=drifts,
-                            post_submit_error=submission_error, repair=repair,
+                            post_submit_error=post_submit_error, repair=repair,
                             cost_estimate=cost_estimate,
                             cost_gate_reason=cost_gate_reason,
                             submitted_orders=list(orders_to_submit),
@@ -938,6 +1062,111 @@ def _execute_plan_inner(
             submitted_orders=list(orders_to_submit),
             completeness_ratio=completeness_ratio,
         )
+
+
+def _account_decommission_state_error(
+    config: ExecutionConfig,
+    state: AccountState,
+    *,
+    require_flat: bool,
+) -> str | None:
+    expected = dict(config.account_decommission_expected_sides)
+    if state.address.casefold() != str(
+        config.account_decommission_expected_address
+    ).casefold():
+        return (
+            "account decommission address changed: "
+            f"expected {config.account_decommission_expected_address}, "
+            f"got {state.address}"
+        )
+    unexpected = sorted(set(state.positions) - set(expected))
+    if unexpected:
+        return f"account contains non-RP-PCA positions: {unexpected}"
+    wrong_side = {
+        coin: position.size
+        for coin, position in state.positions.items()
+        if position.size and (1 if position.size > 0 else -1) != expected[coin]
+    }
+    if wrong_side:
+        return f"RP-PCA position side changed: {wrong_side}"
+    if require_flat:
+        remaining = {
+            coin: position.notional_usd
+            for coin, position in state.positions.items()
+            if abs(position.notional_usd) > 1e-6
+        }
+        if remaining:
+            return f"open positions remain: {remaining}"
+    return None
+
+
+def _account_decommission_preflight(
+    adapter: HLAdapter,
+    plan: RebalancePlan,
+) -> tuple[str | None, AccountState | None]:
+    """Verify ownership scope before any strategy-retirement write."""
+    config = adapter.config
+    requested_weights = (
+        plan.target_snapshot.weights
+        if plan.target_snapshot is not None
+        else plan.target_weights
+    )
+    if any(abs(weight) > 0 for weight in requested_weights.values()):
+        return "account decommission requires a zero-only target", None
+    mapped_assets = {
+        config.asset_map.get(ticker.casefold()) for ticker in requested_weights
+    }
+    if None in mapped_assets:
+        return "account decommission target contains an unmapped asset", None
+    expected_assets = {
+        asset for asset, _side in config.account_decommission_expected_sides
+    }
+    if mapped_assets != expected_assets:
+        return (
+            "account decommission target universe changed: "
+            f"expected {sorted(expected_assets)}, got {sorted(mapped_assets)}"
+        ), None
+    state_error = _account_decommission_state_error(
+        config, plan.current_state, require_flat=False
+    )
+    if state_error is not None:
+        return state_error, None
+    open_order_ids = adapter.fetch_open_order_ids()
+    if open_order_ids:
+        return (
+            "account decommission blocked by open order ids: "
+            f"{open_order_ids}"
+        ), None
+    fresh_state = adapter.fetch_state()
+    state_error = _account_decommission_state_error(
+        config, fresh_state, require_flat=False
+    )
+    if state_error is not None:
+        return state_error, fresh_state
+    if _position_sizes_changed(plan, plan.current_state, fresh_state):
+        return (
+            "account decommission race detected: positions changed during preflight"
+        ), fresh_state
+    return None, fresh_state
+
+
+def _verify_account_decommission(
+    adapter: HLAdapter,
+) -> tuple[AccountState, str | None]:
+    """Require two consecutive orders-first, state-last flat snapshots."""
+    latest: AccountState | None = None
+    for _attempt in range(2):
+        open_order_ids = adapter.fetch_open_order_ids()
+        latest = adapter.fetch_state()
+        if open_order_ids:
+            return latest, f"open order ids remain: {open_order_ids}"
+        state_error = _account_decommission_state_error(
+            adapter.config, latest, require_flat=True
+        )
+        if state_error is not None:
+            return latest, state_error
+    assert latest is not None
+    return latest, None
 
 
 def _repair_failed_legs(
