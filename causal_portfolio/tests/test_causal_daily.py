@@ -247,7 +247,10 @@ def test_failed_forward_validation_blocks_target_generation():
 
 def test_causal_target_is_lagged_scaled_fresh_and_loadable(tmp_path):
     panel, returns, prices, signal = _model_frames(helpful_signal=True)
-    now = prices.index[-1].to_pydatetime().replace(tzinfo=timezone.utc) + timedelta(hours=12)
+    # Production never has a same-day row: Coin Metrics publishes completed
+    # days and the CoinGecko filler drops the partial current day. Run as of
+    # the following day so the newest row is the model's latest date.
+    now = prices.index[-1].to_pydatetime().replace(tzinfo=timezone.utc) + timedelta(days=1, hours=12)
     result = build_causal_target(
         panel,
         returns,
@@ -298,12 +301,31 @@ def test_causal_target_rejects_internal_calendar_gap():
         build_causal_target(panel, returns, prices, now=now)
 
 
-def test_causal_target_rejects_one_source_lagging_the_others():
-    panel, returns, prices, _ = _model_frames(helpful_signal=True)
-    panel.loc[panel.index[-1], "eth_FeeTotNtv"] = np.nan
-    now = prices.index[-1].to_pydatetime().replace(tzinfo=timezone.utc)
+def test_causal_target_trims_to_the_day_every_source_covers():
+    """A lagging source shortens the window instead of stalling the model.
 
-    with pytest.raises(ValueError, match="source dates disagree"):
+    Coin Metrics publishes per asset at different times, so one series
+    routinely sits a day behind the others. Refusing on disagreement stalled
+    the model for hours a day; the common floor is the newest date the
+    aggregate factor can be computed honestly.
+    """
+    panel, returns, prices, _ = _model_frames(helpful_signal=True)
+    lagging_day = panel.index[-1]
+    panel.loc[lagging_day, "eth_FeeTotNtv"] = np.nan
+    now = lagging_day.to_pydatetime().replace(tzinfo=timezone.utc) + timedelta(days=1)
+
+    result = build_causal_target(panel, returns, prices, now=now)
+
+    assert result.last_data_date == panel.index[-2]
+
+
+def test_a_hole_inside_the_window_is_still_rejected():
+    """Trimming the tail must not become tolerance for a missing middle."""
+    panel, returns, prices, _ = _model_frames(helpful_signal=True)
+    panel.loc[panel.index[-5], "eth_FeeTotNtv"] = np.nan
+    now = panel.index[-1].to_pydatetime().replace(tzinfo=timezone.utc) + timedelta(days=1)
+
+    with pytest.raises(ValueError, match="contiguous"):
         build_causal_target(panel, returns, prices, now=now)
 
 
