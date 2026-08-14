@@ -102,15 +102,40 @@ stayed at 2025-12-31. Config added at `config/endpoints/uni/uni_dune_lp_flows.js
 If a series is stale and its query looks healthy, check that a config exists at
 all before debugging anything else.
 
-### Broken for a different reason: `6815244`
+### 4. Upstream table retired: `6815244` — migrated, with a value change
 
-ETH stablecoin netflow fails on execution, and did so before any edit here:
+ETH stablecoin netflow failed on execution before any edit here:
 
     delta_prod.stablecoins_ethereum.transfers does not exist or it is private
 
-The source table was removed or made private on Dune. This needs a rewrite
-against a currently available table — which would change what the series
-measures, so it was left alone rather than silently repointed.
+The table was **not deleted** — it was consolidated into `stablecoins_evm.transfers`
+and `stablecoins_multichain.transfers`. But both, and `stablecoins_multichain.tokens`,
+carry a `prod_exclude` tag: they appear in the catalog and are marked public,
+yet executing against them raises the same "does not exist or it is private".
+The whole curated stablecoin family is unavailable in the production database,
+so a straight rename is not possible.
+
+Migrated instead to `tokens.transfers` (queryable, and already used by query
+`6811497`; keeps `from`/`to` as `varbinary`, so the zero-address comparisons are
+unchanged) joined to the published contract list
+`dune.bnbchain.dataset_stablecoin_tokens_multichain`, whose own description
+states it *replaces the private `tokens.erc20_stablecoins`*. The stablecoin
+universe therefore comes from a maintained upstream list rather than a
+hand-written symbol set.
+
+**This changes the values.** The DefiLlama-derived list is broader than the
+retired spell's set, so mint/burn totals run roughly 10–20% higher:
+
+| date | old value | new value |
+|---|--:|--:|
+| 2025-12-31 | 3,111,842,596 | 3,490,267,067 |
+| 2025-12-30 | 3,203,959,576 | 3,655,202,767 |
+
+The series was re-fetched from 2021-01-01 so the **entire history is on the new
+definition**. A partial refresh would have left a silent 10–20% step mid-series,
+which is the failure mode this document exists to prevent. Anything comparing
+`stablecoin_*_usd` against numbers recorded before 2026-08-14 is comparing two
+different definitions.
 
 ### Operational notes
 
