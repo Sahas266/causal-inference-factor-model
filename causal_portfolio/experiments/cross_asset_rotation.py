@@ -338,7 +338,9 @@ def main() -> None:
     from causal_portfolio.data import get_loader
 
     logging.basicConfig(level=logging.INFO, format="%(name)s | %(message)s")
-    p = argparse.ArgumentParser(description=__doc__)
+    p = argparse.ArgumentParser(
+        description="Backtest causal cross-asset rotation rules."
+    )
     p.add_argument("--start", default="2021-01-01")
     p.add_argument("--end", default="2025-12-31")
     p.add_argument("--fee-bps-oneway", type=float, default=5.0)

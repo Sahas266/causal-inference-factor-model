@@ -164,6 +164,20 @@ def test_fixed_weight_portfolio_custom_weights_renormalized():
     assert w[2] == pytest.approx(0.0, abs=0.01)
 
 
+def test_fixed_weight_portfolio_renormalizes_after_skipping_missing_assets():
+    from causal_portfolio.backtest.strategies import fixed_weight_portfolio
+    R = _synthetic_returns()[["btc_return", "eth_return"]]
+    result = fixed_weight_portfolio(
+        R,
+        target_weights={"btc": 0.6, "eth": 0.3, "sol": 0.1},
+        rebalance_freq=21,
+    )
+    w = result.weights_history[21]
+    assert w.sum() == pytest.approx(1.0)
+    assert w[0] == pytest.approx(2.0 / 3.0)
+    assert w[1] == pytest.approx(1.0 / 3.0)
+
+
 def test_fixed_weight_portfolio_rejects_zero_weights():
     from causal_portfolio.backtest.strategies import fixed_weight_portfolio
     R = _synthetic_returns()

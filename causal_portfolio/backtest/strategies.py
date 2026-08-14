@@ -47,14 +47,19 @@ def _resolve_target_weights(
     """
     cols = list(columns)
     target = np.zeros(len(cols))
-    total = float(sum(weights.values()))
-    if total <= 0:
-        raise ValueError("target weights must sum to > 0")
-    for ticker, w in weights.items():
+    available_weights: dict[str, float] = {}
+    for ticker, weight in weights.items():
         col = f"{ticker}_return"
         if col not in cols:
             logger.warning("Skipping %s — not in returns columns", ticker)
             continue
+        available_weights[ticker] = weight
+
+    total = float(sum(available_weights.values()))
+    if total <= 0:
+        raise ValueError("available target weights must sum to > 0")
+    for ticker, w in available_weights.items():
+        col = f"{ticker}_return"
         target[cols.index(col)] = w / total
     return target
 
