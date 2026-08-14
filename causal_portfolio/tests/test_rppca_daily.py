@@ -136,7 +136,10 @@ def test_rppca_submission_uses_standard_interface(tmp_path, monkeypatch, caplog)
         '{"btc": 0.1, "_meta": {"rebalance_date": "2026-07-13"}}',
         encoding="utf-8",
     )
-    args = build_parser().parse_args([])
+    args = build_parser().parse_args([
+        "--min-position-change-pct", "0.10",
+        "--min-rebalance-completeness", "0.90",
+    ])
     captured = {}
 
     def fake_execute(target, config, *, acknowledge_mainnet=False):
@@ -162,10 +165,28 @@ def test_rppca_submission_uses_standard_interface(tmp_path, monkeypatch, caplog)
     assert captured["config"].testnet is True
     assert captured["config"].max_transaction_cost_bps == 15.0
     assert captured["config"].estimated_taker_fee_bps == 4.5
+    assert captured["config"].min_position_change_pct == 0.10
+    assert captured["config"].min_rebalance_completeness == 0.90
     assert captured["acknowledge"] is False
     assert captured["calls"] == 1
     assert "post-state unavailable" in caplog.text
     assert "audit disk full" in caplog.text
+
+
+def test_legacy_rppca_wrapper_delegates_to_scheduled_causal_runner():
+    execution_dir = (
+        rppca_daily.Path(rppca_daily.__file__).parents[1]
+        / "execution"
+    )
+    legacy = (execution_dir / "run_rppca_daily.cmd").read_text(encoding="utf-8")
+    script = (execution_dir / "run_cpcm_causal_daily.cmd").read_text(
+        encoding="utf-8"
+    )
+
+    assert "run_cpcm_causal_daily.cmd" in legacy
+    assert "models.rppca_daily" not in legacy
+    assert "--min-position-change-pct 0.10" in script
+    assert "--min-rebalance-completeness 0.90" in script
 
 
 def test_rppca_submission_logs_empty_plan_as_no_op(tmp_path, monkeypatch, caplog):

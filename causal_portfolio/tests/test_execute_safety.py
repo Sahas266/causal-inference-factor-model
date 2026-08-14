@@ -51,6 +51,7 @@ def _mock_adapter(address: str, config: ExecutionConfig):
     a.address = address
     a.config = config
     a.cancel_all_open.return_value = None
+    a.fetch_open_order_ids.return_value = []
     a.submit_orders.return_value = {"status": "ok"}
     a.submit_orders_book_aware.return_value = {"status": "ok"}
     # Post-state matches plan to avoid race detection
@@ -308,6 +309,207 @@ def test_empty_live_plan_is_audited_without_exchange_calls(monkeypatch):
     audit_append.assert_called_once_with(result)
 
 
+def _decommission_config() -> ExecutionConfig:
+    return ExecutionConfig(
+        testnet=True,
+        dry_run=False,
+        account_decommission=True,
+        account_decommission_expected_address="0xAAA",
+        account_decommission_expected_sides=(("BTC", 1),),
+    )
+
+
+def test_account_decommission_verifies_a_stable_flat_account():
+    plan = _make_plan(address="0xAAA", orders=[])
+    plan = replace(plan, target_weights={"btc": 0.0}, target_snapshot=TargetSnapshot(
+        {"btc": 0.0}, as_of=datetime.now(timezone.utc)
+    ))
+    adapter = _mock_adapter(address="0xAAA", config=_decommission_config())
+
+    result = execute_plan(adapter, plan, write_audit=False)
+
+    assert not result.submitted
+    assert result.error is None
+    assert result.post_submit_error is None
+    assert result.post_state == adapter.fetch_state.return_value
+    adapter.cancel_all_open.assert_not_called()
+    assert adapter.fetch_open_order_ids.call_count == 3
+    assert adapter.fetch_state.call_count == 3
+
+
+def test_account_decommission_fails_closed_when_open_orders_remain():
+    plan = _make_plan(address="0xAAA", orders=[])
+    plan = replace(plan, target_weights={"btc": 0.0}, target_snapshot=TargetSnapshot(
+        {"btc": 0.0}, as_of=datetime.now(timezone.utc)
+    ))
+    adapter = _mock_adapter(address="0xAAA", config=_decommission_config())
+    adapter.fetch_open_order_ids.return_value = [17]
+
+    result = execute_plan(adapter, plan, write_audit=False)
+
+    assert not result.submitted
+    assert result.error == "account decommission blocked by open order ids: [17]"
+    assert result.post_submit_error is None
+    adapter.cancel_all_open.assert_not_called()
+
+
+def test_account_decommission_rejects_non_empty_target():
+    plan = _make_plan(address="0xAAA", orders=[])
+    adapter = _mock_adapter(address="0xAAA", config=_decommission_config())
+
+    result = execute_plan(adapter, plan, write_audit=False)
+
+    assert not result.submitted
+    assert result.error == "account decommission requires a zero-only target"
+    adapter.cancel_all_open.assert_not_called()
+
+
+def test_account_decommission_rejects_unowned_position():
+    state = AccountState(
+        address="0xAAA",
+        account_value_usd=10_000.0,
+        margin_used_usd=0.0,
+        positions={"ETH": Position("ETH", 0.1, 2_000.0, 200.0)},
+    )
+    plan = replace(
+        _make_plan(address="0xAAA", orders=[]),
+        current_state=state,
+        target_weights={"btc": 0.0},
+        target_snapshot=TargetSnapshot(
+            {"btc": 0.0}, as_of=datetime.now(timezone.utc)
+        ),
+    )
+    adapter = _mock_adapter(address="0xAAA", config=_decommission_config())
+
+    result = execute_plan(adapter, plan, write_audit=False)
+
+    assert not result.submitted
+    assert result.error == "account contains non-RP-PCA positions: ['ETH']"
+    adapter.fetch_open_order_ids.assert_not_called()
+
+
+def test_account_decommission_rejects_position_side_change():
+    state = AccountState(
+        address="0xAAA",
+        account_value_usd=10_000.0,
+        margin_used_usd=0.0,
+        positions={"BTC": Position("BTC", -0.01, 100_000.0, -1_000.0)},
+    )
+    plan = replace(
+        _make_plan(address="0xAAA", orders=[]),
+        current_state=state,
+        target_weights={"btc": 0.0},
+        target_snapshot=TargetSnapshot(
+            {"btc": 0.0}, as_of=datetime.now(timezone.utc)
+        ),
+    )
+    adapter = _mock_adapter(address="0xAAA", config=_decommission_config())
+
+    result = execute_plan(adapter, plan, write_audit=False)
+
+    assert not result.submitted
+    assert "position side changed" in result.error
+    adapter.fetch_open_order_ids.assert_not_called()
+
+
+def test_account_decommission_submits_scoped_close_without_global_cancel():
+    current = AccountState(
+        address="0xAAA",
+        account_value_usd=10_000.0,
+        margin_used_usd=100.0,
+        positions={"BTC": Position("BTC", 0.01, 100_000.0, 1_000.0)},
+    )
+    flat = AccountState(
+        address="0xAAA",
+        account_value_usd=10_000.0,
+        margin_used_usd=0.0,
+        positions={},
+    )
+    plan = RebalancePlan(
+        timestamp_ms=1000,
+        target_weights={"btc": 0.0},
+        current_state=current,
+        target_usd={"BTC": 0.0},
+        deltas_usd={"BTC": -1_000.0},
+        orders=[Order(
+            "BTC",
+            False,
+            0.01,
+            99_000.0,
+            "0x" + "1" * 32,
+            reduce_only=True,
+        )],
+        skipped=[],
+        equity_used=10_000.0,
+        network="testnet",
+        target_snapshot=TargetSnapshot(
+            {"btc": 0.0}, as_of=datetime.now(timezone.utc)
+        ),
+    )
+    adapter = _mock_adapter(address="0xAAA", config=replace(
+        _decommission_config(), smart_execution=False
+    ))
+    adapter.fetch_state.side_effect = [current, current, flat, flat, flat]
+
+    result = execute_plan(adapter, plan, write_audit=False)
+
+    assert result.submitted
+    assert result.error is None
+    assert result.post_submit_error is None
+    assert result.post_state == flat
+    adapter.cancel_all_open.assert_not_called()
+    adapter.submit_orders.assert_called_once()
+
+
+def test_account_decommission_never_uses_generic_leg_repair():
+    current = AccountState(
+        address="0xAAA",
+        account_value_usd=10_000.0,
+        margin_used_usd=1_000.0,
+        positions={"BTC": Position("BTC", 0.01, 100_000.0, 1_000.0)},
+    )
+    partial = AccountState(
+        address="0xAAA",
+        account_value_usd=10_000.0,
+        margin_used_usd=500.0,
+        positions={"BTC": Position("BTC", 0.005, 100_000.0, 500.0)},
+    )
+    plan = RebalancePlan(
+        timestamp_ms=1000,
+        target_weights={"btc": 0.0},
+        current_state=current,
+        target_usd={"BTC": 0.0},
+        deltas_usd={"BTC": -1_000.0},
+        orders=[Order(
+            "BTC",
+            False,
+            0.01,
+            99_000.0,
+            "0x" + "1" * 32,
+            reduce_only=True,
+        )],
+        skipped=[],
+        equity_used=10_000.0,
+        network="testnet",
+        target_snapshot=TargetSnapshot(
+            {"btc": 0.0}, as_of=datetime.now(timezone.utc)
+        ),
+    )
+    adapter = _mock_adapter(address="0xAAA", config=replace(
+        _decommission_config(), smart_execution=False, repair_attempts=2
+    ))
+    adapter.fetch_state.side_effect = [current, current, partial, partial]
+
+    result = execute_plan(adapter, plan, write_audit=False)
+
+    assert result.submitted
+    assert result.repair is None
+    assert result.post_submit_error == "open positions remain: {'BTC': 500.0}"
+    adapter.cancel_all_open.assert_not_called()
+    adapter.submit_orders.assert_called_once()
+    adapter.submit_orders_book_aware.assert_not_called()
+
+
 def test_completeness_gate_refuses_large_missing_share():
     plan = _partial_plan(allowed_usd=100.0, skipped_usd=900.0)
     plan = replace(
@@ -329,6 +531,39 @@ def test_completeness_gate_refuses_large_missing_share():
 
     assert not result.submitted
     assert result.completeness_ratio == pytest.approx(0.10)
+    assert "completeness" in result.error
+    adapter.cancel_all_open.assert_not_called()
+
+
+def test_completeness_gate_uses_submitted_notional_after_size_rounding():
+    state = AccountState("0xAAA", 100_000.0, 0.0)
+    plan = RebalancePlan(
+        timestamp_ms=1000,
+        target_weights={"btc": 0.8},
+        current_state=state,
+        target_usd={"BTC": 80_000.0},
+        deltas_usd={"BTC": 80_000.0},
+        orders=[Order("BTC", True, 0.6, 100_100.0, "0x" + "1" * 32)],
+        skipped=[],
+        equity_used=100_000.0,
+        network="testnet",
+        target_snapshot=TargetSnapshot(
+            {"btc": 0.8}, as_of=datetime.now(timezone.utc)
+        ),
+        mids={"BTC": 100_000.0},
+    )
+    adapter = _mock_adapter("0xAAA", ExecutionConfig(
+        testnet=True,
+        dry_run=False,
+        smart_execution=False,
+        repair_attempts=0,
+        min_rebalance_completeness=0.90,
+    ))
+
+    result = execute_plan(adapter, plan, write_audit=False)
+
+    assert not result.submitted
+    assert result.completeness_ratio == pytest.approx(0.75)
     assert "completeness" in result.error
     adapter.cancel_all_open.assert_not_called()
 

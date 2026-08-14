@@ -22,6 +22,7 @@ import time
 
 from causal_portfolio.execution.config import ExecutionConfig
 from causal_portfolio.execution.precision import (
+    floor_size as _floor_size,
     round_price as _round_price,
     round_size as _round_size,
 )
@@ -201,6 +202,8 @@ def plan_rebalance(
 
         current_notional = current_usd.get(coin, 0.0)
         target_notional = target_usd.get(coin, 0.0)
+        is_reduce_only = _is_same_side_reduce(current_notional, target_notional)
+        is_full_reduce_close = is_reduce_only and target_notional == 0
         # A fraction of the existing position is scale-aware and directly
         # targets resize churn; opens, flips, and closes are directional calls.
         if (
@@ -217,7 +220,7 @@ def plan_rebalance(
             ))
             continue
 
-        if abs(delta) > single_trade_cap_usd:
+        if abs(delta) > single_trade_cap_usd and not is_full_reduce_close:
             # Don't silently shrink — surface to operator. Skip this coin.
             skipped.append((
                 coin, SkipReason.EXCEEDS_TRADE_CAP,
@@ -234,9 +237,17 @@ def plan_rebalance(
             continue
 
         is_buy = delta > 0
-        raw_size = abs(delta) / mid
+        raw_size = (
+            abs(state.positions[coin].size)
+            if is_full_reduce_close
+            else abs(delta) / mid
+        )
         m = meta[coin]
-        size = _round_size(raw_size, m.sz_decimals)
+        size = (
+            _floor_size(raw_size, m.sz_decimals)
+            if is_full_reduce_close
+            else _round_size(raw_size, m.sz_decimals)
+        )
 
         if size == 0 or size < m.min_size:
             skipped.append((
@@ -250,9 +261,6 @@ def plan_rebalance(
         # without flipping sign (target == 0, a full close, always qualifies).
         # HL allows wider price bands for reduce-only orders — they can't
         # accidentally open new exposure.
-        is_reduce_only = _is_same_side_reduce(current_notional, target_notional)
-        is_full_reduce_close = is_reduce_only and target_notional == 0
-
         if (
             rounded_notional < config.min_order_notional_usd
             and not is_full_reduce_close

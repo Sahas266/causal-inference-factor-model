@@ -116,6 +116,13 @@ class ExecutionConfig:
     # gross trade notional. 0 preserves the historical partial-submit behavior.
     min_rebalance_completeness: float = 0.0
 
+    # One-shot strategy retirement mode. Requires a zero-only target for the
+    # exact owned strategy universe and verifies a stable flat account with no
+    # open orders before reporting success.
+    account_decommission: bool = False
+    account_decommission_expected_address: str | None = None
+    account_decommission_expected_sides: tuple[tuple[str, int], ...] = ()
+
     def __post_init__(self):
         # Light validation. Don't catch every bad combination — just the obvious
         # foot-guns that would silently corrupt a rebalance plan.
@@ -186,6 +193,37 @@ class ExecutionConfig:
                 "min_rebalance_completeness must be in [0, 1], got "
                 f"{self.min_rebalance_completeness}"
             )
+        if self.account_decommission and not self.account_decommission_expected_address:
+            raise ValueError(
+                "account_decommission requires an explicit expected address"
+            )
+        if self.account_decommission and not self.account_decommission_expected_sides:
+            raise ValueError(
+                "account_decommission requires expected position sides"
+            )
+        if not self.account_decommission and (
+            self.account_decommission_expected_address
+            or self.account_decommission_expected_sides
+        ):
+            raise ValueError(
+                "account decommission guards require account_decommission=True"
+            )
+        normalized_decommission_sides = tuple(
+            (asset.strip().upper(), int(side))
+            for asset, side in self.account_decommission_expected_sides
+        )
+        if any(not asset for asset, _side in normalized_decommission_sides):
+            raise ValueError("account decommission assets cannot contain blanks")
+        if any(side not in {-1, 1} for _asset, side in normalized_decommission_sides):
+            raise ValueError("account decommission sides must be -1 or 1")
+        assets = [asset for asset, _side in normalized_decommission_sides]
+        if len(set(assets)) != len(assets):
+            raise ValueError("account decommission assets cannot contain duplicates")
+        object.__setattr__(
+            self,
+            "account_decommission_expected_sides",
+            normalized_decommission_sides,
+        )
         if self.max_signal_age_hours <= 0:
             raise ValueError(
                 f"max_signal_age_hours must be > 0, got {self.max_signal_age_hours}"

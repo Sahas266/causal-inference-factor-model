@@ -248,7 +248,13 @@ def test_cli_execute_surfaces_post_submit_and_audit_errors(tmp_path, monkeypatch
         post_submit_error="post-state unavailable",
         audit_error="audit disk full",
     ))
-    monkeypatch.setattr(hl_mod, "HLAdapter", lambda _cfg: adapter)
+    captured = {}
+
+    def make_adapter(config):
+        captured["config"] = config
+        return adapter
+
+    monkeypatch.setattr(hl_mod, "HLAdapter", make_adapter)
     monkeypatch.setattr(hl_mod, "execute_plan", execute)
     monkeypatch.setattr(cli, "plan_rebalance", lambda *_args: plan)
     monkeypatch.setattr(cli, "_print_plan", lambda *_args, **_kwargs: None)
@@ -262,6 +268,8 @@ def test_cli_execute_surfaces_post_submit_and_audit_errors(tmp_path, monkeypatch
         twap_minutes=0.0,
         twap_slices=5,
         no_smart_execution=False,
+        min_position_change_pct=0.10,
+        min_rebalance_completeness=0.90,
     )
 
     assert cli.cmd_execute(args) == 0
@@ -269,6 +277,8 @@ def test_cli_execute_surfaces_post_submit_and_audit_errors(tmp_path, monkeypatch
     stderr = capsys.readouterr().err
     assert "post-state unavailable" in stderr
     assert "audit disk full" in stderr
+    assert captured["config"].min_position_change_pct == 0.10
+    assert captured["config"].min_rebalance_completeness == 0.90
     execute.assert_called_once()
 
 

@@ -379,6 +379,54 @@ def test_single_trade_cap_blocks_oversize_trade(basic_meta, basic_mids):
     assert ("BTC", SkipReason.EXCEEDS_TRADE_CAP) in skip_reasons
 
 
+def test_single_trade_cap_never_blocks_a_full_close(basic_meta, basic_mids):
+    cfg = ExecutionConfig(
+        dry_run=True,
+        max_single_trade_pct=0.05,
+        max_position_pct=1.0,
+    )
+    state = _state(10_000, positions={"BTC": _pos("BTC", size=0.1, px=60_000)})
+
+    plan = plan_rebalance(
+        target_weights={},
+        state=state,
+        mids=basic_mids,
+        meta=basic_meta,
+        config=cfg,
+        timestamp_ms=1000,
+    )
+
+    assert len(plan.orders) == 1
+    assert plan.orders[0].coin == "BTC"
+    assert plan.orders[0].reduce_only is True
+    assert not any(reason == SkipReason.EXCEEDS_TRADE_CAP for _, reason, _ in plan.skipped)
+
+
+def test_full_close_uses_exact_position_size_when_mid_moved():
+    config = ExecutionConfig(
+        dry_run=True,
+        max_single_trade_pct=1.0,
+        max_position_pct=1.0,
+    )
+    state = _state(
+        10_000,
+        positions={"AVAX": _pos("AVAX", size=20.77, px=6.7425)},
+    )
+
+    plan = plan_rebalance(
+        target_weights={},
+        state=state,
+        mids={"AVAX": 6.24},
+        meta={"AVAX": _meta("AVAX", sz_decimals=2)},
+        config=config,
+        timestamp_ms=1000,
+    )
+
+    assert len(plan.orders) == 1
+    assert plan.orders[0].size == 20.77
+    assert plan.orders[0].reduce_only is True
+
+
 def test_precision_warning_when_rounding_shrinks_trade(basic_mids):
     """Coarse sz_decimals → trade shrinks >10% from target → warning in notes."""
     # Whole-BTC granularity. Target $80k → 1.3333 BTC → rounded to 1.0 BTC ($60k).

@@ -502,3 +502,31 @@ def test_cli_accepts_explicit_testnet_flag(monkeypatch):
         "execute", "--weights", "unused.json", "--live", "--testnet",
     ]) == 0
     assert captured["mainnet"] is False
+
+
+def test_cli_accepts_rebalance_policy_gates(monkeypatch):
+    from causal_portfolio.execution import cli
+
+    captured = {}
+
+    def fake_execute(args):
+        captured["min_position_change_pct"] = args.min_position_change_pct
+        captured["min_rebalance_completeness"] = args.min_rebalance_completeness
+        return 0
+
+    monkeypatch.setattr(cli, "cmd_execute", fake_execute)
+
+    assert cli.main([
+        "execute",
+        "--weights",
+        "unused.json",
+        "--live",
+        "--min-position-change-pct",
+        "0.10",
+        "--min-rebalance-completeness",
+        "0.90",
+    ]) == 0
+    assert captured == {
+        "min_position_change_pct": 0.10,
+        "min_rebalance_completeness": 0.90,
+    }

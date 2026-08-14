@@ -330,6 +330,8 @@ def _submit_target(args: argparse.Namespace, target_path: Path) -> None:
         twap_slices=args.twap_slices,
         max_transaction_cost_bps=args.max_transaction_cost_bps,
         estimated_taker_fee_bps=args.estimated_taker_fee_bps,
+        min_position_change_pct=args.min_position_change_pct,
+        min_rebalance_completeness=args.min_rebalance_completeness,
     )
     target = load_target_snapshot(target_path)
     result = execute_model_target(
@@ -377,6 +379,18 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--twap-slices", type=int, default=5)
     p.add_argument("--max-transaction-cost-bps", type=float, default=15.0)
     p.add_argument("--estimated-taker-fee-bps", type=float, default=4.5)
+    p.add_argument(
+        "--min-position-change-pct",
+        type=float,
+        default=0.0,
+        help="Skip same-direction resizes below this fraction of the current position",
+    )
+    p.add_argument(
+        "--min-rebalance-completeness",
+        type=float,
+        default=0.0,
+        help="Require this submitted share of intended exposure-increasing notional",
+    )
     p.add_argument("--loop", action="store_true", help="Run forever")
     p.add_argument("--every-hours", type=float, default=24.0)
     return p

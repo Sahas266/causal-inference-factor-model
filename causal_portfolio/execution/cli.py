@@ -133,6 +133,12 @@ def cmd_execute(args) -> int:
     cfg_kwargs["estimated_taker_fee_bps"] = getattr(
         args, "estimated_taker_fee_bps", 4.5
     )
+    cfg_kwargs["min_position_change_pct"] = getattr(
+        args, "min_position_change_pct", 0.0
+    )
+    cfg_kwargs["min_rebalance_completeness"] = getattr(
+        args, "min_rebalance_completeness", 0.0
+    )
     cfg = ExecutionConfig(**cfg_kwargs)
 
     from causal_portfolio.execution.hyperliquid import HLAdapter, execute_plan
@@ -321,6 +327,12 @@ def _main(argv: list[str] | None = None) -> int:
                              "disabled when omitted")
     p_exec.add_argument("--estimated-taker-fee-bps", type=float, default=4.5,
                         help="Fee component used by the pre-trade cost estimate")
+    p_exec.add_argument("--min-position-change-pct", type=float, default=0.0,
+                        help="Skip same-direction resizes below this fraction of "
+                             "the current position (0.10 means 10%%; default: off)")
+    p_exec.add_argument("--min-rebalance-completeness", type=float, default=0.0,
+                        help="Require this submitted share of intended increasing "
+                             "notional (0.90 means 90%%; default: off)")
     p_exec.set_defaults(func=cmd_execute)
 
     args = p.parse_args(argv)
