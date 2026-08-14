@@ -664,25 +664,18 @@ def _validate_latest_window(
     if any(date is None for date in latest_by_source.values()):
         empty = [column for column, date in latest_by_source.items() if date is None]
         raise ValueError(f"empty frozen DAG v2 source columns: {', '.join(empty)}")
-    # Trim to the last day every source covers, capped at yesterday UTC.
+    # Trim to the last day every source covers — the newest date the
+    # aggregate chain-fee factor can be computed honestly.
     #
-    # Requiring the sources to agree stalled the model for hours a day:
-    # Coin Metrics publishes per asset at different times, so btc can sit a
-    # day behind eth/doge through no fault of the data. The common floor is
-    # the newest day the aggregate factor can be computed honestly, and the
-    # yesterday cap keeps a partially-published current day out of the
-    # window. Contiguity within the window is still enforced below, so this
-    # trims the tail without tolerating a hole.
-    common_latest = min(latest_by_source.values())
-    yesterday = pd.Timestamp(
-        now.astimezone(timezone.utc).date() - timedelta(days=1)
-    )
-    last_date = min(common_latest, yesterday)
-    if last_date < common_latest:
-        logger.info(
-            "DAG v2 window capped at %s (sources reach %s)",
-            last_date.date().isoformat(), common_latest.date().isoformat(),
-        )
+    # Requiring the sources to agree stalled the model for hours a day: Coin
+    # Metrics publishes per asset at different times, so btc can sit a day
+    # behind eth/doge through no fault of the data. No calendar cap is applied
+    # on top: every writer into this table records completed days only (Coin
+    # Metrics publishes closed days; the CoinGecko filler drops the partial
+    # current day), so the floor is already a settled date. Contiguity within
+    # the window is still enforced below, so this trims the tail without
+    # tolerating a hole.
+    last_date = min(latest_by_source.values())
     lagging = sorted(
         column for column, date in latest_by_source.items() if date > last_date
     )
