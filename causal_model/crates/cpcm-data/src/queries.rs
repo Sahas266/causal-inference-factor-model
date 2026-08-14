@@ -1,4 +1,4 @@
-/// Pre-defined metric groups for common queries.
+//! Pre-defined metric groups for common queries.
 
 /// CoinMetrics asset metrics available on community tier.
 pub const COINMETRICS_METRICS: &[&str] = &[
@@ -59,13 +59,35 @@ pub const DUNE_ETH_METRICS: &[&str] = &[
 
 /// FRED macro series (stored with asset="macro").
 pub const FRED_METRICS: &[&str] = &[
-    "DFF", "DGS2", "DGS10", "DGS30", "DFEDTARU", "T10Y2Y", "T10Y3M",
-    "CPIAUCSL", "CPILFESL", "PCEPI", "PCEPILFE", "T5YIE", "T10YIE", "MICH",
-    "M2SL", "WALCL", "RRPONTSYD",
-    "VIXCLS", "BAMLH0A0HYM2", "TEDRATE",
-    "UNRATE", "PAYEMS", "ICSA", "GDPC1", "INDPRO",
-    "DCOILWTICO", "PPIACO",
-    "NFCI", "STLFSI2",
+    "DFF",
+    "DGS2",
+    "DGS10",
+    "DGS30",
+    "DFEDTARU",
+    "T10Y2Y",
+    "T10Y3M",
+    "CPIAUCSL",
+    "CPILFESL",
+    "PCEPI",
+    "PCEPILFE",
+    "T5YIE",
+    "T10YIE",
+    "MICH",
+    "M2SL",
+    "WALCL",
+    "RRPONTSYD",
+    "VIXCLS",
+    "BAMLH0A0HYM2",
+    "TEDRATE",
+    "UNRATE",
+    "PAYEMS",
+    "ICSA",
+    "GDPC1",
+    "INDPRO",
+    "DCOILWTICO",
+    "PPIACO",
+    "NFCI",
+    "STLFSI2",
     "DTWEXBGS",
 ];
 
@@ -78,9 +100,9 @@ pub const DERIVED_METRICS: &[&str] = &[
 
 /// All 26 target assets.
 pub const ALL_ASSETS: &[&str] = &[
-    "usdc", "usdt", "usde", "btc", "eth", "bnb", "hype", "xrp", "pendle",
-    "uni", "jup", "tao", "link", "zec", "ena", "morpho", "aero", "sol",
-    "avax", "pol", "wlfi", "crv", "aave", "pepe", "shib", "doge",
+    "usdc", "usdt", "usde", "btc", "eth", "bnb", "hype", "xrp", "pendle", "uni", "jup", "tao",
+    "link", "zec", "ena", "morpho", "aero", "sol", "avax", "pol", "wlfi", "crv", "aave", "pepe",
+    "shib", "doge",
 ];
 
 /// Assets with CoinMetrics coverage.

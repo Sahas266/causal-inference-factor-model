@@ -40,10 +40,7 @@ pub fn pivot_to_panel(
             None => continue,
         };
 
-        column_data
-            .entry(col_name)
-            .or_default()
-            .insert(date, value);
+        column_data.entry(col_name).or_default().insert(date, value);
     }
 
     // Generate the full date range
@@ -126,7 +123,9 @@ fn generate_date_range(start: NaiveDate, end: NaiveDate) -> Vec<NaiveDate> {
 fn forward_fill_columns(mut df: DataFrame, col_names: &[String]) -> anyhow::Result<DataFrame> {
     for col_name in col_names {
         let col = df.column(col_name.as_str())?.clone();
-        let filled = col.as_materialized_series().fill_null(FillNullStrategy::Forward(None))?;
+        let filled = col
+            .as_materialized_series()
+            .fill_null(FillNullStrategy::Forward(None))?;
         let _ = df.replace(col_name.as_str(), filled);
     }
     Ok(df)
@@ -187,12 +186,20 @@ pub fn load_parquet(path: &str, ttl_hours: u64) -> anyhow::Result<Option<DataFra
         .duration_since(modified)
         .unwrap_or_default();
     if age.as_secs() > ttl_hours * 3600 {
-        info!("Cache expired ({:.1}h old, TTL={}h)", age.as_secs() as f64 / 3600.0, ttl_hours);
+        info!(
+            "Cache expired ({:.1}h old, TTL={}h)",
+            age.as_secs() as f64 / 3600.0,
+            ttl_hours
+        );
         return Ok(None);
     }
     let file = std::fs::File::open(path)?;
     let df = ParquetReader::new(file).finish()?;
-    info!("Loaded cached panel from {path} ({} rows × {} cols)", df.height(), df.width());
+    info!(
+        "Loaded cached panel from {path} ({} rows × {} cols)",
+        df.height(),
+        df.width()
+    );
     Ok(Some(df))
 }
 

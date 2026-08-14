@@ -26,15 +26,37 @@ pub struct FactorPanel {
 
 /// FRED macro series names that we map from `macro_X` columns to lowercase `x`.
 const MACRO_SERIES: &[&str] = &[
-    "DFF", "DGS10", "VIXCLS", "T10Y2Y", "CPIAUCSL", "M2SL", "DTWEXBGS",
+    "DFF",
+    "DGS10",
+    "VIXCLS",
+    "T10Y2Y",
+    "CPIAUCSL",
+    "M2SL",
+    "DTWEXBGS",
     // Additional FRED series available in the database
-    "DGS2", "DGS30", "DFEDTARU", "T10Y3M",
-    "CPILFESL", "PCEPI", "PCEPILFE", "T5YIE", "T10YIE", "MICH",
-    "WALCL", "RRPONTSYD",
-    "BAMLH0A0HYM2", "TEDRATE",
-    "UNRATE", "PAYEMS", "ICSA", "GDPC1", "INDPRO",
-    "DCOILWTICO", "PPIACO",
-    "NFCI", "STLFSI2",
+    "DGS2",
+    "DGS30",
+    "DFEDTARU",
+    "T10Y3M",
+    "CPILFESL",
+    "PCEPI",
+    "PCEPILFE",
+    "T5YIE",
+    "T10YIE",
+    "MICH",
+    "WALCL",
+    "RRPONTSYD",
+    "BAMLH0A0HYM2",
+    "TEDRATE",
+    "UNRATE",
+    "PAYEMS",
+    "ICSA",
+    "GDPC1",
+    "INDPRO",
+    "DCOILWTICO",
+    "PPIACO",
+    "NFCI",
+    "STLFSI2",
 ];
 
 /// Compute all factors, covariates, returns, and instruments from raw data.
@@ -109,16 +131,34 @@ pub fn print_coverage(panel: &FactorPanel, assets: &[String]) {
     for (name, values) in &panel.global_factors {
         let valid = values.iter().filter(|v| !v.is_nan()).count();
         let pct = (valid as f64 / panel.n_dates as f64) * 100.0;
-        let status = if pct > 50.0 { "OK" } else if pct > 0.0 { "SPARSE" } else { "MISSING" };
-        println!("  {name:20} {valid:>5}/{} ({pct:5.1}%) [{status}]", panel.n_dates);
+        let status = if pct > 50.0 {
+            "OK"
+        } else if pct > 0.0 {
+            "SPARSE"
+        } else {
+            "MISSING"
+        };
+        println!(
+            "  {name:20} {valid:>5}/{} ({pct:5.1}%) [{status}]",
+            panel.n_dates
+        );
     }
 
     println!("\nMacro Factors:");
     for (name, values) in &panel.macro_factors {
         let valid = values.iter().filter(|v| !v.is_nan()).count();
         let pct = (valid as f64 / panel.n_dates as f64) * 100.0;
-        let status = if pct > 50.0 { "OK" } else if pct > 0.0 { "SPARSE" } else { "MISSING" };
-        println!("  {name:20} {valid:>5}/{} ({pct:5.1}%) [{status}]", panel.n_dates);
+        let status = if pct > 50.0 {
+            "OK"
+        } else if pct > 0.0 {
+            "SPARSE"
+        } else {
+            "MISSING"
+        };
+        println!(
+            "  {name:20} {valid:>5}/{} ({pct:5.1}%) [{status}]",
+            panel.n_dates
+        );
     }
 
     println!("\nAsset Returns:");

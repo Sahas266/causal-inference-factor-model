@@ -125,10 +125,7 @@ impl SupabaseClient {
         } else {
             "provider,provider_priority,asset,metric,time,value,frequency"
         };
-        let mut url = format!(
-            "{}/rest/v1/{}?select={}",
-            self.base_url, table, select
-        );
+        let mut url = format!("{}/rest/v1/{}?select={}", self.base_url, table, select);
 
         // Asset filter
         if !assets.is_empty() {
@@ -155,9 +152,7 @@ impl SupabaseClient {
 
         // Order and pagination
         url.push_str("&order=time.asc");
-        url.push_str(&format!(
-            "&offset={offset}&limit={PAGE_SIZE}"
-        ));
+        url.push_str(&format!("&offset={offset}&limit={PAGE_SIZE}"));
 
         Ok(url)
     }

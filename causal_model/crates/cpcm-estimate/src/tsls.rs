@@ -1,5 +1,5 @@
 use nalgebra::{DMatrix, DVector};
-use statrs::distribution::{ContinuousCDF, ChiSquared, StudentsT};
+use statrs::distribution::{ChiSquared, ContinuousCDF, StudentsT};
 
 use crate::ols::{hac_covariance, newey_west_maxlags, ols, project_onto};
 use crate::types::TslsResult;
@@ -34,7 +34,10 @@ pub fn tsls(
     anyhow::ensure!(n == x_endog.nrows(), "x_endog row mismatch");
     anyhow::ensure!(n == x_exog.nrows(), "x_exog row mismatch");
     anyhow::ensure!(n == z.nrows(), "z row mismatch");
-    anyhow::ensure!(m >= k1, "Need at least as many instruments ({m}) as endogenous vars ({k1})");
+    anyhow::ensure!(
+        m >= k1,
+        "Need at least as many instruments ({m}) as endogenous vars ({k1})"
+    );
 
     // ── Stage 1: Regress each endogenous var on [Z, X_exog] ──────────
     let z_full = hstack(&[z, x_exog]);
@@ -75,9 +78,9 @@ pub fn tsls(
     let threshold = 1e-10 * svd.singular_values.max();
     let s_inv_diag = DMatrix::from_diagonal(&DVector::from_iterator(
         svd.singular_values.len(),
-        svd.singular_values.iter().map(|&s| {
-            if s > threshold { 1.0 / s } else { 0.0 }
-        }),
+        svd.singular_values
+            .iter()
+            .map(|&s| if s > threshold { 1.0 / s } else { 0.0 }),
     ));
     let xtx_hat_inv = vt.transpose() * s_inv_diag * u.transpose();
 
@@ -112,8 +115,7 @@ pub fn tsls(
 
     // ── Hausman test (uses the CORRECTED 2SLS SEs, not raw stage-2 SEs) ──
     let ols_result = ols(y, &x_original, &all_names)?;
-    let (hausman_stat, hausman_p) =
-        compute_hausman(&ols_result, beta.as_slice(), &std_errors, k1);
+    let (hausman_stat, hausman_p) = compute_hausman(&ols_result, beta.as_slice(), &std_errors, k1);
 
     // HAC (Newey-West) standard errors: bread from [X̂, X_exog], residuals
     // from the original X (the 2SLS correction).

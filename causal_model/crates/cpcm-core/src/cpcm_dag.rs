@@ -24,12 +24,8 @@ pub const MACRO_FACTORS: &[&str] = &[
 ];
 
 /// Per-asset covariate suffixes. Each asset gets `{asset}_{cov}`.
-pub const ASSET_COVARIATES: &[&str] = &[
-    "whale_conc",
-    "protocol_rev",
-    "emissions",
-    "chain_activity",
-];
+pub const ASSET_COVARIATES: &[&str] =
+    &["whale_conc", "protocol_rev", "emissions", "chain_activity"];
 
 /// Instrument definitions: (iv_name, instruments_for_factor, lag).
 pub const INSTRUMENTS: &[(&str, &str, i32)] = &[
@@ -91,11 +87,26 @@ pub fn build_cpcm_dag(assets: &[&str]) -> CausalDag {
 
         // ── F → Xi interactions ──────────────────────────────────────
         // StableFlow → whale behaviour
-        dag.add_edge("stable_flow", &format!("{asset}_whale_conc"), EdgeKind::Causal, 0);
+        dag.add_edge(
+            "stable_flow",
+            &format!("{asset}_whale_conc"),
+            EdgeKind::Causal,
+            0,
+        );
         // Chain congestion → protocol volume/revenue
-        dag.add_edge("chain_congestion", &format!("{asset}_protocol_rev"), EdgeKind::Causal, 0);
+        dag.add_edge(
+            "chain_congestion",
+            &format!("{asset}_protocol_rev"),
+            EdgeKind::Causal,
+            0,
+        );
         // Staking yield → emissions dynamics
-        dag.add_edge("staking_yield", &format!("{asset}_emissions"), EdgeKind::Causal, 0);
+        dag.add_edge(
+            "staking_yield",
+            &format!("{asset}_emissions"),
+            EdgeKind::Causal,
+            0,
+        );
 
         // ── Unobserved shock ─────────────────────────────────────────
         let shock = format!("{asset}_shock");
@@ -152,7 +163,7 @@ pub fn summarize_dag(dag: &CausalDag) -> DagSummary {
 mod tests {
     use super::*;
     use crate::dsep::d_separated;
-    use crate::identify::{check_iv_validity, backdoor_adjustment_set};
+    use crate::identify::{backdoor_adjustment_set, check_iv_validity};
 
     #[test]
     fn test_build_single_asset() {
@@ -179,7 +190,7 @@ mod tests {
         // 7 global + 7 macro + 4 instruments + 3*(1 return + 4 covariates + 1 shock)
         assert_eq!(summary.asset_returns, 3);
         assert_eq!(summary.asset_covariates, 12); // 4 per asset
-        // 3 per-asset shocks + 4 latent confounders
+                                                  // 3 per-asset shocks + 4 latent confounders
         assert_eq!(summary.unobserved_shocks, 7);
     }
 
@@ -266,9 +277,9 @@ mod tests {
     #[test]
     fn test_full_26_coin_dag() {
         let assets: Vec<&str> = vec![
-            "usdc", "usdt", "usde", "btc", "eth", "bnb", "hype", "xrp", "pendle",
-            "uni", "jup", "tao", "link", "zec", "ena", "morpho", "aero", "sol",
-            "avax", "pol", "wlfi", "crv", "aave", "pepe", "shib", "doge",
+            "usdc", "usdt", "usde", "btc", "eth", "bnb", "hype", "xrp", "pendle", "uni", "jup",
+            "tao", "link", "zec", "ena", "morpho", "aero", "sol", "avax", "pol", "wlfi", "crv",
+            "aave", "pepe", "shib", "doge",
         ];
         let dag = build_cpcm_dag(&assets);
         assert!(dag.is_dag());

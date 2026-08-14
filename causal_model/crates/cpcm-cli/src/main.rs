@@ -82,8 +82,7 @@ async fn main() -> anyhow::Result<()> {
         }
 
         Commands::Graph => {
-            let asset_refs: Vec<&str> =
-                config.assets.include.iter().map(|s| s.as_str()).collect();
+            let asset_refs: Vec<&str> = config.assets.include.iter().map(|s| s.as_str()).collect();
             let dag = build_cpcm_dag(&asset_refs);
             let summary = summarize_dag(&dag);
 
@@ -104,11 +103,7 @@ async fn main() -> anyhow::Result<()> {
             let not_identified: Vec<_> = id_results.iter().filter(|r| !r.identified).collect();
 
             println!("=== Identification Results ===\n");
-            println!(
-                "Identified: {}/{}",
-                identified.len(),
-                id_results.len()
-            );
+            println!("Identified: {}/{}", identified.len(), id_results.len());
 
             if !not_identified.is_empty() {
                 println!("\nNot Identified:");

@@ -1,5 +1,5 @@
 [supabase]
-url = "https://jnulpcqpftnwvknwuqpa.supabase.co"
+url = "https://your-project-id.supabase.co"
 key_env = "SUPABASE_KEY"
 
 [data]

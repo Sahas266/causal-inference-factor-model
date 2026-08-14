@@ -54,9 +54,9 @@ pub fn backdoor_adjustment_set(
             name != treatment
                 && name != outcome
                 && !descendants_of_treatment.contains(name)
-                && dag.node_by_name(name).map_or(false, |n| {
-                    n.kind != NodeKind::UnobservedShock
-                })
+                && dag
+                    .node_by_name(name)
+                    .is_some_and(|n| n.kind != NodeKind::UnobservedShock)
         })
         .map(|s| s.to_string())
         .collect();
@@ -220,9 +220,8 @@ pub fn identify_all_effects(dag: &CausalDag) -> Vec<IdentificationResult> {
         .node_names()
         .into_iter()
         .filter(|&name| {
-            dag.node_by_name(name).map_or(false, |n| {
-                matches!(n.kind, NodeKind::GlobalFactor | NodeKind::MacroFactor)
-            })
+            dag.node_by_name(name)
+                .is_some_and(|n| matches!(n.kind, NodeKind::GlobalFactor | NodeKind::MacroFactor))
         })
         .map(|s| s.to_string())
         .collect();

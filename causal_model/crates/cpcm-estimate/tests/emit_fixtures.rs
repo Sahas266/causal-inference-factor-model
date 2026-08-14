@@ -11,7 +11,10 @@ use cpcm_estimate::tsls::tsls;
 use nalgebra::{DMatrix, DVector};
 
 fn vec_str(v: &[f64]) -> String {
-    v.iter().map(|x| format!("{x:.12e}")).collect::<Vec<_>>().join(",")
+    v.iter()
+        .map(|x| format!("{x:.12e}"))
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 #[test]
@@ -51,9 +54,7 @@ fn emit_fixtures() {
     let n2 = 1000usize;
     let mut rng_state: u64 = 42;
     let mut next_f64 = || -> f64 {
-        rng_state = rng_state
-            .wrapping_mul(6364136223846793005)
-            .wrapping_add(1);
+        rng_state = rng_state.wrapping_mul(6364136223846793005).wrapping_add(1);
         ((rng_state >> 33) as f64) / (u32::MAX as f64) - 0.5
     };
     let mut z_data = vec![0.0; n2];
@@ -74,8 +75,13 @@ fn emit_fixtures() {
     let intercept = DMatrix::from_element(n2, 1, 1.0);
     let z = DMatrix::from_column_slice(n2, 1, &z_data);
     let t = tsls(
-        &y2, &x_endog, &intercept, &z,
-        &["x".into()], &["intercept".into()], &["z".into()],
+        &y2,
+        &x_endog,
+        &intercept,
+        &z,
+        &["x".into()],
+        &["intercept".into()],
+        &["z".into()],
     )
     .unwrap();
     println!("TSLS_COEF = {}", vec_str(&t.coefficients));

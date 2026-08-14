@@ -22,7 +22,8 @@ pub fn compute_instruments(
     // gas_spike → instruments for liq_flow
     // Z-score of gas diff > 2σ, lagged by 1 day
     // Try multiple column names: Dune query 6831658 returns avg_base_fee_gwei, not avg_gas_price_gwei
-    let gas_col = data.get("eth_avg_gas_price_gwei")
+    let gas_col = data
+        .get("eth_avg_gas_price_gwei")
         .or_else(|| data.get("eth_avg_base_fee_gwei"))
         .or_else(|| data.get("eth_FeeTotNtv"));
     if let Some(gas) = gas_col {
@@ -52,7 +53,13 @@ pub fn compute_instruments(
             .map(|i| {
                 available
                     .iter()
-                    .map(|col| if i < col.len() && !col[i].is_nan() { col[i] } else { 0.0 })
+                    .map(|col| {
+                        if i < col.len() && !col[i].is_nan() {
+                            col[i]
+                        } else {
+                            0.0
+                        }
+                    })
                     .sum()
             })
             .collect();
@@ -63,7 +70,8 @@ pub fn compute_instruments(
 
     // protocol_event → instruments for chain_congestion
     // Fee regime change: abs(diff(fees)) > 2σ, lagged by 1 day
-    let fees_col = data.get("eth_fees_usd")
+    let fees_col = data
+        .get("eth_fees_usd")
         .or_else(|| data.get("eth_FeeTotNtv"));
     if let Some(fees) = fees_col {
         let spike = lagged_z_score_spike(fees, 2.0, 1);
@@ -96,7 +104,11 @@ fn rolling_z_score_abs(x: &[f64], window: usize, min_periods: usize) -> Vec<f64>
         let mean = vals.iter().sum::<f64>() / vals.len() as f64;
         let var = vals.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / vals.len() as f64;
         let std = var.sqrt();
-        out[t] = if std < 1e-15 { 0.0 } else { (x[t].abs() - mean) / std };
+        out[t] = if std < 1e-15 {
+            0.0
+        } else {
+            (x[t].abs() - mean) / std
+        };
     }
     out
 }
@@ -125,8 +137,8 @@ fn lagged_z_score_spike(x: &[f64], threshold: f64, lag_days: usize) -> Vec<f64> 
 /// Lag a series by `k` positions (shift forward). First `k` elements become NaN.
 fn lag(x: &[f64], k: usize) -> Vec<f64> {
     let mut result = vec![f64::NAN; x.len()];
-    for i in k..x.len() {
-        result[i] = x[i - k];
+    if k <= x.len() {
+        result[k..].copy_from_slice(&x[..x.len() - k]);
     }
     result
 }

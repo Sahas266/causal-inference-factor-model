@@ -21,7 +21,7 @@ pub enum PanelMode {
 ///
 /// # Arguments
 /// * `data` - A map from column name to its data vector (all same length for per-asset,
-///            or stacked for pooled).
+///   or stacked for pooled).
 /// * `assets` - List of asset tickers.
 /// * `factor_names` - Names of global factor columns.
 /// * `macro_names` - Names of macro factor columns.
@@ -38,12 +38,22 @@ pub fn run_panel_estimation(
     mode: PanelMode,
 ) -> anyhow::Result<Vec<EstimationResult>> {
     match mode {
-        PanelMode::PerAsset => {
-            run_per_asset(data, assets, factor_names, macro_names, covariate_suffixes, instrument_map)
-        }
-        PanelMode::Pooled => {
-            run_pooled(data, assets, factor_names, macro_names, covariate_suffixes, instrument_map)
-        }
+        PanelMode::PerAsset => run_per_asset(
+            data,
+            assets,
+            factor_names,
+            macro_names,
+            covariate_suffixes,
+            instrument_map,
+        ),
+        PanelMode::Pooled => run_pooled(
+            data,
+            assets,
+            factor_names,
+            macro_names,
+            covariate_suffixes,
+            instrument_map,
+        ),
     }
 }
 
@@ -120,8 +130,14 @@ fn run_per_asset(
                 );
             }
         }
-        feature_cols = keep_indices.iter().map(|&j| feature_cols[j].clone()).collect();
-        feature_names = keep_indices.iter().map(|&j| feature_names[j].clone()).collect();
+        feature_cols = keep_indices
+            .iter()
+            .map(|&j| feature_cols[j].clone())
+            .collect();
+        feature_names = keep_indices
+            .iter()
+            .map(|&j| feature_names[j].clone())
+            .collect();
 
         if feature_cols.is_empty() {
             tracing::warn!("{asset}: no features with sufficient data, skipping");
@@ -132,7 +148,9 @@ fn run_per_asset(
         let valid_rows: Vec<usize> = (0..n)
             .filter(|&i| {
                 !y_data[i].is_nan()
-                    && feature_cols.iter().all(|col| i < col.len() && !col[i].is_nan())
+                    && feature_cols
+                        .iter()
+                        .all(|col| i < col.len() && !col[i].is_nan())
             })
             .collect();
 
@@ -251,7 +269,9 @@ fn run_pooled(
         let valid_rows: Vec<usize> = (0..n)
             .filter(|&i| {
                 !y_data[i].is_nan()
-                    && feature_cols.iter().all(|col| i < col.len() && !col[i].is_nan())
+                    && feature_cols
+                        .iter()
+                        .all(|col| i < col.len() && !col[i].is_nan())
             })
             .collect();
 
@@ -294,7 +314,7 @@ fn run_pooled(
 
         // Extend all existing dummy columns with 0s for this asset
         for dummy in &mut asset_dummies {
-            dummy.extend(std::iter::repeat(0.0).take(valid_rows.len()));
+            dummy.extend(std::iter::repeat_n(0.0, valid_rows.len()));
         }
 
         // Add new dummy column for this asset (1s for its rows, 0s elsewhere)
@@ -302,7 +322,7 @@ fn run_pooled(
             // First asset is baseline — no dummy
         } else {
             let mut new_dummy = vec![0.0; all_y.len() - valid_rows.len()];
-            new_dummy.extend(std::iter::repeat(1.0).take(valid_rows.len()));
+            new_dummy.extend(std::iter::repeat_n(1.0, valid_rows.len()));
             asset_dummies.push(new_dummy);
         }
     }
@@ -395,7 +415,13 @@ fn try_tsls(
                 // Check if IV has valid data for our rows
                 let iv_valid: Vec<f64> = valid_rows
                     .iter()
-                    .map(|&i| if i < iv_data.len() { iv_data[i] } else { f64::NAN })
+                    .map(|&i| {
+                        if i < iv_data.len() {
+                            iv_data[i]
+                        } else {
+                            f64::NAN
+                        }
+                    })
                     .collect();
                 if iv_valid.iter().all(|v| !v.is_nan()) {
                     endog_indices.push(j);
@@ -621,7 +647,11 @@ mod tests {
 
         let diag = &results[0].diagnostics;
         // DW is computed and is a valid number (synthetic sine data will show autocorrelation)
-        assert!(diag.durbin_watson >= 0.0 && diag.durbin_watson <= 4.0, "DW={}", diag.durbin_watson);
+        assert!(
+            diag.durbin_watson >= 0.0 && diag.durbin_watson <= 4.0,
+            "DW={}",
+            diag.durbin_watson
+        );
         // Breusch-Pagan is computed
         assert!(diag.breusch_pagan.0 >= 0.0);
         // VIF should be present

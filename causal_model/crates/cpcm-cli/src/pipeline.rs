@@ -1,7 +1,9 @@
 use chrono::NaiveDate;
 use tracing::info;
 
-use cpcm_core::cpcm_dag::{build_cpcm_dag, summarize_dag, GLOBAL_FACTORS, MACRO_FACTORS, ASSET_COVARIATES};
+use cpcm_core::cpcm_dag::{
+    build_cpcm_dag, summarize_dag, ASSET_COVARIATES, GLOBAL_FACTORS, MACRO_FACTORS,
+};
 use cpcm_core::identify::{identify_all_effects, IdentificationMethod};
 use cpcm_data::client::SupabaseClient;
 use cpcm_data::frame::{df_to_hashmap, load_parquet, pivot_to_panel, print_summary, save_parquet};
@@ -118,19 +120,22 @@ pub async fn run_pipeline(config: &Config) -> anyhow::Result<PipelineResult> {
     // adjustment set S as controls (the panel regression already includes all
     // factors + covariates, a superset of every S the star-DAG produces).
     let mut iv_chosen: std::collections::HashMap<String, String> = std::collections::HashMap::new();
-    let mut method_by_factor: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    let mut method_by_factor: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
     for r in &id_results {
         match &r.method {
             IdentificationMethod::Iv { instrument } => {
-                iv_chosen.entry(r.treatment.clone()).or_insert_with(|| instrument.clone());
+                iv_chosen
+                    .entry(r.treatment.clone())
+                    .or_insert_with(|| instrument.clone());
                 method_by_factor
                     .entry(r.treatment.clone())
                     .or_insert_with(|| format!("2SLS (IV: {instrument})"));
             }
             IdentificationMethod::Backdoor => {
-                method_by_factor.entry(r.treatment.clone()).or_insert_with(|| {
-                    format!("OLS (backdoor, controls: {:?})", r.adjustment_set)
-                });
+                method_by_factor
+                    .entry(r.treatment.clone())
+                    .or_insert_with(|| format!("OLS (backdoor, controls: {:?})", r.adjustment_set));
             }
             IdentificationMethod::NotIdentified => {
                 method_by_factor
@@ -161,8 +166,8 @@ pub async fn run_pipeline(config: &Config) -> anyhow::Result<PipelineResult> {
     for (col, lag) in &col_lags {
         if let Some(v) = merged.get_mut(col) {
             let mut shifted = vec![f64::NAN; v.len()];
-            for i in *lag..v.len() {
-                shifted[i] = v[i - lag];
+            if *lag <= v.len() {
+                shifted[*lag..].copy_from_slice(&v[..v.len() - *lag]);
             }
             *v = shifted;
             info!("Applied DAG lag {lag} to '{col}' before estimation");
@@ -178,10 +183,7 @@ pub async fn run_pipeline(config: &Config) -> anyhow::Result<PipelineResult> {
         .collect();
 
     let factor_names: Vec<String> = GLOBAL_FACTORS.iter().map(|&s| s.to_string()).collect();
-    let macro_names: Vec<String> = MACRO_FACTORS
-        .iter()
-        .map(|&s| s.to_lowercase())
-        .collect();
+    let macro_names: Vec<String> = MACRO_FACTORS.iter().map(|&s| s.to_lowercase()).collect();
     let cov_suffixes: Vec<String> = ASSET_COVARIATES.iter().map(|&s| s.to_string()).collect();
 
     let mode = match config.estimation.mode.as_str() {
@@ -201,7 +203,15 @@ pub async fn run_pipeline(config: &Config) -> anyhow::Result<PipelineResult> {
 
     // ── 5. Print results ─────────────────────────────────────────────
     let stars = |p: f64| {
-        if p < 0.01 { "***" } else if p < 0.05 { "**" } else if p < 0.10 { "*" } else { "" }
+        if p < 0.01 {
+            "***"
+        } else if p < 0.05 {
+            "**"
+        } else if p < 0.10 {
+            "*"
+        } else {
+            ""
+        }
     };
     println!("\n=== Estimation Results ===\n");
     println!("Estimator chosen by identification, per factor:");
@@ -215,7 +225,10 @@ pub async fn run_pipeline(config: &Config) -> anyhow::Result<PipelineResult> {
     println!();
     for result in &est_results {
         println!("--- {} (n={}) ---", result.asset, result.ols.n_obs);
-        println!("  R² = {:.4}, Adj R² = {:.4}", result.ols.r_squared, result.ols.adj_r_squared);
+        println!(
+            "  R² = {:.4}, Adj R² = {:.4}",
+            result.ols.r_squared, result.ols.adj_r_squared
+        );
         println!("  DW = {:.3}", result.diagnostics.durbin_watson);
 
         println!("  OLS Coefficients (standardized; stars keyed to HAC p):");

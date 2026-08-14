@@ -38,9 +38,7 @@ pub fn compute_all_returns(
         let price_col = format!("{asset}_PriceUSD");
         let fallback_col = format!("{asset}_price_usd");
 
-        let prices = data
-            .get(&price_col)
-            .or_else(|| data.get(&fallback_col));
+        let prices = data.get(&price_col).or_else(|| data.get(&fallback_col));
 
         if let Some(prices) = prices {
             let ret = log_returns(prices);

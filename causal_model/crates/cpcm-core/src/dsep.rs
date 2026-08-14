@@ -37,10 +37,7 @@ pub fn d_separated(dag: &CausalDag, x: &str, y: &str, z: &[&str]) -> bool {
         return false; // a node is never d-separated from itself
     }
 
-    let z_set: HashSet<NodeIndex> = z
-        .iter()
-        .filter_map(|name| dag.node_index(name))
-        .collect();
+    let z_set: HashSet<NodeIndex> = z.iter().filter_map(|name| dag.node_index(name)).collect();
 
     // Pre-compute: which nodes have a descendant in Z?
     // A node has a "descendant in Z" if it is in Z or any of its descendants is in Z.
@@ -94,8 +91,7 @@ pub fn d_separated(dag: &CausalDag, x: &str, y: &str, z: &[&str]) -> bool {
                 // We arrived at `current` travelling downward (from a parent).
                 // Chain / Fork outgoing: if current NOT in Z, pass through to children.
                 if !is_conditioned {
-                    for child in dag.graph.neighbors_directed(current, Direction::Outgoing)
-                    {
+                    for child in dag.graph.neighbors_directed(current, Direction::Outgoing) {
                         let state = (child, Arrival::FromParent);
                         if visited.insert(state) {
                             queue.push_back(state);
@@ -105,9 +101,7 @@ pub fn d_separated(dag: &CausalDag, x: &str, y: &str, z: &[&str]) -> bool {
                 // Collider bounce: if current is conditioned or has descendant in Z,
                 // we can go UP to parents.
                 if is_conditioned || descendant_in_z.contains(&current) {
-                    for parent in
-                        dag.graph.neighbors_directed(current, Direction::Incoming)
-                    {
+                    for parent in dag.graph.neighbors_directed(current, Direction::Incoming) {
                         let state = (parent, Arrival::FromChild);
                         if visited.insert(state) {
                             queue.push_back(state);
@@ -119,8 +113,7 @@ pub fn d_separated(dag: &CausalDag, x: &str, y: &str, z: &[&str]) -> bool {
                 // We arrived at `current` travelling upward (from a child).
                 // Fork: if current NOT in Z, pass through to other children.
                 if !is_conditioned {
-                    for child in dag.graph.neighbors_directed(current, Direction::Outgoing)
-                    {
+                    for child in dag.graph.neighbors_directed(current, Direction::Outgoing) {
                         let state = (child, Arrival::FromParent);
                         if visited.insert(state) {
                             queue.push_back(state);
@@ -129,9 +122,7 @@ pub fn d_separated(dag: &CausalDag, x: &str, y: &str, z: &[&str]) -> bool {
                 }
                 // Chain going further up: if current NOT in Z, pass to parents.
                 if !is_conditioned {
-                    for parent in
-                        dag.graph.neighbors_directed(current, Direction::Incoming)
-                    {
+                    for parent in dag.graph.neighbors_directed(current, Direction::Incoming) {
                         let state = (parent, Arrival::FromChild);
                         if visited.insert(state) {
                             queue.push_back(state);

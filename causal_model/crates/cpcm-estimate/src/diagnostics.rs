@@ -32,13 +32,14 @@ pub fn durbin_watson(residuals: &[f64]) -> f64 {
         return 2.0;
     }
 
-    let num: f64 = residuals
-        .windows(2)
-        .map(|w| (w[1] - w[0]).powi(2))
-        .sum();
+    let num: f64 = residuals.windows(2).map(|w| (w[1] - w[0]).powi(2)).sum();
     let den: f64 = residuals.iter().map(|e| e.powi(2)).sum();
 
-    if den > 1e-15 { num / den } else { 2.0 }
+    if den > 1e-15 {
+        num / den
+    } else {
+        2.0
+    }
 }
 
 /// Breusch-Pagan test for heteroskedasticity.
@@ -118,9 +119,8 @@ fn variance_inflation_factors(
             continue;
         }
 
-        let x_other = DMatrix::from_columns(
-            &other_cols.iter().map(|&c| x.column(c)).collect::<Vec<_>>(),
-        );
+        let x_other =
+            DMatrix::from_columns(&other_cols.iter().map(|&c| x.column(c)).collect::<Vec<_>>());
 
         let other_names: Vec<String> = other_cols
             .iter()
@@ -168,7 +168,10 @@ mod tests {
         // Monotone residuals: strong positive autocorrelation
         let residuals = vec![0.1, 0.2, 0.3, 0.4, 0.5];
         let dw = durbin_watson(&residuals);
-        assert!(dw < 1.0, "DW={dw} should be < 1 for positive autocorrelation");
+        assert!(
+            dw < 1.0,
+            "DW={dw} should be < 1 for positive autocorrelation"
+        );
     }
 
     #[test]

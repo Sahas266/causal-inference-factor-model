@@ -182,9 +182,8 @@ impl CausalDag {
     pub fn without_outgoing_edges(&self, name: &str) -> CausalDag {
         let mut out = self.clone();
         if let Some(&idx) = out.index.get(name) {
-            out.graph.retain_edges(|g, e| {
-                g.edge_endpoints(e).map_or(true, |(src, _)| src != idx)
-            });
+            out.graph
+                .retain_edges(|g, e| g.edge_endpoints(e).is_none_or(|(src, _)| src != idx));
         }
         out
     }

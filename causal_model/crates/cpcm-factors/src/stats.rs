@@ -15,7 +15,13 @@ pub fn z_score(x: &[f64]) -> Vec<f64> {
         return vec![0.0; x.len()];
     }
     x.iter()
-        .map(|&v| if v.is_nan() { f64::NAN } else { (v - mean) / std })
+        .map(|&v| {
+            if v.is_nan() {
+                f64::NAN
+            } else {
+                (v - mean) / std
+            }
+        })
         .collect()
 }
 

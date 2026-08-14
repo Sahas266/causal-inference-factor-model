@@ -12,7 +12,11 @@ use crate::types::OlsResult;
 /// * `y` - Response vector (n × 1)
 /// * `x` - Design matrix (n × k), should include intercept column if desired
 /// * `feature_names` - Names for each column of X
-pub fn ols(y: &DVector<f64>, x: &DMatrix<f64>, feature_names: &[String]) -> anyhow::Result<OlsResult> {
+pub fn ols(
+    y: &DVector<f64>,
+    x: &DMatrix<f64>,
+    feature_names: &[String],
+) -> anyhow::Result<OlsResult> {
     let n = y.len();
     let k = x.ncols();
 
@@ -71,9 +75,7 @@ pub fn ols(y: &DVector<f64>, x: &DMatrix<f64>, feature_names: &[String]) -> anyh
 
     // HAC (Newey-West) standard errors alongside the iid ones.
     let hac_var = hac_covariance(x, &residuals, &xtx_inv, newey_west_maxlags(n));
-    let hac_std_errors: Vec<f64> = (0..k)
-        .map(|j| hac_var[(j, j)].max(0.0).sqrt())
-        .collect();
+    let hac_std_errors: Vec<f64> = (0..k).map(|j| hac_var[(j, j)].max(0.0).sqrt()).collect();
     let hac_t_stats: Vec<f64> = beta
         .iter()
         .zip(&hac_std_errors)
@@ -152,15 +154,21 @@ pub fn add_intercept(x: &DMatrix<f64>) -> DMatrix<f64> {
 /// Solve Ax = b using SVD (handles near-singular A).
 fn solve_via_svd(a: &DMatrix<f64>, b: &DVector<f64>) -> anyhow::Result<DVector<f64>> {
     let svd = a.clone().svd(true, true);
-    let u = svd.u.as_ref().ok_or_else(|| anyhow::anyhow!("SVD failed: no U"))?;
-    let vt = svd.v_t.as_ref().ok_or_else(|| anyhow::anyhow!("SVD failed: no V'"))?;
+    let u = svd
+        .u
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("SVD failed: no U"))?;
+    let vt = svd
+        .v_t
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("SVD failed: no V'"))?;
 
     let threshold = 1e-10 * svd.singular_values.max();
     let s_inv = DVector::from_iterator(
         svd.singular_values.len(),
-        svd.singular_values.iter().map(|&s| {
-            if s > threshold { 1.0 / s } else { 0.0 }
-        }),
+        svd.singular_values
+            .iter()
+            .map(|&s| if s > threshold { 1.0 / s } else { 0.0 }),
     );
 
     // x = V * S⁻¹ * U' * b
@@ -176,15 +184,21 @@ fn solve_via_svd(a: &DMatrix<f64>, b: &DVector<f64>) -> anyhow::Result<DVector<f
 /// Invert a symmetric matrix using SVD (pseudo-inverse for near-singular matrices).
 fn invert_via_svd(a: &DMatrix<f64>) -> anyhow::Result<DMatrix<f64>> {
     let svd = a.clone().svd(true, true);
-    let u = svd.u.as_ref().ok_or_else(|| anyhow::anyhow!("SVD failed"))?;
-    let vt = svd.v_t.as_ref().ok_or_else(|| anyhow::anyhow!("SVD failed"))?;
+    let u = svd
+        .u
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("SVD failed"))?;
+    let vt = svd
+        .v_t
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("SVD failed"))?;
 
     let threshold = 1e-10 * svd.singular_values.max();
     let s_inv_diag = DMatrix::from_diagonal(&DVector::from_iterator(
         svd.singular_values.len(),
-        svd.singular_values.iter().map(|&s| {
-            if s > threshold { 1.0 / s } else { 0.0 }
-        }),
+        svd.singular_values
+            .iter()
+            .map(|&s| if s > threshold { 1.0 / s } else { 0.0 }),
     ));
 
     Ok(vt.transpose() * s_inv_diag * u.transpose())

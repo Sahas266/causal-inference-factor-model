@@ -14,13 +14,31 @@ pub fn compute_global_factors(
 
     // Compute raw factors, then z-score all for comparability.
     // After standardization, each coefficient represents "per 1-std-dev change in the factor".
-    factors.insert("liq_flow".to_string(), z_score(&compute_liq_flow(data, n_dates)));
-    factors.insert("stable_flow".to_string(), z_score(&compute_stable_flow(data, n_dates)));
+    factors.insert(
+        "liq_flow".to_string(),
+        z_score(&compute_liq_flow(data, n_dates)),
+    );
+    factors.insert(
+        "stable_flow".to_string(),
+        z_score(&compute_stable_flow(data, n_dates)),
+    );
     factors.insert("funding_basis".to_string(), vec![f64::NAN; n_dates]); // GAP: no data
-    factors.insert("chain_congestion".to_string(), compute_chain_congestion(data, n_dates)); // already z-scored
-    factors.insert("staking_yield".to_string(), z_score(&compute_staking_yield(data, n_dates)));
-    factors.insert("mev_pressure".to_string(), compute_mev_pressure(data, n_dates)); // already z-scored or rolling_std
-    factors.insert("cex_dex_flow".to_string(), z_score(&compute_cex_dex_flow(data, n_dates)));
+    factors.insert(
+        "chain_congestion".to_string(),
+        compute_chain_congestion(data, n_dates),
+    ); // already z-scored
+    factors.insert(
+        "staking_yield".to_string(),
+        z_score(&compute_staking_yield(data, n_dates)),
+    );
+    factors.insert(
+        "mev_pressure".to_string(),
+        compute_mev_pressure(data, n_dates),
+    ); // already z-scored or rolling_std
+    factors.insert(
+        "cex_dex_flow".to_string(),
+        z_score(&compute_cex_dex_flow(data, n_dates)),
+    );
 
     factors
 }
@@ -30,10 +48,21 @@ pub fn compute_global_factors(
 fn compute_liq_flow(data: &HashMap<String, Vec<f64>>, n: usize) -> Vec<f64> {
     // Sum TVL across all protocols that have tvl_usd data
     let tvl_cols: Vec<&str> = [
-        "aave_tvl_usd", "uni_tvl_usd", "crv_tvl_usd", "pendle_tvl_usd",
-        "morpho_tvl_usd", "jup_tvl_usd", "ena_tvl_usd", "aero_tvl_usd",
-        "eth_tvl_usd", "sol_tvl_usd", "bnb_tvl_usd", "avax_tvl_usd",
-        "pol_tvl_usd", "btc_tvl_usd", "hype_tvl_usd",
+        "aave_tvl_usd",
+        "uni_tvl_usd",
+        "crv_tvl_usd",
+        "pendle_tvl_usd",
+        "morpho_tvl_usd",
+        "jup_tvl_usd",
+        "ena_tvl_usd",
+        "aero_tvl_usd",
+        "eth_tvl_usd",
+        "sol_tvl_usd",
+        "bnb_tvl_usd",
+        "avax_tvl_usd",
+        "pol_tvl_usd",
+        "btc_tvl_usd",
+        "hype_tvl_usd",
     ]
     .iter()
     .filter(|&&col| data.contains_key(col))
@@ -188,10 +217,7 @@ fn rolling_std(x: &[f64], window: usize) -> Vec<f64> {
         }
 
         let mean = window_slice.iter().sum::<f64>() / window_slice.len() as f64;
-        let var = window_slice
-            .iter()
-            .map(|v| (v - mean).powi(2))
-            .sum::<f64>()
+        let var = window_slice.iter().map(|v| (v - mean).powi(2)).sum::<f64>()
             / (window_slice.len() - 1) as f64;
         result[i] = var.sqrt();
     }

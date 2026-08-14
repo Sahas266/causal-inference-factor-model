@@ -41,7 +41,12 @@ impl Config {
     pub fn load(path: &str) -> anyhow::Result<Self> {
         let content = std::fs::read_to_string(path)
             .map_err(|e| anyhow::anyhow!("Cannot read config file '{path}': {e}"))?;
-        let config: Config = toml::from_str(&content)?;
+        let mut config: Config = toml::from_str(&content)?;
+        if let Ok(url) = std::env::var("SUPABASE_URL") {
+            if !url.trim().is_empty() {
+                config.supabase.url = url.trim().to_string();
+            }
+        }
         Ok(config)
     }
 }
@@ -50,7 +55,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             supabase: SupabaseSection {
-                url: "https://jnulpcqpftnwvknwuqpa.supabase.co".to_string(),
+                url: "https://your-project-id.supabase.co".to_string(),
                 key_env: "SUPABASE_KEY".to_string(),
             },
             data: DataSection {
@@ -62,10 +67,9 @@ impl Default for Config {
             },
             assets: AssetsSection {
                 include: vec![
-                    "btc", "eth", "bnb", "sol", "avax", "xrp", "pol",
-                    "hype", "tao", "wlfi",
-                    "uni", "aave", "crv", "pendle", "morpho", "aero", "link", "ena", "jup",
-                    "zec", "pepe", "shib", "doge",
+                    "btc", "eth", "bnb", "sol", "avax", "xrp", "pol", "hype", "tao", "wlfi", "uni",
+                    "aave", "crv", "pendle", "morpho", "aero", "link", "ena", "jup", "zec", "pepe",
+                    "shib", "doge",
                 ]
                 .into_iter()
                 .map(String::from)
