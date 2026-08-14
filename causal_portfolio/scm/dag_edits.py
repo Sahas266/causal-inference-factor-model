@@ -13,47 +13,64 @@ rather than merely wrong.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+import json
+from dataclasses import dataclass, field, replace
+from pathlib import Path
 
 import networkx as nx
 
-from causal_portfolio.scm.graph import EdgeKind
+from causal_portfolio.scm.graph import EdgeKind, NodeKind
 
 
 @dataclass(frozen=True)
 class DagEdits:
-    """Edges an operator added or removed, relative to the generated DAG."""
+    """Nodes and edges an operator added or removed, vs the generated DAG."""
 
     added: tuple[tuple[str, str], ...] = ()
     removed: tuple[tuple[str, str], ...] = ()
+    # (name, NodeKind.name) — needed to build a DAG from the blank base, where
+    # there is no generated structure to draw nodes from.
+    added_nodes: tuple[tuple[str, str], ...] = ()
 
     @property
     def is_empty(self) -> bool:
-        return not self.added and not self.removed
+        return not self.added and not self.removed and not self.added_nodes
+
+    def with_node(self, name: str, kind: str) -> "DagEdits":
+        if any(n == name for n, _ in self.added_nodes):
+            return self
+        return DagEdits(
+            added=self.added,
+            removed=self.removed,
+            added_nodes=self.added_nodes + ((name, kind),),
+        )
+
+    def without_node(self, name: str) -> "DagEdits":
+        """Drop a custom node and any edits that referenced it."""
+        return DagEdits(
+            added=tuple(e for e in self.added if name not in e),
+            removed=tuple(e for e in self.removed if name not in e),
+            added_nodes=tuple(n for n in self.added_nodes if n[0] != name),
+        )
 
     def with_added(self, source: str, target: str) -> "DagEdits":
         edge = (source, target)
-        # Re-adding a previously removed edge is a restore, not a new edge.
-        if edge in self.removed:
-            return DagEdits(
-                added=self.added,
-                removed=tuple(e for e in self.removed if e != edge),
-            )
+        # `replace` rather than a fresh DagEdits: every field must survive an
+        # edge edit, and a positional constructor silently drops new ones.
+        if edge in self.removed:   # re-adding a removed edge is a restore
+            return replace(self, removed=tuple(e for e in self.removed if e != edge))
         if edge in self.added:
             return self
-        return DagEdits(added=self.added + (edge,), removed=self.removed)
+        return replace(self, added=self.added + (edge,))
 
     def with_removed(self, source: str, target: str) -> "DagEdits":
         edge = (source, target)
-        # Removing an edge the operator just added simply drops the addition.
+        # Removing an edge the operator just added drops the addition.
         if edge in self.added:
-            return DagEdits(
-                added=tuple(e for e in self.added if e != edge),
-                removed=self.removed,
-            )
+            return replace(self, added=tuple(e for e in self.added if e != edge))
         if edge in self.removed:
             return self
-        return DagEdits(added=self.added, removed=self.removed + (edge,))
+        return replace(self, removed=self.removed + (edge,))
 
     def cleared(self) -> "DagEdits":
         return DagEdits()
@@ -68,6 +85,14 @@ def apply_edits(dag: nx.DiGraph, edits: DagEdits) -> nx.DiGraph:
     the dashboard.
     """
     edited = dag.copy()
+    for name, kind in edits.added_nodes:
+        if name not in edited:
+            edited.add_node(
+                name,
+                kind=_node_kind(kind),
+                asset=None,
+                operator_added=True,
+            )
     for source, target in edits.removed:
         if edited.has_edge(source, target):
             edited.remove_edge(source, target)
@@ -75,6 +100,26 @@ def apply_edits(dag: nx.DiGraph, edits: DagEdits) -> nx.DiGraph:
         if source in edited and target in edited:
             edited.add_edge(source, target, kind=EdgeKind.CAUSAL, operator_added=True)
     return edited
+
+
+def _node_kind(name: str) -> NodeKind:
+    """Resolve a stored kind name, tolerating one written by an older build."""
+    try:
+        return NodeKind[name]
+    except KeyError:
+        return NodeKind.GLOBAL_FACTOR
+
+
+def validate_new_node(dag: nx.DiGraph, name: str) -> str | None:
+    """Return why this node cannot be added, or None when it is legal."""
+    cleaned = name.strip()
+    if not cleaned:
+        return "node name cannot be empty"
+    if cleaned != name:
+        return "node name cannot start or end with whitespace"
+    if cleaned in dag:
+        return f"node {cleaned} already exists"
+    return None
 
 
 def validate_new_edge(dag: nx.DiGraph, source: str, target: str) -> str | None:
@@ -146,3 +191,109 @@ def diff_identification(before: list, after: list) -> dict[str, list[str]]:
         else:
             changed.append(f"{key}: {old[1]} -> {new[1]}")
     return {"gained": gained, "lost": lost, "changed": changed}
+
+
+# ── DAG sources and saved workspaces ─────────────────────────────────────
+
+#: Named base graphs the dashboard can edit. "Blank" exists so a structure can
+#: be built from nothing rather than only by subtracting from a generated one.
+DAG_SOURCES: dict[str, str] = {
+    "Star DAG (v1, hand-drawn)": "cpcm",
+    "Discovered DAG (v2, data-supported)": "discovered",
+    "Blank (build from scratch)": "blank",
+}
+
+DEFAULT_WORKSPACE_PATH = Path("causal_portfolio/data/dag_workspaces.json")
+
+
+def build_base_dag(source: str, assets: list[str],
+                   selected_drivers: list[str] | None = None) -> nx.DiGraph:
+    """Build one of the named base graphs.
+
+    Imported lazily so `dag_edits` stays cheap to import and testable without
+    pulling the whole factor registry.
+    """
+    from causal_portfolio.scm.graph import build_cpcm_dag, build_discovered_dag
+
+    if source == "discovered":
+        return build_discovered_dag(assets)
+    if source == "blank":
+        return nx.DiGraph()
+    return build_cpcm_dag(assets, selected_drivers)
+
+
+def _edits_to_dict(edits: DagEdits) -> dict:
+    return {
+        "added": [list(e) for e in edits.added],
+        "removed": [list(e) for e in edits.removed],
+        "added_nodes": [list(n) for n in edits.added_nodes],
+    }
+
+
+def _edits_from_dict(payload: dict) -> DagEdits:
+    return DagEdits(
+        added=tuple(tuple(e) for e in payload.get("added", [])),
+        removed=tuple(tuple(e) for e in payload.get("removed", [])),
+        added_nodes=tuple(tuple(n) for n in payload.get("added_nodes", [])),
+    )
+
+
+def load_workspaces(path: Path | None = None) -> dict[str, dict]:
+    """Read saved workspaces. A missing or unreadable file is simply empty.
+
+    Never raises: a corrupt scratch file must not stop the dashboard from
+    rendering the generated DAG.
+    """
+    target = Path(path or DEFAULT_WORKSPACE_PATH)
+    try:
+        raw = json.loads(target.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+    return {
+        name: entry for name, entry in raw.items()
+        if isinstance(entry, dict) and "edits" in entry
+    }
+
+
+def save_workspace(
+    name: str,
+    source: str,
+    edits: DagEdits,
+    *,
+    path: Path | None = None,
+) -> Path:
+    """Persist one named workspace, leaving the others intact."""
+    if not name.strip():
+        raise ValueError("workspace name cannot be empty")
+    target = Path(path or DEFAULT_WORKSPACE_PATH)
+    workspaces = load_workspaces(target)
+    workspaces[name.strip()] = {"source": source, "edits": _edits_to_dict(edits)}
+    target.parent.mkdir(parents=True, exist_ok=True)
+    # Write via a temp file so an interrupted save cannot truncate saved work.
+    tmp = target.with_suffix(target.suffix + ".tmp")
+    tmp.write_text(json.dumps(workspaces, indent=2, sort_keys=True), encoding="utf-8")
+    tmp.replace(target)
+    return target
+
+
+def read_workspace(name: str, path: Path | None = None) -> tuple[str, DagEdits] | None:
+    """Return (source, edits) for a saved workspace, or None if absent."""
+    entry = load_workspaces(path).get(name)
+    if entry is None:
+        return None
+    return entry.get("source", "cpcm"), _edits_from_dict(entry["edits"])
+
+
+def delete_workspace(name: str, path: Path | None = None) -> bool:
+    target = Path(path or DEFAULT_WORKSPACE_PATH)
+    workspaces = load_workspaces(target)
+    if name not in workspaces:
+        return False
+    del workspaces[name]
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp = target.with_suffix(target.suffix + ".tmp")
+    tmp.write_text(json.dumps(workspaces, indent=2, sort_keys=True), encoding="utf-8")
+    tmp.replace(target)
+    return True

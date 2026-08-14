@@ -69,3 +69,6 @@ causal_portfolio/execution/state/
 # Reference papers (PDFs kept locally, not in git)
 references/
 causal_portfolio/data/cache/*.parquet
+
+# Operator DAG workspaces from the dashboard editor (local scratch)
+causal_portfolio/data/dag_workspaces.json

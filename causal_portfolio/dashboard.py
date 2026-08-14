@@ -586,18 +586,70 @@ with t_dag:
         st.info("Run the pipeline first.")
     else:
         from causal_portfolio.scm.dag_edits import (
+            DAG_SOURCES,
             DagEdits,
             apply_edits,
+            build_base_dag,
+            delete_workspace,
             diff_identification,
             edge_rows,
+            load_workspaces,
+            read_workspace,
+            save_workspace,
             validate_new_edge,
+            validate_new_node,
         )
+        from causal_portfolio.scm.graph import NodeKind as _NodeKind
 
         data = st.session_state.pipeline_data
-        base_dag = data["dag"]
-        if "dag_edits" not in st.session_state:
-            st.session_state.dag_edits = DagEdits()
-        edits = st.session_state.dag_edits
+
+        # ── which DAG are we editing? ─────────────────────────────────
+        st.session_state.setdefault("dag_source", list(DAG_SOURCES)[0])
+        # Edits are per source, so switching to compare structures and back
+        # does not silently discard work on the first one.
+        st.session_state.setdefault("dag_edits_by_source", {})
+
+        saved = load_workspaces()
+        col_src, col_ws = st.columns([2, 2])
+        with col_src:
+            source_label = st.selectbox(
+                "DAG", list(DAG_SOURCES), key="dag_source",
+                help="Star DAG is hand-drawn; Discovered is what the data "
+                     "supports; Blank builds a structure from scratch.",
+            )
+        with col_ws:
+            if saved:
+                pick = st.selectbox(
+                    "Load saved DAG", ["—"] + sorted(saved), key="dag_ws_pick"
+                )
+                c_load, c_del = st.columns(2)
+                with c_load:
+                    if st.button("Load", disabled=pick == "—", use_container_width=True):
+                        entry = read_workspace(pick)
+                        if entry:
+                            src, loaded = entry
+                            label = next(
+                                (k for k, v in DAG_SOURCES.items() if v == src),
+                                list(DAG_SOURCES)[0],
+                            )
+                            st.session_state.dag_source = label
+                            st.session_state.dag_edits_by_source[label] = loaded
+                            st.rerun()
+                with c_del:
+                    if st.button("Delete", disabled=pick == "—", use_container_width=True):
+                        delete_workspace(pick)
+                        st.rerun()
+            else:
+                st.caption("No saved DAGs yet — edit one and save it below.")
+
+        source_key = DAG_SOURCES[source_label]
+        # The pipeline already built the star DAG; rebuild only for the others
+        # so the common path stays free.
+        base_dag = (
+            data["dag"] if source_key == "cpcm"
+            else build_base_dag(source_key, data.get("assets", []) or [])
+        )
+        edits = st.session_state.dag_edits_by_source.get(source_label, DagEdits())
         # Everything below — layout, d-separation, identification — reads the
         # edited graph, so the operator is always inspecting what they built.
         dag = apply_edits(base_dag, edits)
@@ -621,8 +673,12 @@ with t_dag:
 - 🟠 Asset covariate
 - ⚫ Unobserved shock
 """)
-            summary = data["dag_summary"]
-            st.markdown(f"**{summary['total_nodes']}** nodes, **{summary['total_edges']}** edges")
+            # Count the graph on screen, not the one the pipeline built —
+            # they differ as soon as a source is switched or an edge edited.
+            st.markdown(
+                f"**{dag.number_of_nodes()}** nodes, "
+                f"**{dag.number_of_edges()}** edges"
+            )
 
         from causal_portfolio.scm.graph import NodeKind
         node_colors = {
@@ -721,49 +777,93 @@ with t_dag:
                 "the identification summary below — they do not change "
                 "scm/graph.py or any saved model."
             )
-            all_nodes = sorted(base_dag.nodes())
-            col_a, col_b, col_c = st.columns([2, 2, 1])
-            with col_a:
-                new_src = st.selectbox("From", all_nodes, key="dag_edit_src")
-            with col_b:
-                new_dst = st.selectbox(
-                    "To", all_nodes, key="dag_edit_dst",
-                    index=min(1, len(all_nodes) - 1),
+            def _store(new_edits):
+                st.session_state.dag_edits_by_source[source_label] = new_edits
+                st.rerun()
+
+            # Add a node. Always available — the Blank source starts with none,
+            # so without this there would be nothing to draw edges between.
+            st.markdown("**Add node**")
+            col_n, col_k, col_nb = st.columns([2, 2, 1])
+            with col_n:
+                node_name = st.text_input("Name", key="dag_node_name",
+                                          placeholder="my_factor")
+            with col_k:
+                node_kind = st.selectbox(
+                    "Kind", [k.name for k in _NodeKind], key="dag_node_kind"
                 )
-            with col_c:
+            with col_nb:
                 st.markdown("<br>", unsafe_allow_html=True)
-                if st.button("Add edge", use_container_width=True):
-                    problem = validate_new_edge(dag, new_src, new_dst)
+                if st.button("Add node", use_container_width=True):
+                    problem = validate_new_node(dag, node_name)
                     if problem:
                         st.error(problem)
                     else:
-                        st.session_state.dag_edits = edits.with_added(new_src, new_dst)
-                        st.rerun()
+                        _store(edits.with_node(node_name, node_kind))
+
+            all_nodes = sorted(dag.nodes())
+            st.markdown("**Add edge**")
+            if len(all_nodes) < 2:
+                st.caption("Add at least two nodes before drawing an edge.")
+            else:
+                col_a, col_b, col_c = st.columns([2, 2, 1])
+                with col_a:
+                    new_src = st.selectbox("From", all_nodes, key="dag_edit_src")
+                with col_b:
+                    new_dst = st.selectbox(
+                        "To", all_nodes, key="dag_edit_dst",
+                        index=min(1, len(all_nodes) - 1),
+                    )
+                with col_c:
+                    st.markdown("<br>", unsafe_allow_html=True)
+                    if st.button("Add edge", use_container_width=True):
+                        problem = validate_new_edge(dag, new_src, new_dst)
+                        if problem:
+                            st.error(problem)
+                        else:
+                            _store(edits.with_added(new_src, new_dst))
 
             current = edge_rows(base_dag, edits)
             if current:
                 labels = [f"{r['source']} -> {r['target']}" for r in current]
                 to_remove = st.multiselect("Remove edges", labels, key="dag_edit_rm")
-                col_rm, col_reset = st.columns(2)
-                with col_rm:
-                    if st.button("Remove selected", disabled=not to_remove,
-                                 use_container_width=True):
-                        pending = st.session_state.dag_edits
-                        for label in to_remove:
-                            src, dst = label.split(" -> ")
-                            pending = pending.with_removed(src, dst)
-                        st.session_state.dag_edits = pending
-                        st.rerun()
-                with col_reset:
-                    if st.button("Reset to generated DAG", disabled=edits.is_empty,
-                                 use_container_width=True):
-                        st.session_state.dag_edits = edits.cleared()
-                        st.rerun()
+                if st.button("Remove selected", disabled=not to_remove,
+                             use_container_width=True):
+                    pending = edits
+                    for label in to_remove:
+                        src, dst = label.split(" -> ")
+                        pending = pending.with_removed(src, dst)
+                    _store(pending)
 
                 st.dataframe(
                     pd.DataFrame(current), hide_index=True,
                     use_container_width=True, height=240,
                 )
+
+            if edits.added_nodes:
+                drop_node = st.selectbox(
+                    "Remove a node you added",
+                    ["—"] + [n for n, _ in edits.added_nodes], key="dag_node_rm",
+                )
+                if st.button("Remove node", disabled=drop_node == "—"):
+                    # Also drops any edges that referenced it, so the record
+                    # cannot keep an edge whose endpoint no longer exists.
+                    _store(edits.without_node(drop_node))
+
+            col_save, col_reset = st.columns([3, 1])
+            with col_save:
+                ws_name = st.text_input(
+                    "Save this DAG as", key="dag_ws_name",
+                    placeholder="my-hypothesis",
+                )
+                if st.button("Save DAG", disabled=not ws_name.strip()):
+                    path = save_workspace(ws_name, source_key, edits)
+                    st.success(f"Saved '{ws_name.strip()}' to {path}")
+            with col_reset:
+                st.markdown("<br>", unsafe_allow_html=True)
+                if st.button("Reset edits", disabled=edits.is_empty,
+                             use_container_width=True):
+                    _store(edits.cleared())
 
             if not edits.is_empty:
                 st.markdown("**Effect on identification**")
@@ -788,8 +888,11 @@ with t_dag:
         # d-separation explorer
         st.markdown("### d-Separation Explorer")
         st.caption("Check if two nodes are d-separated given a conditioning set.")
-        col_ds1, col_ds2, col_ds3 = st.columns(3)
         node_list = sorted(dag.nodes())
+        if len(node_list) < 2:
+            st.caption("Add at least two nodes to check d-separation.")
+            st.stop()
+        col_ds1, col_ds2, col_ds3 = st.columns(3)
         with col_ds1:
             node_a = st.selectbox("Node A", node_list, index=0)
         with col_ds2:

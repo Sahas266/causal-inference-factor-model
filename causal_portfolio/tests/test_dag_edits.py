@@ -6,6 +6,13 @@ import networkx as nx
 import pytest
 
 from causal_portfolio.scm.dag_edits import (
+    DAG_SOURCES,
+    build_base_dag,
+    delete_workspace,
+    load_workspaces,
+    read_workspace,
+    save_workspace,
+    validate_new_node,
     DagEdits,
     apply_edits,
     diff_identification,
@@ -139,3 +146,114 @@ def test_diff_is_empty_when_nothing_changed():
     assert diff_identification(results, results) == {
         "gained": [], "lost": [], "changed": [],
     }
+
+
+# ── custom nodes ─────────────────────────────────────────────────────────
+
+def test_a_dag_can_be_built_from_the_blank_base():
+    """The point of 'Blank': a structure with no generated nodes to subtract."""
+    edits = (
+        DagEdits()
+        .with_node("my_factor", "GLOBAL_FACTOR")
+        .with_node("my_return", "ASSET_RETURN")
+        .with_added("my_factor", "my_return")
+    )
+    built = apply_edits(nx.DiGraph(), edits)
+
+    assert set(built.nodes()) == {"my_factor", "my_return"}
+    assert built.has_edge("my_factor", "my_return")
+    assert built.nodes["my_factor"]["kind"] is NodeKind.GLOBAL_FACTOR
+    assert nx.is_directed_acyclic_graph(built)
+
+
+def test_edge_edits_preserve_custom_nodes():
+    """Regression: a positional DagEdits constructor silently dropped them."""
+    edits = DagEdits().with_node("n1", "GLOBAL_FACTOR").with_added("f1", "f2")
+    assert edits.added_nodes == (("n1", "GLOBAL_FACTOR"),)
+
+    edits = edits.with_removed("f1", "btc_return")
+    assert edits.added_nodes == (("n1", "GLOBAL_FACTOR"),)
+
+
+def test_removing_a_custom_node_drops_edits_that_referenced_it():
+    edits = (
+        DagEdits()
+        .with_node("tmp", "GLOBAL_FACTOR")
+        .with_added("tmp", "btc_return")
+        .without_node("tmp")
+    )
+    assert edits.is_empty
+
+
+def test_duplicate_node_is_ignored_and_unknown_kind_falls_back():
+    edits = DagEdits().with_node("n", "GLOBAL_FACTOR").with_node("n", "ASSET_RETURN")
+    assert edits.added_nodes == (("n", "GLOBAL_FACTOR"),)
+
+    built = apply_edits(nx.DiGraph(), DagEdits(added_nodes=(("x", "NOT_A_KIND"),)))
+    assert built.nodes["x"]["kind"] is NodeKind.GLOBAL_FACTOR
+
+
+@pytest.mark.parametrize("name,fragment", [
+    ("", "empty"),
+    ("   ", "empty"),
+    (" pad", "whitespace"),
+    ("f1", "already exists"),
+])
+def test_illegal_node_names_are_named(name, fragment):
+    assert fragment in validate_new_node(_dag(), name)
+
+
+# ── base DAG sources ─────────────────────────────────────────────────────
+
+def test_every_registered_source_builds():
+    for source in DAG_SOURCES.values():
+        dag = build_base_dag(source, ["btc", "eth"])
+        assert isinstance(dag, nx.DiGraph)
+        assert nx.is_directed_acyclic_graph(dag)
+    assert build_base_dag("blank", ["btc"]).number_of_nodes() == 0
+    assert build_base_dag("cpcm", ["btc"]).number_of_nodes() > 0
+
+
+# ── saved workspaces ─────────────────────────────────────────────────────
+
+def test_workspace_round_trip(tmp_path):
+    path = tmp_path / "ws.json"
+    edits = DagEdits().with_node("n", "GLOBAL_FACTOR").with_added("f1", "f2")
+
+    save_workspace("mine", "discovered", edits, path=path)
+    source, loaded = read_workspace("mine", path)
+
+    assert source == "discovered"
+    assert loaded == edits
+
+
+def test_saving_one_workspace_preserves_the_others(tmp_path):
+    path = tmp_path / "ws.json"
+    save_workspace("a", "cpcm", DagEdits().with_added("f1", "f2"), path=path)
+    save_workspace("b", "blank", DagEdits().with_node("n", "GLOBAL_FACTOR"), path=path)
+
+    assert set(load_workspaces(path)) == {"a", "b"}
+    assert read_workspace("a", path)[1].added == (("f1", "f2"),)
+
+
+def test_missing_and_corrupt_workspace_files_read_as_empty(tmp_path):
+    """A bad scratch file must not stop the dashboard from rendering."""
+    assert load_workspaces(tmp_path / "nope.json") == {}
+    bad = tmp_path / "bad.json"
+    bad.write_text("{not json", encoding="utf-8")
+    assert load_workspaces(bad) == {}
+    assert read_workspace("anything", bad) is None
+
+
+def test_delete_workspace(tmp_path):
+    path = tmp_path / "ws.json"
+    save_workspace("gone", "cpcm", DagEdits(), path=path)
+
+    assert delete_workspace("gone", path) is True
+    assert delete_workspace("gone", path) is False
+    assert load_workspaces(path) == {}
+
+
+def test_blank_workspace_name_is_rejected(tmp_path):
+    with pytest.raises(ValueError):
+        save_workspace("  ", "cpcm", DagEdits(), path=tmp_path / "ws.json")
