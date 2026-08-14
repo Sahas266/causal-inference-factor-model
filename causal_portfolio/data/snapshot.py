@@ -78,23 +78,69 @@ def _record_sync_time(loader: DuckDBCPCMDataLoader, when: datetime) -> None:
     )
 
 
-def _fetch_backfilled(client, created_since: str, time_before: datetime,
-                      assets: list[str] | None) -> list[dict]:
-    """Rows INSERTED after the previous snapshot but STAMPED before the resume
-    cursor — the resume-by-MAX(time) cursor alone silently misses these when a
-    backfill adds historical rows, and the local DB diverges from the
-    warehouse forever."""
+def _postgrest_value(value: object) -> str:
+    """Quote a scalar for use in a raw PostgREST boolean expression."""
+    escaped = str(value).replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
+
+
+def _after_change_cursor(cursor: tuple[object, ...]) -> str:
+    """Return a PostgREST filter for rows lexicographically after ``cursor``."""
+    fields = ("updated_at", "provider", "asset", "metric", "time")
+    clauses: list[str] = []
+    for index, field in enumerate(fields):
+        terms = [
+            f"{prefix}.eq.{_postgrest_value(cursor[prefix_index])}"
+            for prefix_index, prefix in enumerate(fields[:index])
+        ]
+        terms.append(f"{field}.gt.{_postgrest_value(cursor[index])}")
+        clauses.append(terms[0] if len(terms) == 1 else f"and({','.join(terms)})")
+    return ",".join(clauses)
+
+
+def _fetch_backfilled(
+    client,
+    changed_since: str,
+    time_before: datetime,
+    assets: list[str] | None,
+    *,
+    changed_before: datetime | str | None = None,
+) -> list[dict]:
+    """Rows changed after the previous snapshot but stamped before its cursor.
+
+    ``updated_at`` covers both newly inserted backfills and corrections to
+    existing primary keys. A fixed half-open change window and a composite
+    keyset cursor keep concurrent updates from shifting page boundaries.
+    """
+    if changed_before is None:
+        changed_before = datetime.now(timezone.utc)
+    if isinstance(changed_before, datetime):
+        changed_before = changed_before.isoformat()
+
     rows: list[dict] = []
-    offset = 0
+    cursor: tuple[object, ...] | None = None
     while True:
         q = client.table("asset_metrics").select(
-            "provider,provider_priority,asset,metric,time,value,frequency,metadata"
+            "provider,provider_priority,asset,metric,time,value,frequency,metadata,"
+            "created_at,updated_at"
         )
         if assets:
             q = q.in_("asset", assets)
-        q = q.gte("created_at", created_since).lt("time", time_before.isoformat())
-        q = q.order("created_at").order("time").order("provider")
-        q = q.range(offset, offset + PAGE_SIZE - 1)
+        q = (
+            q.gte("updated_at", changed_since)
+            .lt("updated_at", changed_before)
+            .lt("time", time_before.isoformat())
+        )
+        if cursor is not None:
+            q = q.or_(_after_change_cursor(cursor))
+        q = (
+            q.order("updated_at")
+            .order("provider")
+            .order("asset")
+            .order("metric")
+            .order("time")
+        )
+        q = q.limit(PAGE_SIZE)
         result = q.execute()
         page = result.data or []
         if not page:
@@ -102,7 +148,11 @@ def _fetch_backfilled(client, created_since: str, time_before: datetime,
         rows.extend(page)
         if len(page) < PAGE_SIZE:
             break
-        offset += PAGE_SIZE
+        last = page[-1]
+        cursor = tuple(
+            last[field]
+            for field in ("updated_at", "provider", "asset", "metric", "time")
+        )
     return rows
 
 
@@ -186,21 +236,31 @@ def snapshot(
         )
         win_start = win_end
 
-    # Late-backfill sweep: on resume, also pull rows inserted since the last
-    # snapshot run whose timestamps fall BEFORE the resume cursor.
+    # Historical-change sweep: on resume, also pull rows inserted or updated
+    # since the last successful snapshot whose timestamps precede the cursor.
     prev_sync = _last_sync_time(loader)
     if is_resume and prev_sync:
         try:
-            late = _fetch_backfilled(client, prev_sync, resume_cursor, assets)
+            late = _fetch_backfilled(
+                client,
+                prev_sync,
+                resume_cursor,
+                assets,
+                changed_before=sync_started,
+            )
             if late:
                 loader.upsert_rows(late)
                 total += len(late)
             logger.info(
-                "Late-backfill sweep (created_at >= %s, time < %s): %d rows",
-                prev_sync, resume_cursor.date(), len(late),
+                "Historical-change sweep (updated_at >= %s, time < %s): %d rows",
+                prev_sync,
+                resume_cursor.date(),
+                len(late),
             )
         except Exception as e:
-            logger.error("Late-backfill sweep failed (continuing): %s", e)
+            logger.error("Historical-change sweep failed: %s", e)
+            loader.close()
+            raise
     _record_sync_time(loader, sync_started)
 
     loader.close()
