@@ -1,7 +1,7 @@
 # Full Execution Testnet Run Plan — Review & Resolution
 
-**Date:** 2026-06-29  
-**Reviewed file:** `causal_portfolio/docs/full_execution_testnet_run_plan.md`  
+**Date:** 2026-06-29<br>
+**Reviewed file:** `causal_portfolio/docs/full_execution_testnet_run_plan.md`<br>
 **Status:** Ready for a constrained Hyperliquid testnet run after explicit user confirmation.
 
 ## Verdict

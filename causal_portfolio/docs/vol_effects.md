@@ -47,7 +47,7 @@ Trailing 5d vol t-stat: **0.4** (persistence dominates, as expected).
 
 ## Verdict
 
-Factor-augmented vol targeting vs plain trailing-vol targeting: ΔSharpe +0.501 (BTC), +0.292 (EW). 
+Factor-augmented vol targeting vs plain trailing-vol targeting: ΔSharpe +0.501 (BTC), +0.292 (EW).
 
 **Placebo check (circular factor shifts):** p=0.43 (BTC), p=0.47 (EW) — the fraction of random factor alignments whose vol-target arm does at least as well.
 

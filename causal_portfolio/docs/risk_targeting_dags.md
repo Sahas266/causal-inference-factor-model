@@ -18,7 +18,7 @@ Each rule maps a single causal state variable to a *continuous* BTC exposure in 
 
 ## Per-rule notes
 
-- **bh** — Buy-and-hold BTC. The benchmark nothing in this repo beats OOS. 
+- **bh** — Buy-and-hold BTC. The benchmark nothing in this repo beats OOS.
 - **trend50_x_vol** — Binary trend_50 filter times the vol scale — combines the binary trend baseline with continuous de-risking. Sharpe below BH (0.61 vs 0.63). Calmar below BH (0.37 vs 0.48).
 - **trend_zscore** — Continuous trend strength: clip(z-score of (price-200dMA)/MA, 0, 1) — scales in with how far price sits above its 200d MA. Sharpe below BH (0.60 vs 0.63). Calmar below BH (0.40 vs 0.48).
 - **vol_target_ewma** — Exposure = clip(median(ewVol)/ewVol, 0, 1), span-20 EWMA vol; de-risks smoothly as vol rises above its trailing median. Sharpe below BH (0.41 vs 0.63). Calmar below BH (0.28 vs 0.48).

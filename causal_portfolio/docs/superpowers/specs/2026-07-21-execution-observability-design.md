@@ -1,6 +1,6 @@
 # Execution Cost Gate and Rebalance Observability Design
 
-Date: 2026-07-21  
+Date: 2026-07-21<br>
 Baseline: `execution` at `cdd3c148`
 
 ## Objective

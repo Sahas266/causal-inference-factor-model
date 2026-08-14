@@ -42,7 +42,7 @@ For treatments with ≥2 clean strong instruments of LOW mutual correlation (|co
 | funding_basis | `jup_net_treasury[qbucket]`, `jup_own_token_treasury[qbucket]`, `ena_tvl_usd[cumchg7]` | 76 | 1 | 0.45 | 1.29 | 0.526 | 1.25 | 0.263 | 2 | not rejected |
 | liq_flow | `eth_gross_emissions[diff]`, `link_mc_fees_ratio[ar1_innov]`, `eth_chain_lending_deposits[diff]` | 251 | 129 | 0.60 | 0.92 | 0.630 | 0.26 | 0.611 | 2 | not rejected |
 
-**3/3** over-identified set(s) were NOT rejected by the standard Sargan at 5%. 
+**3/3** over-identified set(s) were NOT rejected by the standard Sargan at 5%.
 A non-rejection is necessary but NOT sufficient for validity: Sargan only tests whether the instruments *agree* on the same structural β — if they share the SAME exclusion violation it cannot detect it. With one structural equation and one cycle it is low-powered. Treat a pass as 'no internal contradiction', not 'exclusion confirmed'.
 
 ## 4. Gated 2SLS-vs-OLS OOS A/B with the best NEW constructions

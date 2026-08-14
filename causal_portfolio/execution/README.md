@@ -44,6 +44,9 @@ python -m causal_portfolio.execution.cli execute --weights weights.json --live -
 # Apply the model-agnostic all-in transaction-cost gate
 python -m causal_portfolio.execution.cli execute --weights weights.json --live --testnet --max-transaction-cost-bps 15
 
+# Also suppress tiny resizes and refuse materially incomplete increasing plans
+python -m causal_portfolio.execution.cli execute --weights weights.json --live --testnet --min-position-change-pct 0.10 --min-rebalance-completeness 0.90
+
 # 5. Mainnet (requires confirmation prompt)
 python -m causal_portfolio.execution.cli execute --weights weights.json --live --mainnet
 
@@ -94,7 +97,7 @@ dependency never runs the other way. In particular execution must not import
 because none of those ship in the wheel and any one of them would tie the
 engine to a specific model.
 
-Practically this means every model — RP-PCA, CPCM, or anything added later —
+Practically this means every model — CPCM, research RP-PCA, or anything added later —
 reaches Hyperliquid through the same call and receives the same execution
 policy (caps, precision, cost gate, repair, audit, trace, notifications):
 
@@ -138,40 +141,68 @@ intentionally execute on older signals.
 `causal_portfolio/tests/test_execution_model_blind.py` covers these at
 runtime, including a custom-asset-map regression.
 
-## Daily local RP-PCA runner
+## Daily CPCM causal runner
 
-RP-PCA is a model, so it lives in `causal_portfolio/models/` and is **not**
-packaged — the wheel ships no model code. Running it needs a repository
-checkout; `pip install cpcm-execution[model]` only adds the numeric stack
-(numpy/pandas) that the runner needs, and its default DuckDB loader
-additionally needs the repo-only `causal_portfolio.data` package.
+The scheduled strategy entrypoint is `causal_portfolio.models.causal_daily`.
+It uses the repository's data-supported **DAG v2**, not the original hand-drawn
+Star-DAG: the only candidate return edge is the one-day-lagged AR(1) innovation
+in `chain_congestion` to next-day BTC return. The source signature is frozen to
+`btc_FeeTotNtv + doge_FeeTotNtv + eth_FeeTotNtv`; newly available fallback
+columns cannot silently change the model.
 
-Generate an RP-PCA target from the local DuckDB snapshot or a wide price CSV:
-
-```bash
-python -m causal_portfolio.models.rppca_daily --target-out tmp/rppca_daily_target.json
-```
-
-Run locally every 24 hours and execute on Hyperliquid testnet. RP-PCA defaults
-to a 15 bp all-in cost ceiling:
+Generate a target without submitting it:
 
 ```bash
-python -m causal_portfolio.models.rppca_daily --loop --every-hours 24 --execute --target-out tmp/rppca_daily_target.json
+python -m causal_portfolio.models.causal_daily --target-out tmp/cpcm_causal_daily_target.json
 ```
 
-The deployed Windows task is `CPCM_RPPCA_Daily_HL_Testnet`. It runs once daily,
-starts after a missed schedule, wakes the machine, and retries transient
-failures up to three times at 15-minute intervals.
-
-Mainnet is non-interactive for scheduling, so it requires both explicit flags:
+The checked-in scheduled command first retires the last audited placeholder
+portfolio through scoped reduce-only orders, refreshes the exact three-asset
+source set directly from Coin Metrics, then assesses the registered holdout.
+The retirement checks the wallet, prior RP-PCA universe and position sides;
+unrecognized holdings or any resting order block it. An address- and
+target-bound local marker prevents repetition only after two stable flat-account
+checks. If the model passes, it maps the original exposure rule
+`clip(1 + 0.5z, 0, 2)` to a 5% base BTC weight (0-10% account exposure) and uses
+a 15 bp cost ceiling, 10% same-direction no-trade band, and 90%
+plan-completeness gate:
 
 ```bash
-python -m causal_portfolio.models.rppca_daily --loop --execute --mainnet --ack-mainnet
+causal_portfolio/execution/run_cpcm_causal_daily.cmd
 ```
 
-The runner forward-fills local daily prices but stamps the target with the
-latest real data date. If the warehouse is stale, execution is blocked by the
-normal `max_signal_age_hours` check unless `--allow-stale-signal` is passed.
+The existing Windows task is still named `CPCM_RPPCA_Daily_HL_Testnet`, but its
+registered compatibility entrypoint `run_rppca_daily.cmd` now delegates to the
+CPCM causal runner. This avoids silently leaving the old placeholder active
+before the task itself is renamed by an operator.
+
+Mainnet remains non-interactive for scheduling and requires both explicit
+flags:
+
+```bash
+python -m causal_portfolio.models.causal_daily --execute --mainnet --ack-mainnet
+```
+
+The June rule and its original transform were not truly prospectively frozen:
+most of their nominal post-2025 window was already observable, and the research
+innovation helper changed later. Production therefore uses a new immutable spec
+registered on 2026-08-12 (including source set, 2022 history start, trailing AR
+window, lag, sizing rule, and a SHA-256 fingerprint). Starting with the
+2026-08-13 decision, each signal and executable BTC mid is written once to a
+SHA-256-chained append-only ledger. The gate scores the first 180 consecutive
+scheduled mark-to-mark outcomes beginning 2026-08-14; causal-rule Sharpe must
+exceed buy-and-hold BTC Sharpe by at least 0.10. This matches the actual 09:54 PT
+execution cadence instead of pretending the job traded at the start of the UTC
+day. Until those outcomes exist, status is `pending` and no causal target can be
+emitted. For context only, the retrospective
+2026-01-01 through 2026-06-29 check lost 32.8% and trailed BTC buy-and-hold by
+0.004 Sharpe, so it provides no evidence of edge. The runner also fails closed
+when any raw BTC/DOGE/ETH fee stream or BTC price is missing, disagrees on date,
+or is older than 72 hours. There is no weak-IV-to-OLS execution fallback.
+The model refresh no longer depends on the repository's Supabase mirror.
+
+`causal_portfolio.models.rppca_daily` remains available for historical research
+and regression tests, but no checked-in scheduled wrapper calls it.
 
 For live submission, use a model-produced JSON containing `_meta.as_of` or
 `_meta.rebalance_date`. The CLI also accepts the RP-PCA-style asset-weight CSV
@@ -216,6 +247,8 @@ the direct command is useful for an execution-only development environment.
 | `slippage_bps` | 30 | IOC limit at mid ± 30bps |
 | `max_transaction_cost_bps` | None | Optional all-in fee + live L2 impact ceiling |
 | `estimated_taker_fee_bps` | 4.5 | Fee component for the pre-trade estimate |
+| `min_position_change_pct` | 0 | Optional same-direction resize no-trade band |
+| `min_rebalance_completeness` | 0 | Optional minimum submitted share of intended increasing notional |
 | `max_signal_age_hours` | 72 | Block stale model targets before live writes |
 | `smart_execution` | True | Reprice IOC slices against the live L2 book |
 | `twap_minutes` | 0 | Disabled unless an operator requests client-side slicing |
@@ -231,7 +264,7 @@ Non-reducing orders below `min_order_notional_usd` are skipped in the dry-run
 plan; full reduce-only closes are allowed so cleanup can flatten tiny residuals.
 The minimum notional is exchange validation, not rebalance policy. When the
 transaction-cost gate is enabled, missing or insufficient L2 depth blocks the
-submission before open-order cancellation. RP-PCA explicitly enables a 15 bp
+submission before open-order cancellation. The daily causal runner explicitly enables a 15 bp
 limit; review it after roughly 30 logged rebalances rather than auto-tuning it.
 
 ## Rebalance trace and control panel

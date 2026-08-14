@@ -64,6 +64,7 @@ causal_model/results.csv
 
 # Execution audit logs (real account activity, never commit)
 causal_portfolio/execution/logs/
+causal_portfolio/execution/state/
 
 # Reference papers (PDFs kept locally, not in git)
 references/

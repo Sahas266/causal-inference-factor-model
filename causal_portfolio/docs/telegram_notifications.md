@@ -2,7 +2,7 @@
 
 One-time setup for the model + portfolio update channel. The code side is
 already wired: `causal_portfolio/execution/notify.py` sends automatically on
-every live execution result, unresolved leg failure, and RP-PCA target write.
+every live execution result, unresolved leg failure, and CPCM causal target write.
 
 ## 1. Create the bot
 
@@ -47,7 +47,7 @@ python -m causal_portfolio.execution.notify --pnl       # live unrealized PnL, o
 python -m causal_portfolio.execution.notify --message "hello"
 ```
 
-Formatted messages (state, PnL, execution results, RP-PCA targets) use bold
+Formatted messages (state, PnL, execution results, CPCM causal targets) use bold
 labels, monospace ids, and 🟢/🔴/⚠️/🛑 status emoji so a scroll through the
 channel reads at a glance. `--message` stays plain text — arbitrary operator
 text is never parsed as markup.
@@ -69,8 +69,11 @@ is not the deployed Windows path.
 - **Execution results** (`execute_plan`): network, target id, orders, gross,
   leg-repair outcome, unresolved drifts, any error. Clean dry-runs are
   silent; live submissions and all failures notify.
-- **Model updates** (`rppca_daily.run_once`): target date + weight vector on
-  every target write.
+- **Model updates** (`causal_daily.run_once`): target date, DAG v2 congestion
+  innovation, registered holdout status, and BTC weight on every eligible target
+  write. A pending or failed holdout produces no target notification. The
+  one-time, wallet/reference-scoped RP-PCA retirement still uses the normal
+  execution-result notification.
 - **PnL updates**: the scheduled one-shot task posts every 30 minutes.
 
 Unconfigured env = notifications silently disabled. Telegram errors are logged

@@ -5,10 +5,8 @@ portfolio weights, stage by stage, with the **current state** and **where it
 needs to improve** for each. It is the map for anyone (re)entering this project.
 
 > **One-line version**
-> `DuckDB/Supabase → build_all_factors → Combo-select drivers → [Ridge OLS *or*
-> identified 2SLS] β → EKF-filtered driver state → ManifoldOptimizer (Σ⁻¹μ
-> projected onto the Jacobian tangent space, constrained) → weights → (backtest
-> loop | Hyperliquid execution)`
+> `DuckDB/Supabase → factors → (Ridge/2SLS research | frozen DAG v2 forward
+> validation) → (research optimizer | guarded BTC target) → Hyperliquid handoff`
 
 ## The headline finding (read this first)
 
@@ -30,16 +28,18 @@ See `causal_portfolio/docs/four_techniques_summary.md`. The two with standalone
 merit worth costed follow-up are cointegration (as an uncorrelated sleeve) and
 WK-means (swap in wherever regimes are used).
 
-There are **two estimation paths** that share the same data→factors front-end
-(Stages 0–2) and the same optimizer back-end (Stages 4–5):
+There are **three distinct paths**; do not treat them as interchangeable:
 
-- **Production / backtest path** — Ridge OLS via `V1LinearSolver`. This is what
-  the dashboards, `main.py`, and `run_backtest.py` actually run. The DAG is
-  *decorative* here (plain correlational fit; edges/instruments unused).
-- **Causal path** — `scm/` + `experiments/` (Steps 4–6 of the causal goal):
-  graph identification + gated 2SLS. Built to test whether causal estimation
-  generalizes better. It does not, on this data, because the instruments are
-  weak.
+- **Research / backtest path** — Ridge OLS via `V1LinearSolver`. This remains
+  what the dashboards, `main.py`, and `run_backtest.py` run. The DAG is
+  decorative there (plain correlational fit; edges/instruments unused).
+- **Original causal-estimation research path** — the Star-DAG, identification,
+  and gated 2SLS experiments. Its instruments are too weak, so it is not an
+  executable model.
+- **Scheduled causal assessment** — `models/causal_daily.py` reproduces the
+  registered DAG v2 congestion-innovation→next-day-BTC candidate and its
+  exact-calendar 180-day forward gate. The prospective gate is currently
+  pending, so this path emits no trade target.
 
 ---
 
@@ -220,14 +220,14 @@ into the return node).
 
 ## Stage 3 — Estimation (driver → return loadings β) — *the fork*
 
-### Production / backtest path
+### Research / backtest path
 **Code:** `solvers/v1_linear.py::V1LinearSolver`
 
 `returns = drivers @ β + intercept` via **Ridge (α=1)**, fit jointly across
 assets, + Ledoit-Wolf residual covariance. Exposes `predict(F)` (→ μ) and
 `jacobian(F)` (→ βᵀ). The DAG is not consulted — purely correlational.
 
-### Causal path
+### Original causal-estimation research path
 **Code:** `scm/graph.py`, `scm/identification.py`, `scm/estimators.py`,
 `experiments/ols_vs_2sls.py`
 
@@ -254,21 +254,44 @@ identical.
   (`tests/fixtures/rust_estimator_fixtures.json`, emitted by
   `cpcm-estimate/tests/emit_fixtures.rs`); every Rust dsep/identify unit test is
   mirrored 1:1. 27 estimator/identification tests pass.
-- In the current star-DAG, **all factor→return effects are backdoor-identified
-  with the empty set** (only confounding is via unobserved shocks, which can't
-  open a backdoor) — so the DAG as drawn says **OLS is already causally valid**.
-  2SLS only diverges under genuine factor endogeneity, which Hausman detects.
+- In the current star-DAG, the four declared endogenous factors have explicit
+  latent confounders, so their factor→return effects require their graph-matched
+  IVs. The remaining factors are backdoor-identified. Empirical first-stage
+  gating still decides whether a declared IV is strong enough to use.
 - **Empirical result:** gated 2SLS = OLS (all instruments fail the F gate);
   ungated 2SLS is *worse* than OLS (median Sharpe +0.83 → −0.60), the textbook
   weak-instrument failure. See `docs/ols_vs_2sls.md` and
   `docs/ols_vs_2sls_ungated.md`.
+- This Star-DAG/2SLS branch remains a research comparison. Weak-IV treatments
+  are not licensed for production by falling back to confounded OLS.
+
+### Scheduled DAG v2 assessment
+
+**Code:** `scm/graph.py::build_discovered_dag`, `models/causal_daily.py`
+
+The later discovery program reversed the original premise: returns generally
+drive on-chain state. Its only candidate factor→return edge is
+`chain_congestion(t) → btc_return(t+1)`. The frozen rule is
+`clip(1 + 0.5z, 0, 2)` BTC exposure, where `z` is the AR(1) congestion
+innovation computed from information available at the decision date.
+
+The original post-2025 test was retrospective by the time the production rule
+was corrected and therefore cannot license deployment. It also failed as a
+diagnostic: Sharpe -1.344 versus -1.341 for buy-and-hold (lift -0.004; required
++0.10). The corrected spec was registered on 2026-08-12 with an immutable hash,
+no raw-source forward fill, a fixed 2022 history start, and a hash-chained
+prospective decision ledger. Signals start on 2026-08-13; the first 180
+consecutive scheduled mark-to-mark outcomes begin on 2026-08-14. Until that gate
+passes, `causal_daily` refuses to serialize or submit a causal target.
+`run_rppca_daily.cmd` remains only a compatibility filename and delegates to the
+guarded DAG v2 runner, which first retires only the address- and
+reference-target-scoped placeholder positions through the audited execution
+path. The exact causal inputs refresh directly from Coin Metrics, so the live
+model is not blocked by the legacy Supabase mirror.
 
 **Where to improve:**
-- Wire the **causal path into the shipping backtester** so the dashboard can run
-  identified 2SLS, not just Ridge OLS. Today the causal layer lives in
-  `experiments/`; `engine.py` only knows `CPCMSolver` (Ridge). A `TslsSolver`
-  that carries aligned instruments would unify them — but it's only worth doing
-  once the instruments are strong enough to matter (Stage 1 bottleneck).
+- Add the causal estimator as a dashboard/backtest option only for analysis;
+  weak instruments still prevent it from being a production target model.
 - The Hausman/Sargan use the Rust's diagonal/total-column simplifications (kept
   for fixture parity). For real inference, upgrade to the full
   variance-difference Hausman and the canonical Sargan df = m − k_endog.
@@ -284,16 +307,16 @@ vector; `filter(...)` returns the filtered series; the **last filtered state** i
 `F_current`. Denoises drivers before they drive weights. Toggleable; off → raw
 last driver row.
 
-**Current state:** Works in the V1 backtest path. The causal experiments
-(`ols_vs_2sls`, `regime_dag`) **skip EKF** (use the last training row) to keep
-the OLS/2SLS A/B clean — both arms identical, so the comparison is fair.
+**Current state:** Works in the V1 backtest path. The causal A/B experiments
+(`ols_vs_2sls`, `regime_dag`) skip EKF to keep both estimator arms comparable.
+DAG v2 uses its frozen AR(1)-innovation transform and does not use the EKF.
 
 **Where to improve:**
 - EKF dynamics are assumed linear/Gaussian; no validation that the learned
   transition actually improves OOS driver prediction. Ablate EKF-on vs EKF-off
   on the production path.
-- Reconcile the two paths: either bring EKF into the causal experiments or
-  document why it's excluded as a permanent choice.
+- Keep EKF excluded from estimator A/B experiments unless both arms use the
+  identical filter; otherwise it confounds the causal-estimator comparison.
 
 ## Stage 5 — Weights
 

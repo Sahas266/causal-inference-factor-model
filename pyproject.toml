@@ -32,7 +32,15 @@ dependencies = [
 # and would violate the model-agnostic boundary above). This extra exists so a
 # repo checkout can install the model runner's numeric stack alongside the
 # library; the wheel itself ships no model code.
-model = ["numpy", "pandas"]
+model = [
+    "duckdb",
+    "networkx",
+    "numpy",
+    "pandas",
+    "scikit-learn",
+    "scipy",
+    "supabase",
+]
 
 [project.scripts]
 cpcm-exec = "causal_portfolio.execution.cli:main"

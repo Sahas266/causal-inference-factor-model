@@ -1,8 +1,8 @@
 # Full Execution Testnet Run Results
 
-Run directory: `tmp/full_execution_testnet_20260629T094847Z`  
-Network: Hyperliquid testnet  
-Instrument: BTC for AS/PIN benchmark; BTC/ETH/SOL for the placeholder strategy rebalance  
+Run directory: `tmp/full_execution_testnet_20260629T094847Z`<br>
+Network: Hyperliquid testnet<br>
+Instrument: BTC for AS/PIN benchmark; BTC/ETH/SOL for the placeholder strategy rebalance<br>
 Benchmark size: `0.00034 BTC` per leg
 
 ## Executive Summary
