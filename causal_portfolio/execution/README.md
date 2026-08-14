@@ -186,17 +186,19 @@ python -m causal_portfolio.models.causal_daily --execute --mainnet --ack-mainnet
 The June rule and its original transform were not truly prospectively frozen:
 most of their nominal post-2025 window was already observable, and the research
 innovation helper changed later. Production therefore uses a new immutable spec
-registered on 2026-08-12 (including source set, 2022 history start, trailing AR
-window, lag, sizing rule, and a SHA-256 fingerprint). Starting with the
-2026-08-13 decision, each signal and executable BTC mid is written once to a
-SHA-256-chained append-only ledger. The gate scores the first 180 consecutive
-scheduled mark-to-mark outcomes beginning 2026-08-14; causal-rule Sharpe must
-exceed buy-and-hold BTC Sharpe by at least 0.10. This matches the actual 09:54 PT
-execution cadence instead of pretending the job traded at the start of the UTC
-day. Until those outcomes exist, status is `pending` and no causal target can be
+registered on 2026-08-14 (including source set, 2022 history start, trailing AR
+window, lag, sizing rule, cost gate, and implementation fingerprints). Starting
+with the 2026-08-15 decision, each signal and Hyperliquid mainnet BTC mid at the
+09:54 America/Los_Angeles mark is written once to
+`cpcm_causal_signal_ledger_2026_08_14_mainnet_marks.jsonl`. The gate scores the
+first 180 consecutive scheduled mark-to-mark outcomes beginning 2026-08-16;
+causal-rule net Sharpe after 5 bp turnover cost must exceed buy-and-hold BTC
+Sharpe by at least 0.10. A missed decision restarts the consecutive window.
+Until those outcomes exist, status is `pending` and no causal target can be
 emitted. For context only, the retrospective
-2026-01-01 through 2026-06-29 check lost 32.8% and trailed BTC buy-and-hold by
-0.004 Sharpe, so it provides no evidence of edge. The runner also fails closed
+2026-01-01 through 2026-06-29 check lost 32.9% and trailed BTC buy-and-hold by
+0.0035 gross Sharpe and 0.0064 net Sharpe, so it provides no evidence of edge.
+The runner also fails closed
 when any raw BTC/DOGE/ETH fee stream or BTC price is missing, disagrees on date,
 or is older than 72 hours. There is no weak-IV-to-OLS execution fallback.
 The model refresh no longer depends on the repository's Supabase mirror.

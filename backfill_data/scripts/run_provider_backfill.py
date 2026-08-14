@@ -17,7 +17,10 @@ from dotenv import load_dotenv
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.core.utils.config_loader import iter_endpoint_config_files
+from src.core.utils.config_loader import (
+    deduplicate_endpoint_provider_jobs,
+    iter_endpoint_config_files,
+)
 
 def parse_args(default_provider: str) -> argparse.Namespace:
     """Parse command-line arguments for provider-specific backfill runs."""
@@ -94,13 +97,19 @@ def _load_all_endpoint_configs(config_dir: Path) -> List[Dict]:
             endpoints_dir
         ).as_posix()
         configs.append(endpoint_config)
-    return configs
+    return deduplicate_endpoint_provider_jobs(configs)
 
 
 def _filter_for_provider(endpoint_config: Dict, provider_name: str) -> Dict | None:
     """Keep only provider entries matching provider_name for one endpoint config."""
     providers = endpoint_config.get("providers", [])
-    matching = [entry for entry in providers if entry.get("name") == provider_name]
+    matching = []
+    for index, entry in enumerate(providers):
+        if entry.get("name") != provider_name:
+            continue
+        entry = deepcopy(entry)
+        entry.setdefault("provider_instance_id", str(index))
+        matching.append(entry)
     if not matching:
         return None
 

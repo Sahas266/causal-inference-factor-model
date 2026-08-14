@@ -97,8 +97,14 @@ def apply_edits(dag: nx.DiGraph, edits: DagEdits) -> nx.DiGraph:
         if edited.has_edge(source, target):
             edited.remove_edge(source, target)
     for source, target in edits.added:
-        if source in edited and target in edited:
-            edited.add_edge(source, target, kind=EdgeKind.CAUSAL, operator_added=True)
+        if source not in edited or target not in edited:
+            continue
+        if edited.has_edge(source, target):
+            continue
+        problem = validate_new_edge(edited, source, target)
+        if problem:
+            raise ValueError(f"cannot apply saved edge {source} -> {target}: {problem}")
+        edited.add_edge(source, target, kind=EdgeKind.CAUSAL, operator_added=True)
     return edited
 
 
@@ -170,9 +176,12 @@ def diff_identification(before: list, after: list) -> dict[str, list[str]]:
         out = {}
         for r in results:
             key = f"{getattr(r, 'treatment', '?')} -> {getattr(r, 'outcome', '?')}"
+            method = getattr(r, "method", None)
+            if hasattr(method, "name"):
+                method = method.name.lower()
             out[key] = (
-                getattr(r, "identifiable", None),
-                getattr(r, "strategy", None),
+                getattr(r, "identified", None),
+                method,
             )
         return out
 
@@ -238,6 +247,24 @@ def _edits_from_dict(payload: dict) -> DagEdits:
     )
 
 
+def _valid_workspace_entry(entry: object) -> bool:
+    if not isinstance(entry, dict) or not isinstance(entry.get("edits"), dict):
+        return False
+    if "source" in entry and not isinstance(entry["source"], str):
+        return False
+    edits = entry["edits"]
+    for field_name in ("added", "removed", "added_nodes"):
+        pairs = edits.get(field_name, [])
+        if not isinstance(pairs, list) or any(
+            not isinstance(pair, list)
+            or len(pair) != 2
+            or not all(isinstance(value, str) for value in pair)
+            for pair in pairs
+        ):
+            return False
+    return True
+
+
 def load_workspaces(path: Path | None = None) -> dict[str, dict]:
     """Read saved workspaces. A missing or unreadable file is simply empty.
 
@@ -253,7 +280,7 @@ def load_workspaces(path: Path | None = None) -> dict[str, dict]:
         return {}
     return {
         name: entry for name, entry in raw.items()
-        if isinstance(entry, dict) and "edits" in entry
+        if _valid_workspace_entry(entry)
     }
 
 

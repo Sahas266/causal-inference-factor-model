@@ -78,18 +78,21 @@ The candidate edge is frozen here, before any new data:
 By the August 2026 production cutover, most of that window was already known,
 and the innovation implementation had been corrected after this note. It is
 therefore retrospective evidence, not a deployment license. It failed its bar
-over the available first 180 outcomes (Sharpe lift -0.004 versus +0.10 required).
+over the available first 180 outcomes (gross Sharpe lift -0.0035 and 5 bp net
+lift -0.0064 versus +0.10 required).
 
 The production specification in `models/causal_daily.py` was re-registered on
-2026-08-12. It freezes the exact raw fee inputs, 2022 history start, leak-free
-trailing AR(1) transform, one-calendar-day source lag, sizing rule, and spec
-hash. Starting on 2026-08-13, the runner writes each decision signal and live
-BTC reference mid to a hash-chained append-only ledger. Its gate is the first
-180 consecutive scheduled mark-to-mark outcomes beginning 2026-08-14, with the
-same +0.10 Sharpe-lift threshold. This prevents warehouse revisions from
-rewriting prior decisions and evaluates the return horizon the task can
-actually trade. Until that prospective test passes, the runner emits no causal
-target.
+2026-08-14. It freezes the exact raw fee inputs, 2022 history start, leak-free
+trailing AR(1) transform, one-calendar-day source lag, sizing rule, cost gate,
+and implementation fingerprints. Starting on 2026-08-15, the runner writes
+each decision signal and the 09:54 America/Los_Angeles Hyperliquid mainnet BTC
+mid to `cpcm_causal_signal_ledger_2026_08_14_mainnet_marks.jsonl`, a
+hash-chained append-only ledger. Its gate is the first 180 consecutive
+scheduled mark-to-mark outcomes beginning 2026-08-16. Net Sharpe after 5 bp
+turnover cost must beat buy-and-hold by +0.10; a missed decision restarts the
+window. This prevents warehouse revisions from rewriting prior decisions and
+evaluates the return horizon the task can actually trade. Until that
+prospective test passes, the runner emits no causal target.
 
 The honest summary of DAG v2 is: **prices drive on-chain state; on-chain state
 does not drive prices — with one

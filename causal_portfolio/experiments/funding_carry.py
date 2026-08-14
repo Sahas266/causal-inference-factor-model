@@ -154,21 +154,26 @@ def forecast_next_funding(
         X = pd.concat([own.rename("own"),
                        own.rolling(7, min_periods=5).mean().rename("own7"),
                        G], axis=1)
-        data = pd.concat([own.shift(-1).rename("y"), X], axis=1).dropna()
-        if len(data) < train_window + 30:
+        features = X.dropna()
+        labels = own.shift(-1).reindex(features.index)
+        if labels.notna().sum() < train_window:
             continue
-        yv = data["y"].values
-        Xv = data.drop(columns="y").values
-        pred = np.full(len(yv), np.nan)
         beta = None
-        for t in range(train_window, len(yv)):
-            if beta is None or (t - train_window) % refit == 0:
+        last_fit = -refit
+        for t, date in enumerate(features.index):
+            prior = labels.iloc[:t].dropna().index
+            if len(prior) < train_window:
+                continue
+            if beta is None or t - last_fit >= refit:
+                train = prior[-train_window:]
                 Xtr = np.column_stack([np.ones(train_window),
-                                       Xv[t - train_window:t]])
-                beta, *_ = np.linalg.lstsq(Xtr, yv[t - train_window:t],
+                                       features.loc[train].to_numpy()])
+                beta, *_ = np.linalg.lstsq(Xtr, labels.loc[train].to_numpy(),
                                            rcond=None)
-            pred[t] = float(np.concatenate([[1.0], Xv[t]]) @ beta)
-        out.loc[data.index, asset] = pred
+                last_fit = t
+            out.loc[date, asset] = float(
+                np.concatenate([[1.0], features.loc[date].to_numpy()]) @ beta
+            )
     return out
 
 
@@ -183,6 +188,16 @@ def weights_forecast_topk(
         if len(top):
             w.iloc[t, [forecast.columns.get_loc(c) for c in top.index]] = 1.0 / k
     return w
+
+
+def common_forecast_start(*forecasts: pd.DataFrame) -> pd.Timestamp:
+    """First date on which every forecast arm can make an OOS decision."""
+    available = pd.concat(
+        [forecast.notna().any(axis=1) for forecast in forecasts], axis=1
+    ).all(axis=1)
+    if not available.any():
+        raise ValueError("forecast arms have no common out-of-sample date")
+    return pd.Timestamp(available.index[available][0])
 
 
 # ── report ──────────────────────────────────────────────────────────
@@ -237,10 +252,12 @@ def main() -> None:
     p.add_argument("--n-placebo", type=int, default=50)
     p.add_argument("--start", default="2022-01-01")
     p.add_argument("--end", default="2025-12-31")
-    p.add_argument("--out", default="causal_portfolio/docs/funding_carry.md")
+    p.add_argument(
+        "--out", default="causal_portfolio/docs/funding_carry_generated.md"
+    )
     args = p.parse_args()
 
-    funding = load_daily_funding()
+    funding = load_daily_funding().loc[args.start:args.end]
     logger.info("funding: %d days x %d assets (%s -> %s)", len(funding),
                 funding.shape[1], funding.index[0].date(),
                 funding.index[-1].date())
@@ -262,19 +279,38 @@ def main() -> None:
     innov = innovation_factors(factors[chain])
     innov.index = pd.to_datetime(innov.index)
 
-    fee = args.fee_bps_oneway
-    results = [
-        run_carry(funding, weights_always_on(funding), "always_on", fee),
-        run_carry(funding, weights_persist_topk(funding, args.k),
-                  f"persist_top{args.k}", fee),
-    ]
     fc = forecast_next_funding(funding, innov, train_window=args.train_window)
-    results.append(run_carry(funding, weights_forecast_topk(fc, args.k),
-                             f"forecast_top{args.k}", fee))
     fc_nofac = forecast_next_funding(funding, None,
                                      train_window=args.train_window)
-    results.append(run_carry(funding, weights_forecast_topk(fc_nofac, args.k),
-                             f"forecast_top{args.k}_nofactors", fee))
+    oos_start = common_forecast_start(fc, fc_nofac)
+    oos_funding = funding.loc[oos_start:]
+    fee = args.fee_bps_oneway
+    results = [
+        run_carry(
+            oos_funding,
+            weights_always_on(funding).loc[oos_start:],
+            "always_on",
+            fee,
+        ),
+        run_carry(
+            oos_funding,
+            weights_persist_topk(funding, args.k).loc[oos_start:],
+            f"persist_top{args.k}",
+            fee,
+        ),
+        run_carry(
+            oos_funding,
+            weights_forecast_topk(fc, args.k).loc[oos_start:],
+            f"forecast_top{args.k}",
+            fee,
+        ),
+        run_carry(
+            oos_funding,
+            weights_forecast_topk(fc_nofac, args.k).loc[oos_start:],
+            f"forecast_top{args.k}_nofactors",
+            fee,
+        ),
+    ]
 
     for r in results:
         logger.info("%s: ann=%.1f%% sharpe=%.2f dd=%.1f%%",
@@ -290,7 +326,7 @@ def main() -> None:
                                index=innov.index, columns=innov.columns)
         fcs = forecast_next_funding(funding, shifted,
                                     train_window=args.train_window)
-        rs = run_carry(funding, weights_forecast_topk(fcs, args.k),
+        rs = run_carry(oos_funding, weights_forecast_topk(fcs, args.k).loc[oos_start:],
                        "placebo", fee)
         hits += rs.sharpe >= real
     placebo_p = hits / args.n_placebo
@@ -298,7 +334,7 @@ def main() -> None:
 
     md = render_markdown(results, placebo_p, {
         **vars(args), "n_assets": funding.shape[1],
-        "lo": funding.index[0].date(), "hi": funding.index[-1].date(),
+        "lo": oos_funding.index[0].date(), "hi": oos_funding.index[-1].date(),
     })
     Path(args.out).write_text(md, encoding="utf-8")
     print(f"-> {args.out}")

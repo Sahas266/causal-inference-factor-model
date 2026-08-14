@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from datetime import timedelta, timezone
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import numpy as np
@@ -15,6 +16,7 @@ from causal_portfolio.models.causal_daily import (
     MODEL_HISTORY_START,
     MODEL_SPEC_SHA256,
     VALIDATION_DECISION_START,
+    VALIDATION_MARK_TIMEZONE,
     VALIDATION_START,
     VALIDATION_OBSERVATIONS,
     _required_snapshot_start,
@@ -31,6 +33,15 @@ from causal_portfolio.models.causal_daily import (
     validate_model_signature,
     write_target,
 )
+
+
+def _validation_mark(day: pd.Timestamp) -> datetime:
+    return (
+        pd.Timestamp(day)
+        .tz_localize(VALIDATION_MARK_TIMEZONE)
+        .replace(hour=9, minute=54)
+        .to_pydatetime()
+    )
 
 
 def _source_panel(n: int = 2400) -> pd.DataFrame:
@@ -79,7 +90,7 @@ def _model_frames(*, helpful_signal: bool = True):
         if next_date in simple_returns.index:
             simple_returns.loc[next_date] += direction * 0.004 * value
     simple_returns = simple_returns.clip(-0.05, 0.05)
-    returns = np.log1p(simple_returns).to_frame()
+    returns = simple_returns.to_frame()
     prices = pd.DataFrame(
         {MODEL_ASSET: 100.0 * (1.0 + simple_returns).cumprod()},
         index=returns.index,
@@ -90,9 +101,10 @@ def _model_frames(*, helpful_signal: bool = True):
 def test_model_signature_is_the_data_supported_lagged_dag_v2_edge():
     signature = validate_model_signature()
 
-    assert signature["version"] == "dag_v2_causal_daily_2026_08_12"
+    assert signature["version"] == "dag_v2_causal_daily_2026_08_14"
     assert signature["spec_sha256"] == MODEL_SPEC_SHA256
-    assert signature["validation_start"] == "2026-08-14"
+    assert signature["implementation_sha256"] == causal_daily.MODEL_IMPLEMENTATION_SHA256
+    assert signature["validation_start"] == "2026-08-16"
     assert signature["treatment"] == "chain_congestion"
     assert signature["outcome"] == "btc_return"
     assert signature["lag_days"] == 1
@@ -151,7 +163,7 @@ def test_forward_validation_rejects_a_missing_calendar_outcome():
     assert "missing return date" in validation.reason
 
 
-def test_forward_validation_converts_loader_log_returns_to_trading_returns():
+def test_forward_validation_uses_loader_simple_returns_directly():
     outcomes = pd.date_range(
         VALIDATION_START,
         periods=VALIDATION_OBSERVATIONS,
@@ -160,7 +172,7 @@ def test_forward_validation_converts_loader_log_returns_to_trading_returns():
     decisions = outcomes - pd.Timedelta(days=1)
     signal = pd.Series(0.0, index=decisions)
     returns = pd.DataFrame(
-        {"btc_return": np.log1p(np.full(VALIDATION_OBSERVATIONS, 0.01))},
+        {"btc_return": np.full(VALIDATION_OBSERVATIONS, 0.01)},
         index=outcomes,
     )
 
@@ -173,7 +185,7 @@ def test_forward_validation_converts_loader_log_returns_to_trading_returns():
 
 def test_signal_ledger_is_hash_chained_and_immutable(tmp_path):
     ledger = tmp_path / "signals.jsonl"
-    first_now = VALIDATION_DECISION_START.to_pydatetime().replace(tzinfo=timezone.utc)
+    first_now = _validation_mark(VALIDATION_DECISION_START)
     first = record_signal_observation(
         ledger,
         now=first_now,
@@ -192,6 +204,7 @@ def test_signal_ledger_is_hash_chained_and_immutable(tmp_path):
     loaded = load_signal_ledger(ledger)
 
     assert loaded == [first, second]
+    assert first["price_date"] == first["decision_date"]
     assert second["previous_record_sha256"] == first["record_sha256"]
     assert evaluate_signal_ledger(loaded).n_available == 1
     with pytest.raises(ValueError, match="immutable causal decision conflicts"):
@@ -207,6 +220,58 @@ def test_signal_ledger_is_hash_chained_and_immutable(tmp_path):
     ledger.write_text(tampered, encoding="utf-8")
     with pytest.raises(ValueError, match="hash mismatch"):
         load_signal_ledger(ledger)
+
+
+def test_signal_ledger_serializes_concurrent_same_day_writers(tmp_path):
+    ledger = tmp_path / "signals.jsonl"
+    now = _validation_mark(VALIDATION_DECISION_START)
+
+    def append():
+        return record_signal_observation(
+            ledger,
+            now=now,
+            source_date=VALIDATION_DECISION_START - pd.Timedelta(days=1),
+            signal_z=0.25,
+            btc_reference_price=100.0,
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        records = list(pool.map(lambda _index: append(), range(2)))
+
+    assert records[0] == records[1]
+    assert len(load_signal_ledger(ledger)) == 1
+    assert len(ledger.read_text(encoding="utf-8").splitlines()) == 1
+
+
+def test_signal_ledger_rejects_a_late_noncanonical_mark(tmp_path):
+    with pytest.raises(ValueError, match="registered 09:54"):
+        record_signal_observation(
+            tmp_path / "signals.jsonl",
+            now=_validation_mark(VALIDATION_DECISION_START) + timedelta(hours=1),
+            source_date=VALIDATION_DECISION_START - pd.Timedelta(days=1),
+            signal_z=0.25,
+            btc_reference_price=100.0,
+        )
+
+
+def test_signal_ledger_restarts_after_a_missed_decision():
+    records = []
+    for offset in (0, 1, 3, 4):
+        decision_date = VALIDATION_DECISION_START + pd.Timedelta(days=offset)
+        records.append(
+            {
+                "decision_date": decision_date.date().isoformat(),
+                "signal_z": 0.0,
+                "exposure_multiplier": 1.0,
+                "btc_reference_price": 100.0 + offset,
+            }
+        )
+
+    validation = evaluate_signal_ledger(records)
+
+    assert validation.status == "pending"
+    assert validation.n_available == 1
+    assert "restarted" in validation.reason
 
 
 def test_signal_ledger_validation_uses_first_180_mark_to_mark_outcomes():
@@ -237,12 +302,61 @@ def test_signal_ledger_validation_uses_first_180_mark_to_mark_outcomes():
     )
 
 
+def test_signal_ledger_gate_requires_post_cost_sharpe_lift():
+    records = []
+    price = 100.0
+    for index in range(VALIDATION_OBSERVATIONS + 1):
+        signal_z = 2.0 if index % 2 == 0 else -2.0
+        if index:
+            previous_signal = 2.0 if (index - 1) % 2 == 0 else -2.0
+            price *= 1.0 + 0.0001 * previous_signal
+        decision_date = VALIDATION_DECISION_START + pd.Timedelta(days=index)
+        records.append(
+            {
+                "decision_date": decision_date.date().isoformat(),
+                "signal_z": signal_z,
+                "exposure_multiplier": float(exposure_from_signal(signal_z)),
+                "btc_reference_price": price,
+            }
+        )
+
+    validation = evaluate_signal_ledger(records)
+
+    assert validation.sharpe_lift >= 0.10
+    assert validation.net_sharpe_lift_5bps < 0.10
+    assert validation.passed is False
+    assert validation.status == "failed"
+
+
 def test_failed_forward_validation_blocks_target_generation():
     panel, returns, prices, _ = _model_frames(helpful_signal=False)
     now = prices.index[-1].to_pydatetime().replace(tzinfo=timezone.utc)
 
     with pytest.raises(CausalModelNotDeployable, match="not deployable"):
         build_causal_target(panel, returns, prices, now=now)
+
+
+def test_unvalidated_override_writes_a_non_executable_diagnostic(tmp_path):
+    panel, returns, prices, _ = _model_frames(helpful_signal=False)
+    now = prices.index[-1].to_pydatetime().replace(tzinfo=timezone.utc)
+    result = build_causal_target(
+        panel,
+        returns,
+        prices,
+        now=now,
+        allow_unvalidated_edge=True,
+    )
+
+    write_target(
+        result,
+        target_path=tmp_path / "diagnostic.json",
+        expected_next_rebalance=now + timedelta(days=1),
+        metadata={},
+    )
+    target = load_target_snapshot(tmp_path / "diagnostic.json")
+
+    assert target.metadata["execution_eligible"] is False
+    assert target.metadata["forward_validation"]["passed"] is False
 
 
 def test_causal_target_is_lagged_scaled_fresh_and_loadable(tmp_path):
@@ -279,7 +393,7 @@ def test_causal_target_is_lagged_scaled_fresh_and_loadable(tmp_path):
     assert loaded.metadata["forward_validation"]["passed"] is True
     assert (
         loaded.metadata["model_signature"]["version"]
-        == "dag_v2_causal_daily_2026_08_12"
+        == "dag_v2_causal_daily_2026_08_14"
     )
 
 
@@ -350,7 +464,7 @@ def test_snapshot_overlap_uses_oldest_required_series(tmp_path):
         ("coinmetrics", "btc", "FeeTotNtv", "2026-08-10"),
         ("coinmetrics", "doge", "FeeTotNtv", "2026-08-08"),
         ("coinmetrics", "eth", "FeeTotNtv", "2026-08-09"),
-        ("artemis", "btc", "price", "2026-08-11"),
+        ("coinmetrics", "btc", "price", "2026-08-11"),
     ]
     connection.executemany("INSERT INTO asset_metrics VALUES (?, ?, ?, ?)", rows)
     connection.close()
@@ -397,6 +511,89 @@ def test_causal_submission_is_long_only_and_uses_standard_policy(tmp_path, monke
     assert captured["acknowledge"] is False
 
 
+@pytest.mark.parametrize(
+    ("post_submit_error", "audit_error", "message"),
+    [
+        ("unresolved reconciliation drift", None, "not verified"),
+        (None, "disk full", "audit append failed"),
+    ],
+)
+def test_causal_submission_surfaces_unverified_or_unaudited_results(
+    tmp_path,
+    monkeypatch,
+    post_submit_error,
+    audit_error,
+    message,
+):
+    target_path = tmp_path / "target.json"
+    target_path.write_text(
+        '{"btc": 0.05, "_meta": {"rebalance_date": "2026-08-11"}}',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        causal_daily,
+        "execute_model_target",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            submitted=True,
+            error=None,
+            response={"status": "ok"},
+            post_submit_error=post_submit_error,
+            audit_error=audit_error,
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match=message):
+        causal_daily._submit_target(build_parser().parse_args([]), target_path)
+
+
+@pytest.mark.parametrize(
+    ("submitted", "drifts", "accepted"),
+    [
+        (False, [], False),
+        (True, [{"coin": "BTC", "drift_usd": 25.0}], False),
+        (True, [], True),
+    ],
+)
+def test_rppca_reference_requires_a_submitted_successful_audit(
+    tmp_path, monkeypatch, submitted, drifts, accepted
+):
+    from causal_portfolio.execution import audit
+
+    monkeypatch.setattr(audit, "LOG_DIR", tmp_path / "logs")
+    reference_path = tmp_path / "rppca.json"
+    _write_rppca_reference(reference_path)
+    reference = load_target_snapshot(reference_path)
+    audit.LOG_DIR.mkdir(parents=True, exist_ok=True)
+    audit_path = audit.LOG_DIR / "rebalance-2026-07-30.jsonl"
+    audit_path.write_text(
+        causal_daily.json.dumps(
+            {
+                "network": "testnet",
+                "target_id": reference.target_id,
+                "submitted": submitted,
+                "error": None,
+                "post_submit_error": None,
+                "drifts": drifts,
+                "post_state": {"address": "0xtest"},
+                "plan": {
+                    "current_state": {"address": "0xtest"},
+                    "target_snapshot": {
+                        "strategy": causal_daily.RP_PCA_STRATEGY_NAME,
+                        "weights": reference.weights,
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    found = causal_daily._find_successful_reference_audit(
+        reference, network="testnet", expected_address="0xtest"
+    )
+
+    assert found == (audit_path if accepted else None)
+
+
 def test_rppca_retirement_is_audited_and_marked_once(tmp_path, monkeypatch):
     marker = tmp_path / "retired.json"
     reference = tmp_path / "rppca.json"
@@ -414,6 +611,11 @@ def test_rppca_retirement_is_audited_and_marked_once(tmp_path, monkeypatch):
     calls = []
     state = SimpleNamespace(address="0xtest", positions={})
     monkeypatch.setenv("HYPERLIQUID_WALLET_ADDRESS", state.address)
+    monkeypatch.setattr(
+        causal_daily,
+        "_find_successful_reference_audit",
+        lambda *_args, **_kwargs: tmp_path / "rebalance-audit.jsonl",
+    )
 
     def fake_execute(target, config, *, acknowledge_mainnet=False):
         calls.append((target, config, acknowledge_mainnet))
@@ -429,6 +631,7 @@ def test_rppca_retirement_is_audited_and_marked_once(tmp_path, monkeypatch):
     monkeypatch.setattr(causal_daily, "execute_model_target", fake_execute)
 
     assert retire_rppca_positions(args, now=now) == marker
+    reference.unlink()
     assert retire_rppca_positions(args, now=now) == marker
     payload = causal_daily.json.loads(marker.read_text(encoding="utf-8"))
     assert payload["status"] == "retired"
@@ -461,9 +664,14 @@ def test_rppca_retirement_does_not_mark_unverified_positions(tmp_path, monkeypat
     now = pd.Timestamp("2026-08-11T20:00:00Z").to_pydatetime()
     state = SimpleNamespace(
         address="0xtest",
-        positions={"ETH": SimpleNamespace(notional_usd=25.0)},
+        positions={"ETH": SimpleNamespace(size=0.01, notional_usd=0.0)},
     )
     monkeypatch.setenv("HYPERLIQUID_WALLET_ADDRESS", state.address)
+    monkeypatch.setattr(
+        causal_daily,
+        "_find_successful_reference_audit",
+        lambda *_args, **_kwargs: tmp_path / "rebalance-audit.jsonl",
+    )
     monkeypatch.setattr(
         causal_daily,
         "execute_model_target",
@@ -480,6 +688,19 @@ def test_rppca_retirement_does_not_mark_unverified_positions(tmp_path, monkeypat
     with pytest.raises(RuntimeError, match="left open positions"):
         retire_rppca_positions(args, now=now)
     assert not marker.exists()
+
+
+def test_rppca_retirement_rejects_an_unaudited_reference(tmp_path, monkeypatch):
+    reference = tmp_path / "rppca.json"
+    _write_rppca_reference(reference)
+    args = build_parser().parse_args(["--rppca-reference-target", str(reference)])
+    monkeypatch.setenv("HYPERLIQUID_WALLET_ADDRESS", "0xtest")
+
+    with pytest.raises(ValueError, match="no successful execution audit"):
+        retire_rppca_positions(
+            args,
+            now=pd.Timestamp("2026-08-11T20:00:00Z").to_pydatetime(),
+        )
 
 
 def test_rppca_retirement_marker_is_bound_to_wallet(tmp_path, monkeypatch):

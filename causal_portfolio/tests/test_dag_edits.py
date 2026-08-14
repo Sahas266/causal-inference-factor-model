@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 import networkx as nx
 import pytest
 
@@ -20,6 +22,10 @@ from causal_portfolio.scm.dag_edits import (
     validate_new_edge,
 )
 from causal_portfolio.scm.graph import EdgeKind, NodeKind
+from causal_portfolio.scm.identification import (
+    IdentificationMethod,
+    IdentificationResult,
+)
 
 
 def _dag() -> nx.DiGraph:
@@ -98,6 +104,14 @@ def test_a_legal_edge_validates_clean_and_keeps_the_graph_acyclic():
     assert nx.is_directed_acyclic_graph(edited)
 
 
+def test_stale_saved_edge_cannot_cycle_a_regenerated_base():
+    dag = _dag()
+    dag.add_edge("f2", "f1", kind=EdgeKind.CAUSAL)
+
+    with pytest.raises(ValueError, match="would create a cycle"):
+        apply_edits(dag, DagEdits(added=(("f1", "f2"),)))
+
+
 @pytest.mark.parametrize("source,target,fragment", [
     ("f1", "f1", "own node"),
     ("nope", "f1", "unknown node"),
@@ -119,9 +133,9 @@ def test_edge_rows_tag_operator_edges():
 
 
 class _Result:
-    def __init__(self, treatment, outcome, identifiable, strategy):
+    def __init__(self, treatment, outcome, identified, method):
         self.treatment, self.outcome = treatment, outcome
-        self.identifiable, self.strategy = identifiable, strategy
+        self.identified, self.method = identified, method
 
 
 def test_diff_reports_gained_lost_and_strategy_changes():
@@ -145,6 +159,19 @@ def test_diff_is_empty_when_nothing_changed():
     results = [_Result("f1", "btc_return", True, "backdoor")]
     assert diff_identification(results, results) == {
         "gained": [], "lost": [], "changed": [],
+    }
+
+
+def test_diff_uses_the_real_identification_result_contract():
+    before = [IdentificationResult(
+        "f1", "btc_return", False, IdentificationMethod.NOT_IDENTIFIED,
+    )]
+    after = [IdentificationResult(
+        "f1", "btc_return", True, IdentificationMethod.BACKDOOR,
+    )]
+
+    assert diff_identification(before, after) == {
+        "gained": ["f1 -> btc_return"], "lost": [], "changed": [],
     }
 
 
@@ -243,6 +270,23 @@ def test_missing_and_corrupt_workspace_files_read_as_empty(tmp_path):
     bad.write_text("{not json", encoding="utf-8")
     assert load_workspaces(bad) == {}
     assert read_workspace("anything", bad) is None
+
+
+@pytest.mark.parametrize("edits", [
+    [],
+    {"added": [["only-one"]]},
+    {"removed": "not-a-list"},
+    {"added_nodes": [["node", 123]]},
+])
+def test_malformed_workspace_schema_is_ignored(tmp_path, edits):
+    path = tmp_path / "bad-schema.json"
+    path.write_text(
+        json.dumps({"bad": {"source": "cpcm", "edits": edits}}),
+        encoding="utf-8",
+    )
+
+    assert load_workspaces(path) == {}
+    assert read_workspace("bad", path) is None
 
 
 def test_delete_workspace(tmp_path):

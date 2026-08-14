@@ -26,7 +26,6 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
-from datetime import datetime, timezone
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -58,39 +57,6 @@ def _local_loader(db_path: str | None):
     return DuckDBCPCMDataLoader(
         db_path=str(db_path or DEFAULT_LOCAL_DB), read_only=False
     )
-
-
-def _latest_local_per_provider(db_path: str | None) -> dict[str, str]:
-    """Latest local timestamp per provider, minus a day of overlap.
-
-    Re-fetching the whole history for 159 endpoints would take hours and
-    mostly rewrite rows that already exist. The one-day overlap means a
-    provider revising its most recent value still lands.
-    """
-    import duckdb
-    from datetime import timedelta
-
-    from causal_portfolio.data import DEFAULT_LOCAL_DB
-
-    try:
-        con = duckdb.connect(str(db_path or DEFAULT_LOCAL_DB), read_only=True)
-    except Exception as exc:
-        logger.warning("cannot read local watermarks: %s", exc)
-        return {}
-    try:
-        rows = con.execute(
-            "select provider, max(time) from asset_metrics group by provider"
-        ).fetchall()
-    except Exception:
-        return {}
-    finally:
-        con.close()
-    out = {}
-    for provider, latest in rows:
-        if latest is None:
-            continue
-        out[provider] = (latest.date() - timedelta(days=1)).isoformat()
-    return out
 
 
 def _normalize(records: list[dict], provider_name: str, provider_config: dict) -> list[dict]:
@@ -146,8 +112,7 @@ def run(
     if limit:
         jobs = jobs[:limit]
     if not jobs:
-        logger.warning("no matching endpoint configs")
-        return 0
+        raise RuntimeError("no matching endpoint configs")
 
     # Providers are stateful and hold their API session, so build each once —
     # the orchestrator does the same. A provider that cannot initialize (no
@@ -163,18 +128,11 @@ def run(
         except Exception as exc:
             logger.error("provider %s unavailable: %s", provider_name, exc)
     if not live:
-        logger.error("no provider could be initialized")
-        return 0
-
-    local_since = {} if start else _latest_local_per_provider(db_path)
-    if local_since:
-        logger.info(
-            "resuming from local data: %s",
-            ", ".join(f"{k}={v}" for k, v in sorted(local_since.items())),
-        )
+        raise RuntimeError("no provider could be initialized")
 
     loader = _local_loader(db_path)
-    written = failures = 0
+    written = 0
+    failures = sum(1 for provider_name, *_rest in jobs if provider_name not in live)
     try:
         for provider_name, endpoint, provider_config in jobs:
             endpoint_id = endpoint.get("endpoint_id", "?")
@@ -186,12 +144,11 @@ def run(
             # bring local data up to today, and most endpoint configs still
             # carry a stale hardcoded end.
             end_time = _parse_date_range_bound(end or "latest", 23)
-            # Start incrementally from what is already local, so re-running is
-            # cheap and idempotent. Falls back to the config's start on an
-            # empty table. Overlap by a day to catch provider revisions.
+            # A provider-wide watermark is unsafe: one current series can hide
+            # a missing or stale sibling endpoint. Replay from this endpoint's
+            # configured start unless the operator supplies an explicit bound.
             start_time = _parse_date_range_bound(
                 start
-                or local_since.get(provider_name)
                 or provider_config.get("actual_start")
                 or endpoint.get("date_range", {}).get("start"),
                 0,
@@ -202,6 +159,7 @@ def run(
                     provider_name, endpoint_id,
                     start_time.date(), end_time.date(),
                 )
+                failures += 1
                 continue
             rows = 0
             try:
@@ -225,6 +183,10 @@ def run(
         loader.close()
 
     logger.info("total rows upserted: %d (%d endpoint failures)", written, failures)
+    if failures:
+        raise RuntimeError(
+            f"local backfill failed for {failures} endpoint(s) after {written} row(s)"
+        )
     return written
 
 
@@ -278,14 +240,18 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     logger.info("running providers: %s", ", ".join(sorted(runnable)))
-    run(
-        runnable,
-        start=args.start,
-        end=args.end,
-        db_path=args.db_path,
-        config_dir=config_dir,
-        limit=args.limit,
-    )
+    try:
+        run(
+            runnable,
+            start=args.start,
+            end=args.end,
+            db_path=args.db_path,
+            config_dir=config_dir,
+            limit=args.limit,
+        )
+    except Exception as exc:
+        logger.error("local backfill failed: %s", exc)
+        return 1
     return 0
 
 

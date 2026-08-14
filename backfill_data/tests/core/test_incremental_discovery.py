@@ -237,3 +237,15 @@ def test_causal_configs_keep_dynamic_end_after_generation():
         )
         assert endpoint["date_range"]["end"] == "latest"
         assert entries[asset]["date_range"]["end"] == "latest"
+
+
+def test_active_dune_configs_never_freeze_at_a_past_end_date():
+    endpoints = Path(__file__).resolve().parents[2] / "config" / "endpoints"
+    frozen = []
+    for path in iter_endpoint_config_files(endpoints):
+        config = json.loads(path.read_text(encoding="utf-8"))
+        if any(provider.get("name") == "dune" for provider in config["providers"]):
+            if config["date_range"]["end"] != "latest":
+                frozen.append(path.relative_to(endpoints).as_posix())
+
+    assert frozen == []

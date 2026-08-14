@@ -164,17 +164,22 @@ def cmd_execute(args) -> int:
     if result.error:
         print(f"\nERROR: {result.error}", file=sys.stderr)
         return 2
+    verification_failed = False
     if result.post_submit_error:
+        verification_failed = True
         print(
             f"\nWARNING: submission completed but post-submit checks failed: "
             f"{result.post_submit_error}",
             file=sys.stderr,
         )
     if result.audit_error:
+        verification_failed = True
         print(
             f"\nERROR: submission completed but audit append failed: {result.audit_error}",
             file=sys.stderr,
         )
+    if verification_failed:
+        return 3
     if not getattr(result, "submitted", True):
         reason = getattr(result, "cost_gate_reason", None) or "no submission required"
         print(f"\nNot submitted: {reason}")

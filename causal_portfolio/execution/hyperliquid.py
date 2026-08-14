@@ -801,6 +801,19 @@ def _execute_plan_inner(
             submitted_orders=[],
         )
 
+    if not adapter.config.dry_run and plan.target_snapshot is not None:
+        metadata = plan.target_snapshot.metadata
+        validation = metadata.get("forward_validation")
+        if metadata.get("execution_eligible") is False or (
+            isinstance(validation, dict) and validation.get("passed") is not True
+        ):
+            return SubmitResult(
+                plan=plan,
+                submitted=False,
+                error="target metadata marks this model output as non-executable",
+                submitted_orders=[],
+            )
+
     if adapter.config.dry_run:
         logger.info("DRY RUN — not submitting %d orders", len(plan.orders))
         return SubmitResult(
@@ -941,6 +954,20 @@ def _execute_plan_inner(
                 )
         else:
             adapter.cancel_all_open()
+            open_order_ids = list(adapter.fetch_open_order_ids())
+            if open_order_ids:
+                return SubmitResult(
+                    plan=plan,
+                    submitted=False,
+                    error=(
+                        "cancel confirmation failed; open order ids remain: "
+                        f"{open_order_ids}"
+                    ),
+                    cost_estimate=cost_estimate,
+                    cost_gate_reason=cost_gate_reason,
+                    submitted_orders=[],
+                    completeness_ratio=completeness_ratio,
+                )
 
         # Re-fetch immediately before submission. For normal execution this
         # catches cancel/fill races; decommission mode refuses all resting
@@ -1039,6 +1066,13 @@ def _execute_plan_inner(
                 for error in (post_submit_error, decommission_error)
                 if error
             ) or None
+        if drifts:
+            drift_error = "unresolved reconciliation drift: " + format_drift_summary(
+                drifts
+            )
+            post_submit_error = "; ".join(
+                error for error in (post_submit_error, drift_error) if error
+            )
         return SubmitResult(plan=plan, submitted=True,
                             response=response, post_state=post, drifts=drifts,
                             post_submit_error=post_submit_error, repair=repair,
@@ -1071,6 +1105,10 @@ def _account_decommission_state_error(
     require_flat: bool,
 ) -> str | None:
     expected = dict(config.account_decommission_expected_sides)
+    if not math.isfinite(state.account_value_usd) or not math.isfinite(
+        state.margin_used_usd
+    ):
+        return "account decommission state contains non-finite account values"
     if state.address.casefold() != str(
         config.account_decommission_expected_address
     ).casefold():
@@ -1082,6 +1120,16 @@ def _account_decommission_state_error(
     unexpected = sorted(set(state.positions) - set(expected))
     if unexpected:
         return f"account contains non-RP-PCA positions: {unexpected}"
+    invalid = sorted(
+        coin
+        for coin, position in state.positions.items()
+        if not all(
+            math.isfinite(value)
+            for value in (position.size, position.entry_px, position.notional_usd)
+        )
+    )
+    if invalid:
+        return f"RP-PCA positions contain non-finite values: {invalid}"
     wrong_side = {
         coin: position.size
         for coin, position in state.positions.items()
@@ -1091,9 +1139,9 @@ def _account_decommission_state_error(
         return f"RP-PCA position side changed: {wrong_side}"
     if require_flat:
         remaining = {
-            coin: position.notional_usd
+            coin: position.size
             for coin, position in state.positions.items()
-            if abs(position.notional_usd) > 1e-6
+            if abs(position.size) > 1e-12
         }
         if remaining:
             return f"open positions remain: {remaining}"

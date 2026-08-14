@@ -144,7 +144,7 @@ def main(argv: list[str] | None = None) -> int:
             logger.warning("%-10s %-34s %s", query_id, endpoint_id[:34], state)
 
     logger.info("warmed %d, already cached %d, failed %d", ok, skipped, bad)
-    return 0 if (ok or skipped) else 1
+    return 1 if bad else 0
 
 
 if __name__ == "__main__":

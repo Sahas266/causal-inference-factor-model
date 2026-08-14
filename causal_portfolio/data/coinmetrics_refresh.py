@@ -113,27 +113,44 @@ def refresh_causal_sources(
     rows = _metric_rows(records)
     if not rows:
         raise ValueError("Coin Metrics returned no causal source rows")
+    start_date = datetime.fromisoformat(start).date()
     end_date = datetime.fromisoformat(end).date()
     latest = {}
+    observed = set()
     for row in rows:
         key = (row["asset"], row["metric"])
         date = datetime.fromisoformat(
             str(row["time"]).replace("Z", "+00:00")
         ).date()
+        observed.add((*key, date))
         latest[key] = max(latest.get(key, date), date)
     required = {(asset, "FeeTotNtv") for asset in FACTOR_ASSETS} | {
         ("btc", "price")
     }
     missing = sorted(required - set(latest))
     earliest_allowed = end_date - timedelta(days=max(0, max_lag_days))
+    expected_dates = (
+        {
+            start_date + timedelta(days=offset)
+            for offset in range((earliest_allowed - start_date).days + 1)
+        }
+        if earliest_allowed >= start_date
+        else set()
+    )
+    gaps = sorted(
+        (asset, metric, date.isoformat())
+        for asset, metric in required
+        for date in expected_dates
+        if (asset, metric, date) not in observed
+    )
     stale = sorted(
         key for key in required
         if key in latest and latest[key] < earliest_allowed
     )
-    if missing or stale:
+    if missing or stale or gaps:
         raise ValueError(
             "Coin Metrics causal refresh incomplete: "
-            f"missing={missing}, behind={stale}, end={end}, "
+            f"missing={missing}, behind={stale}, gaps={gaps[:8]}, end={end}, "
             f"max_lag_days={max_lag_days}"
         )
 

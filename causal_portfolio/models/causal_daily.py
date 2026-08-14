@@ -3,7 +3,7 @@
 RP-PCA was only an execution placeholder.  The actual causal model is DAG v2:
 the frozen candidate edge is the one-day-lagged AR(1) innovation in aggregate
 chain fees to next-day BTC return. The runner reproduces the corrected rule,
-checks the prospective holdout registered on 2026-08-12, and refuses to emit
+checks the prospective holdout registered on 2026-08-14, and refuses to emit
 or execute a target until the causal edge earns deployment.
 """
 
@@ -15,10 +15,13 @@ import json
 import logging
 import math
 import os
+import threading
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
@@ -40,7 +43,7 @@ FACTOR_METRIC = "FeeTotNtv"
 FACTOR_COLUMNS = tuple(f"{asset}_{FACTOR_METRIC}" for asset in FACTOR_ASSETS)
 FACTOR_NAME = "chain_congestion"
 MODEL_HISTORY_START = "2022-01-01"
-MODEL_REGISTERED_AT = pd.Timestamp("2026-08-12")
+MODEL_REGISTERED_AT = pd.Timestamp("2026-08-14")
 VALIDATION_DECISION_START = MODEL_REGISTERED_AT + pd.Timedelta(days=1)
 VALIDATION_START = VALIDATION_DECISION_START + pd.Timedelta(days=1)
 VALIDATION_OBSERVATIONS = 180
@@ -53,11 +56,22 @@ STRATEGY_NAME = "CPCM DAG v2 causal forward validation"
 RP_PCA_STRATEGY_NAME = "RP-PCA daily tangency"
 DEFAULT_RP_PCA_REFERENCE_TARGET = Path("tmp/rppca_daily_target.json")
 DEFAULT_SIGNAL_LEDGER = Path(
-    "causal_portfolio/execution/state/cpcm_causal_signal_ledger.jsonl"
+    "causal_portfolio/execution/state/"
+    "cpcm_causal_signal_ledger_2026_08_14_mainnet_marks.jsonl"
+)
+VALIDATION_PRICE_SOURCE = "hyperliquid:mainnet:BTC:mid"
+VALIDATION_MARK_TIMEZONE = "America/Los_Angeles"
+VALIDATION_MARK_HOUR = 9
+VALIDATION_MARK_MINUTE = 54
+VALIDATION_MARK_TOLERANCE_MINUTES = 15
+MODEL_IMPLEMENTATION_FILES = (
+    "models/causal_daily.py",
+    "backtest/metrics.py",
+    "scm/graph.py",
 )
 
 MODEL_SPEC = {
-    "version": "dag_v2_causal_daily_2026_08_12",
+    "version": "dag_v2_causal_daily_2026_08_14",
     "registered_at": MODEL_REGISTERED_AT.date().isoformat(),
     "history_start": MODEL_HISTORY_START,
     "factor": FACTOR_NAME,
@@ -69,15 +83,43 @@ MODEL_SPEC = {
     "signal_lag_calendar_days": 1,
     "exposure_rule": "clip(1 + 0.5 * z, 0, 2)",
     "outcome": "next_scheduled_decision_btc_mark_to_mark_return",
+    "validation_price_source": VALIDATION_PRICE_SOURCE,
+    "validation_mark": {
+        "timezone": VALIDATION_MARK_TIMEZONE,
+        "local_time": f"{VALIDATION_MARK_HOUR:02d}:{VALIDATION_MARK_MINUTE:02d}",
+        "tolerance_minutes": VALIDATION_MARK_TOLERANCE_MINUTES,
+    },
+    "validation_cost_bps": VALIDATION_COST_BPS,
+    "deployment_gate": "net_sharpe_lift",
+    "missing_decision_policy": "reset_until_181_consecutive_marks",
     "observation_store": "append_only_sha256_chain",
+    "implementation_files": MODEL_IMPLEMENTATION_FILES,
     "decision_start": VALIDATION_DECISION_START.date().isoformat(),
     "validation_start": VALIDATION_START.date().isoformat(),
     "validation_observations": VALIDATION_OBSERVATIONS,
     "validation_required_sharpe_lift": VALIDATION_SHARPE_LIFT,
 }
+_implementation_hasher = hashlib.sha256()
+for _relative_path in MODEL_IMPLEMENTATION_FILES:
+    _implementation_path = Path(__file__).resolve().parents[1] / _relative_path
+    _implementation_hasher.update(_relative_path.encode("utf-8") + b"\0")
+    _implementation_hasher.update(
+        _implementation_path.read_text(encoding="utf-8")
+        .replace("\r\n", "\n")
+        .encode("utf-8")
+    )
+MODEL_IMPLEMENTATION_SHA256 = _implementation_hasher.hexdigest()
 MODEL_SPEC_SHA256 = hashlib.sha256(
-    json.dumps(MODEL_SPEC, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    json.dumps(
+        {**MODEL_SPEC, "implementation_sha256": MODEL_IMPLEMENTATION_SHA256},
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
 ).hexdigest()
+
+# ponytail: one lock is enough for one daily ledger; split per ledger only if
+# concurrent independent models ever become a measured bottleneck.
+_SIGNAL_LEDGER_THREAD_LOCK = threading.Lock()
 
 
 class CausalModelNotDeployable(RuntimeError):
@@ -175,6 +217,7 @@ def validate_model_signature() -> dict[str, object]:
     return {
         "version": MODEL_SPEC["version"],
         "spec_sha256": MODEL_SPEC_SHA256,
+        "implementation_sha256": MODEL_IMPLEMENTATION_SHA256,
         "registered_at": MODEL_SPEC["registered_at"],
         "validation_start": MODEL_SPEC["validation_start"],
         "treatment": FACTOR_NAME,
@@ -274,9 +317,48 @@ def _signal_record_hash(payload: dict[str, object]) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
-def load_signal_ledger(path: str | Path) -> list[dict[str, object]]:
-    """Load and authenticate the append-only prospective signal ledger."""
-    ledger_path = Path(path)
+def _is_validation_mark_time(value: datetime) -> bool:
+    if value.tzinfo is None or value.utcoffset() is None:
+        return False
+    local = value.astimezone(ZoneInfo(VALIDATION_MARK_TIMEZONE))
+    expected = VALIDATION_MARK_HOUR * 60 + VALIDATION_MARK_MINUTE
+    actual = local.hour * 60 + local.minute + local.second / 60.0
+    return (
+        local.date() == value.astimezone(timezone.utc).date()
+        and abs(actual - expected) <= VALIDATION_MARK_TOLERANCE_MINUTES
+    )
+
+
+@contextmanager
+def _signal_ledger_lock(ledger_path: Path):
+    """Serialize a ledger transaction across threads and processes."""
+    lock_path = ledger_path.with_suffix(ledger_path.suffix + ".lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with _SIGNAL_LEDGER_THREAD_LOCK, lock_path.open("a+b") as lock_file:
+        lock_file.seek(0, os.SEEK_END)
+        if lock_file.tell() == 0:
+            lock_file.write(b"\0")
+            lock_file.flush()
+        lock_file.seek(0)
+        if os.name == "nt":
+            import msvcrt
+
+            msvcrt.locking(lock_file.fileno(), msvcrt.LK_LOCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            lock_file.seek(0)
+            if os.name == "nt":
+                msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+
+def _load_signal_ledger_unlocked(ledger_path: Path) -> list[dict[str, object]]:
     if not ledger_path.exists():
         return []
     records: list[dict[str, object]] = []
@@ -301,10 +383,39 @@ def load_signal_ledger(path: str | Path) -> list[dict[str, object]]:
             raise ValueError(f"causal ledger chain mismatch on line {line_number}")
         if record.get("model_spec_sha256") != MODEL_SPEC_SHA256:
             raise ValueError(f"causal ledger model mismatch on line {line_number}")
+        if record.get("model_implementation_sha256") != MODEL_IMPLEMENTATION_SHA256:
+            raise ValueError(
+                f"causal ledger implementation mismatch on line {line_number}"
+            )
+        if record.get("price_source") != VALIDATION_PRICE_SOURCE:
+            raise ValueError(f"causal ledger price source mismatch on line {line_number}")
         decision_date = pd.Timestamp(str(record.get("decision_date"))).normalize()
         source_date = pd.Timestamp(str(record.get("source_date"))).normalize()
+        price_date = pd.Timestamp(str(record.get("price_date"))).normalize()
         if source_date != decision_date - pd.Timedelta(days=1):
             raise ValueError(f"causal ledger source lag mismatch on line {line_number}")
+        if price_date != decision_date:
+            raise ValueError(f"causal ledger price date mismatch on line {line_number}")
+        try:
+            decision_time = datetime.fromisoformat(
+                str(record["decision_utc"]).replace("Z", "+00:00")
+            )
+        except (KeyError, ValueError) as exc:
+            raise ValueError(
+                f"invalid causal ledger decision time on line {line_number}"
+            ) from exc
+        if decision_time.tzinfo is None or decision_time.utcoffset() is None:
+            raise ValueError(
+                f"causal ledger decision time lacks timezone on line {line_number}"
+            )
+        if not _is_validation_mark_time(decision_time):
+            raise ValueError(
+                f"causal ledger mark time mismatch on line {line_number}"
+            )
+        if pd.Timestamp(decision_time.astimezone(timezone.utc).date()) != decision_date:
+            raise ValueError(
+                f"causal ledger decision time/date mismatch on line {line_number}"
+            )
         if previous_date is not None and decision_date <= previous_date:
             raise ValueError(f"causal ledger dates are not increasing on line {line_number}")
         for field in ("signal_z", "exposure_multiplier", "btc_reference_price"):
@@ -317,10 +428,27 @@ def load_signal_ledger(path: str | Path) -> list[dict[str, object]]:
             raise ValueError(
                 f"causal ledger BTC price is not positive on line {line_number}"
             )
+        expected_exposure = float(exposure_from_signal(float(record["signal_z"])))
+        if not math.isclose(
+            float(record["exposure_multiplier"]),
+            expected_exposure,
+            rel_tol=0.0,
+            abs_tol=1e-12,
+        ):
+            raise ValueError(
+                f"causal ledger exposure mismatch on line {line_number}"
+            )
         records.append(record)
         previous_hash = str(stored_hash)
         previous_date = decision_date
     return records
+
+
+def load_signal_ledger(path: str | Path) -> list[dict[str, object]]:
+    """Load and authenticate the append-only prospective signal ledger."""
+    ledger_path = Path(path)
+    with _signal_ledger_lock(ledger_path):
+        return _load_signal_ledger_unlocked(ledger_path)
 
 
 def record_signal_observation(
@@ -332,12 +460,19 @@ def record_signal_observation(
     btc_reference_price: float,
 ) -> dict[str, object]:
     """Append one immutable daily decision, or return the existing exact one."""
+    if now.tzinfo is None or now.utcoffset() is None:
+        raise ValueError("causal decision time must be timezone-aware")
     decision_time = now.astimezone(timezone.utc)
     decision_date = pd.Timestamp(decision_time.date())
     if decision_date < VALIDATION_DECISION_START:
         raise CausalModelNotDeployable(
             "DAG v2 prospective registration is not active until "
             f"{VALIDATION_DECISION_START.date().isoformat()}"
+        )
+    if not _is_validation_mark_time(decision_time):
+        raise ValueError(
+            "causal decision must use the registered 09:54 America/Los_Angeles "
+            f"mark (+/-{VALIDATION_MARK_TOLERANCE_MINUTES} minutes)"
         )
     source_date = pd.Timestamp(source_date).normalize()
     if source_date != decision_date - pd.Timedelta(days=1):
@@ -351,62 +486,75 @@ def record_signal_observation(
         raise ValueError(f"invalid BTC reference price {btc_reference_price}")
 
     ledger_path = Path(path)
-    records = load_signal_ledger(ledger_path)
-    if records:
-        existing_date = pd.Timestamp(str(records[-1]["decision_date"]))
-        if existing_date == decision_date:
-            existing = records[-1]
-            if (
-                str(existing["source_date"]) != source_date.date().isoformat()
-                or not math.isclose(
-                    float(existing["signal_z"]), signal_z, rel_tol=0.0, abs_tol=1e-12
-                )
-            ):
-                raise ValueError(
-                    "immutable causal decision conflicts with revised source data"
-                )
-            return existing
-        if existing_date > decision_date:
-            raise ValueError("causal ledger already contains a later decision")
+    with _signal_ledger_lock(ledger_path):
+        records = _load_signal_ledger_unlocked(ledger_path)
+        if records:
+            existing_date = pd.Timestamp(str(records[-1]["decision_date"]))
+            if existing_date == decision_date:
+                existing = records[-1]
+                if (
+                    str(existing["source_date"]) != source_date.date().isoformat()
+                    or not math.isclose(
+                        float(existing["signal_z"]),
+                        signal_z,
+                        rel_tol=0.0,
+                        abs_tol=1e-12,
+                    )
+                    or not math.isclose(
+                        float(existing["btc_reference_price"]),
+                        btc_reference_price,
+                        rel_tol=0.0,
+                        abs_tol=1e-12,
+                    )
+                ):
+                    raise ValueError(
+                        "immutable causal decision conflicts with revised source data"
+                    )
+                return existing
+            if existing_date > decision_date:
+                raise ValueError("causal ledger already contains a later decision")
 
-    payload: dict[str, object] = {
-        "model_spec_sha256": MODEL_SPEC_SHA256,
-        "decision_date": decision_date.date().isoformat(),
-        "decision_utc": decision_time.isoformat(timespec="seconds"),
-        "source_date": source_date.date().isoformat(),
-        "signal_z": float(signal_z),
-        "exposure_multiplier": float(exposure_from_signal(signal_z)),
-        "btc_reference_price": float(btc_reference_price),
-        "previous_record_sha256": (
-            str(records[-1]["record_sha256"]) if records else None
-        ),
-    }
-    record = {**payload, "record_sha256": _signal_record_hash(payload)}
-    ledger_path.parent.mkdir(parents=True, exist_ok=True)
-    encoded = (json.dumps(record, allow_nan=False, sort_keys=True) + "\n").encode(
-        "utf-8"
-    )
-    descriptor = os.open(
-        ledger_path,
-        os.O_APPEND | os.O_CREAT | os.O_WRONLY,
-        0o600,
-    )
-    try:
-        os.write(descriptor, encoded)
-        os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
-    return record
+        payload: dict[str, object] = {
+            "model_spec_sha256": MODEL_SPEC_SHA256,
+            "model_implementation_sha256": MODEL_IMPLEMENTATION_SHA256,
+            "decision_date": decision_date.date().isoformat(),
+            "decision_utc": decision_time.isoformat(timespec="seconds"),
+            "source_date": source_date.date().isoformat(),
+            "price_date": decision_date.date().isoformat(),
+            "price_source": VALIDATION_PRICE_SOURCE,
+            "signal_z": float(signal_z),
+            "exposure_multiplier": float(exposure_from_signal(signal_z)),
+            "btc_reference_price": float(btc_reference_price),
+            "previous_record_sha256": (
+                str(records[-1]["record_sha256"]) if records else None
+            ),
+        }
+        record = {**payload, "record_sha256": _signal_record_hash(payload)}
+        ledger_path.parent.mkdir(parents=True, exist_ok=True)
+        encoded = (json.dumps(record, allow_nan=False, sort_keys=True) + "\n").encode(
+            "utf-8"
+        )
+        descriptor = os.open(
+            ledger_path,
+            os.O_APPEND | os.O_CREAT | os.O_WRONLY,
+            0o600,
+        )
+        try:
+            os.write(descriptor, encoded)
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+        return record
 
 
 def evaluate_signal_ledger(
     records: list[dict[str, object]],
 ) -> ForwardValidation:
-    """Score the first 180 outcomes from immutable scheduled decision marks."""
+    """Score the first complete run of 180 consecutive daily outcomes."""
     decision_dates = [
         pd.Timestamp(str(record["decision_date"])).normalize() for record in records
     ]
-    if decision_dates and decision_dates[0] != VALIDATION_DECISION_START:
+    if decision_dates and decision_dates[0] < VALIDATION_DECISION_START:
         return ForwardValidation(
             status="invalid_data",
             passed=False,
@@ -424,12 +572,15 @@ def evaluate_signal_ledger(
             strategy_max_drawdown=None,
             benchmark_max_drawdown=None,
             reason=(
-                "first decision must be "
-                f"{VALIDATION_DECISION_START.date().isoformat()}"
+                "first decision precedes registration: "
+                f"{decision_dates[0].date().isoformat()}"
             ),
         )
-    for left, right in zip(decision_dates, decision_dates[1:]):
-        if right != left + pd.Timedelta(days=1):
+    segment_starts = [0] if decision_dates else []
+    for index, (left, right) in enumerate(
+        zip(decision_dates, decision_dates[1:]), start=1
+    ):
+        if right <= left:
             return ForwardValidation(
                 status="invalid_data",
                 passed=False,
@@ -446,11 +597,24 @@ def evaluate_signal_ledger(
                 net_sharpe_lift_5bps=None,
                 strategy_max_drawdown=None,
                 benchmark_max_drawdown=None,
-                reason=f"missing decision date after {left.date().isoformat()}",
+                reason="decision dates are not strictly increasing",
             )
+        if right != left + pd.Timedelta(days=1):
+            segment_starts.append(index)
 
-    available = max(len(records) - 1, 0)
-    outcome_dates = decision_dates[1 : VALIDATION_OBSERVATIONS + 1]
+    segments = [
+        records[start:stop]
+        for start, stop in zip(segment_starts, segment_starts[1:] + [len(records)])
+    ]
+    selected = next(
+        (segment for segment in segments if len(segment) >= VALIDATION_OBSERVATIONS + 1),
+        segments[-1] if segments else [],
+    )
+    selected_dates = [
+        pd.Timestamp(str(record["decision_date"])).normalize() for record in selected
+    ]
+    available = max(len(selected) - 1, 0)
+    outcome_dates = selected_dates[1 : VALIDATION_OBSERVATIONS + 1]
     if available < VALIDATION_OBSERVATIONS:
         return ForwardValidation(
             status="pending",
@@ -468,9 +632,14 @@ def evaluate_signal_ledger(
             net_sharpe_lift_5bps=None,
             strategy_max_drawdown=None,
             benchmark_max_drawdown=None,
+            reason=(
+                "consecutive validation window restarted after a missed decision"
+                if len(segments) > 1
+                else None
+            ),
         )
 
-    frozen = records[: VALIDATION_OBSERVATIONS + 1]
+    frozen = selected[: VALIDATION_OBSERVATIONS + 1]
     prices = np.asarray(
         [float(record["btc_reference_price"]) for record in frozen], dtype=float
     )
@@ -486,20 +655,21 @@ def evaluate_signal_ledger(
     benchmark_sharpe = float(sharpe_ratio(benchmark))
     net_strategy_sharpe = float(sharpe_ratio(net_strategy))
     lift = strategy_sharpe - benchmark_sharpe
+    net_lift = net_strategy_sharpe - benchmark_sharpe
     return ForwardValidation(
-        status="passed" if lift >= VALIDATION_SHARPE_LIFT else "failed",
-        passed=lift >= VALIDATION_SHARPE_LIFT,
+        status="passed" if net_lift >= VALIDATION_SHARPE_LIFT else "failed",
+        passed=net_lift >= VALIDATION_SHARPE_LIFT,
         n_available=available,
         n_evaluated=VALIDATION_OBSERVATIONS,
-        start=decision_dates[1],
-        end=decision_dates[VALIDATION_OBSERVATIONS],
+        start=selected_dates[1],
+        end=selected_dates[VALIDATION_OBSERVATIONS],
         strategy_total_return=float(np.prod(1.0 + strategy) - 1.0),
         benchmark_total_return=float(np.prod(1.0 + benchmark) - 1.0),
         strategy_sharpe=strategy_sharpe,
         benchmark_sharpe=benchmark_sharpe,
         sharpe_lift=lift,
         net_strategy_sharpe_5bps=net_strategy_sharpe,
-        net_sharpe_lift_5bps=net_strategy_sharpe - benchmark_sharpe,
+        net_sharpe_lift_5bps=net_lift,
         strategy_max_drawdown=float(max_drawdown(strategy)),
         benchmark_max_drawdown=float(max_drawdown(benchmark)),
     )
@@ -606,7 +776,7 @@ def evaluate_forward_validation(
     turnover = held.diff()
     turnover.iloc[0] = held.iloc[0] - initial_exposure
     turnover = turnover.abs()
-    benchmark = np.expm1(clean_return.reindex(frozen).to_numpy(dtype=float))
+    benchmark = clean_return.reindex(frozen).to_numpy(dtype=float)
     strategy = held.to_numpy(dtype=float) * benchmark
     net_strategy = strategy - (
         turnover.to_numpy(dtype=float) * VALIDATION_COST_BPS / 10_000.0
@@ -615,9 +785,10 @@ def evaluate_forward_validation(
     benchmark_sharpe = float(sharpe_ratio(benchmark))
     net_strategy_sharpe = float(sharpe_ratio(net_strategy))
     lift = strategy_sharpe - benchmark_sharpe
+    net_lift = net_strategy_sharpe - benchmark_sharpe
     return ForwardValidation(
-        status="passed" if lift >= VALIDATION_SHARPE_LIFT else "failed",
-        passed=lift >= VALIDATION_SHARPE_LIFT,
+        status="passed" if net_lift >= VALIDATION_SHARPE_LIFT else "failed",
+        passed=net_lift >= VALIDATION_SHARPE_LIFT,
         n_available=available,
         n_evaluated=len(frozen),
         start=frozen[0],
@@ -628,7 +799,7 @@ def evaluate_forward_validation(
         benchmark_sharpe=benchmark_sharpe,
         sharpe_lift=lift,
         net_strategy_sharpe_5bps=net_strategy_sharpe,
-        net_sharpe_lift_5bps=net_strategy_sharpe - benchmark_sharpe,
+        net_sharpe_lift_5bps=net_lift,
         strategy_max_drawdown=float(max_drawdown(strategy)),
         benchmark_max_drawdown=float(max_drawdown(benchmark)),
     )
@@ -774,13 +945,13 @@ def build_causal_target(
     if not validation.passed:
         lift = (
             "unavailable"
-            if validation.sharpe_lift is None
-            else f"{validation.sharpe_lift:+.4f}"
+            if validation.net_sharpe_lift_5bps is None
+            else f"{validation.net_sharpe_lift_5bps:+.4f}"
         )
         detail = (
             "frozen forward validation "
             f"status={validation.status}, observations={validation.n_available}, "
-            f"Sharpe lift={lift}, required={VALIDATION_SHARPE_LIFT:+.2f}"
+            f"net Sharpe lift={lift}, required={VALIDATION_SHARPE_LIFT:+.2f}"
         )
         if not allow_unvalidated_edge:
             raise CausalModelNotDeployable(f"DAG v2 is not deployable: {detail}")
@@ -836,6 +1007,7 @@ def write_target(
         "signal_z": result.signal_z,
         "exposure_multiplier": result.exposure_multiplier,
         "base_weight": result.base_weight,
+        "execution_eligible": result.validation.passed,
         "forward_validation": result.validation.as_dict(),
     }
     target_path.parent.mkdir(parents=True, exist_ok=True)
@@ -877,7 +1049,8 @@ def _required_snapshot_start(db_path: Path) -> str:
             cursors.append(row[0] if row else None)
         price_row = connection.execute(
             "SELECT MAX(time) FROM asset_metrics "
-            "WHERE asset = ? AND metric IN ('price', 'PriceUSD', 'price_usd')",
+            "WHERE provider = 'coinmetrics' AND asset = ? "
+            "AND metric IN ('price', 'PriceUSD', 'price_usd')",
             [MODEL_ASSET],
         ).fetchone()
         cursors.append(price_row[0] if price_row else None)
@@ -910,7 +1083,25 @@ def refresh_local_data(
         target_db,
         start=start,
         end=end,
+        max_lag_days=0,
     )
+
+
+def _fetch_btc_reference_price() -> float:
+    """Read the registered mainnet BTC mid used for prospective scoring."""
+    from causal_portfolio.execution.hyperliquid import HLAdapter
+
+    adapter = HLAdapter(
+        ExecutionConfig(
+            testnet=False,
+            dry_run=True,
+            network_timeout_seconds=15.0,
+        )
+    )
+    price = float(adapter.fetch_mids().get("BTC", float("nan")))
+    if not math.isfinite(price) or price <= 0:
+        raise ValueError(f"invalid Hyperliquid BTC reference price {price}")
+    return price
 
 
 def _load_frames(end: str):
@@ -970,12 +1161,52 @@ def _load_rppca_reference(path: Path) -> TargetSnapshot:
     return reference
 
 
+def _find_successful_reference_audit(
+    reference: TargetSnapshot,
+    *,
+    network: str,
+    expected_address: str,
+) -> Path | None:
+    """Find an error-free execution audit for the retirement ownership target."""
+    from causal_portfolio.execution import audit
+
+    for audit_path in sorted(audit.LOG_DIR.glob("rebalance-*.jsonl"), reverse=True):
+        for line in audit_path.read_text(encoding="utf-8").splitlines():
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(record, dict):
+                continue
+            plan = record.get("plan")
+            snapshot = plan.get("target_snapshot") if isinstance(plan, dict) else None
+            state = plan.get("current_state") if isinstance(plan, dict) else None
+            post_state = record.get("post_state")
+            if (
+                record.get("target_id") == reference.target_id
+                and record.get("network") == network
+                and record.get("submitted") is True
+                and record.get("error") is None
+                and record.get("post_submit_error") is None
+                and record.get("drifts") == []
+                and isinstance(snapshot, dict)
+                and snapshot.get("strategy") == RP_PCA_STRATEGY_NAME
+                and snapshot.get("weights") == reference.weights
+                and isinstance(state, dict)
+                and str(state.get("address", "")).casefold()
+                == expected_address.casefold()
+                and isinstance(post_state, dict)
+                and str(post_state.get("address", "")).casefold()
+                == expected_address.casefold()
+            ):
+                return audit_path
+    return None
+
+
 def retire_rppca_positions(args: argparse.Namespace, *, now: datetime) -> Path:
     """Close placeholder positions once, through the audited execution path."""
     network = "mainnet" if args.mainnet else "testnet"
     expected_address = _configured_execution_address()
-    reference_path = Path(args.rppca_reference_target)
-    reference = _load_rppca_reference(reference_path)
     account_tag = hashlib.sha256(
         expected_address.casefold().encode("utf-8")
     ).hexdigest()[:12]
@@ -993,12 +1224,25 @@ def retire_rppca_positions(args: argparse.Namespace, *, now: datetime) -> Path:
             or payload.get("network") != network
             or str(payload.get("address", "")).casefold()
             != expected_address.casefold()
-            or payload.get("reference_target_id") != reference.target_id
+            or not payload.get("target_id")
+            or not payload.get("reference_target_id")
         ):
             raise RuntimeError(f"invalid RP-PCA retirement marker: {marker}")
         return marker
     if args.mainnet and not args.ack_mainnet:
         raise PermissionError("mainnet RP-PCA retirement requires --ack-mainnet")
+    reference_path = Path(args.rppca_reference_target)
+    reference = _load_rppca_reference(reference_path)
+    reference_audit = _find_successful_reference_audit(
+        reference,
+        network=network,
+        expected_address=expected_address,
+    )
+    if reference_audit is None:
+        raise ValueError(
+            "RP-PCA reference target has no successful execution audit for this "
+            f"{network} account: {reference.target_id}"
+        )
 
     target = TargetSnapshot(
         weights={ticker: 0.0 for ticker in reference.weights},
@@ -1054,9 +1298,9 @@ def retire_rppca_positions(args: argparse.Namespace, *, now: datetime) -> Path:
         raise RuntimeError("RP-PCA retirement submitted without a verified post-state")
     final_state = result.post_state or result.plan.current_state
     remaining = {
-        coin: position.notional_usd
+        coin: position.size
         for coin, position in final_state.positions.items()
-        if abs(position.notional_usd) > 1e-6
+        if not math.isfinite(position.size) or abs(position.size) > 1e-12
     }
     if remaining:
         raise RuntimeError(f"RP-PCA retirement left open positions: {remaining}")
@@ -1070,6 +1314,7 @@ def retire_rppca_positions(args: argparse.Namespace, *, now: datetime) -> Path:
         "target_id": target.target_id,
         "reference_target": str(reference_path),
         "reference_target_id": reference.target_id,
+        "reference_audit": str(reference_audit),
     }
     marker.parent.mkdir(parents=True, exist_ok=True)
     temporary = marker.with_suffix(marker.suffix + ".tmp")
@@ -1081,26 +1326,11 @@ def retire_rppca_positions(args: argparse.Namespace, *, now: datetime) -> Path:
     return marker
 
 
-def _fetch_btc_reference_price(*, testnet: bool) -> float:
-    """Read the executable BTC mid used for prospective mark-to-mark scoring."""
-    from causal_portfolio.execution.hyperliquid import HLAdapter
-
-    adapter = HLAdapter(
-        ExecutionConfig(
-            testnet=testnet,
-            dry_run=True,
-            network_timeout_seconds=15.0,
-        )
-    )
-    price = float(adapter.fetch_mids().get("BTC", float("nan")))
-    if not math.isfinite(price) or price <= 0:
-        raise ValueError(f"invalid Hyperliquid BTC reference price {price}")
-    return price
-
-
 def run_once(args: argparse.Namespace) -> CausalDailyResult | None:
     now = datetime.now(timezone.utc)
     end = args.end or now.date().isoformat()
+    if args.allow_unvalidated_edge and args.execute:
+        raise PermissionError("--allow-unvalidated-edge cannot execute orders")
     if args.retire_rppca:
         retire_rppca_positions(args, now=now)
     if args.refresh_data:
@@ -1129,20 +1359,21 @@ def run_once(args: argparse.Namespace) -> CausalDailyResult | None:
     if last_date not in signal.index:
         raise ValueError(f"no causal innovation signal for {last_date.date()}")
     signal_z = float(signal.loc[last_date])
-    reference_price = _fetch_btc_reference_price(testnet=not args.mainnet)
-    record_signal_observation(
-        args.signal_ledger,
-        now=now,
-        source_date=last_date,
-        signal_z=signal_z,
-        btc_reference_price=reference_price,
-    )
+    reference_price = _fetch_btc_reference_price()
+    if not args.allow_unvalidated_edge:
+        record_signal_observation(
+            args.signal_ledger,
+            now=datetime.now(timezone.utc),
+            source_date=last_date,
+            signal_z=signal_z,
+            btc_reference_price=reference_price,
+        )
     validation = evaluate_signal_ledger(load_signal_ledger(args.signal_ledger))
     if validation.status == "invalid_data":
         raise CausalModelNotDeployable(
             f"DAG v2 prospective ledger is invalid: {validation.reason}"
         )
-    if not validation.passed:
+    if not validation.passed and not args.allow_unvalidated_edge:
         logger.info(
             "DAG v2 prospective validation %s: %d/%d outcomes; no target",
             validation.status,
@@ -1215,7 +1446,7 @@ def run_once(args: argparse.Namespace) -> CausalDailyResult | None:
         f"Signal z: <b>{result.signal_z:+.4f}</b> | "
         f"BTC weight: <b>{result.weights[MODEL_ASSET]:.4f}</b>\n"
         f"Frozen holdout: <b>passed</b> "
-        f"(Sharpe lift {result.validation.sharpe_lift:+.3f})\n"
+        f"(net Sharpe lift {result.validation.net_sharpe_lift_5bps:+.3f})\n"
         f"{notify.format_next_rebalance(expected_next)}",
         parse_mode="HTML",
     )
@@ -1248,12 +1479,14 @@ def _submit_target(args: argparse.Namespace, target_path: Path) -> None:
     if result.error:
         raise RuntimeError(result.error)
     if result.post_submit_error:
-        logger.warning(
-            "submission completed but post-submit checks failed: %s",
-            result.post_submit_error,
+        raise RuntimeError(
+            "submission completed but target was not verified: "
+            f"{result.post_submit_error}"
         )
     if result.audit_error:
-        logger.error("submission completed but audit append failed: %s", result.audit_error)
+        raise RuntimeError(
+            f"submission completed but audit append failed: {result.audit_error}"
+        )
     if not result.submitted:
         logger.info("DAG v2 rebalance no-op: no orders submitted")
         return

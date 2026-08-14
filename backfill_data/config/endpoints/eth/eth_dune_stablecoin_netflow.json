@@ -1,11 +1,11 @@
 {
   "endpoint_id": "dune_eth_stablecoin_netflow",
-  "description": "Daily stablecoin mint/burn netflow on Ethereum from Dune (stablecoins_ethereum.transfers)",
+  "description": "Daily Ethereum stablecoin mint/burn netflow from tokens.transfers joined to Dune's maintained multichain stablecoin token list",
   "table": "asset_metrics",
   "primary_keys": ["provider", "asset", "metric", "time"],
   "date_range": {
     "start": "2021-01-01",
-    "end": "2026-01-01"
+    "end": "latest"
   },
   "providers": [
     {

@@ -55,7 +55,11 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             supabase: SupabaseSection {
-                url: "https://your-project-id.supabase.co".to_string(),
+                url: std::env::var("SUPABASE_URL")
+                    .ok()
+                    .map(|url| url.trim().to_string())
+                    .filter(|url| !url.is_empty())
+                    .unwrap_or_else(|| "https://your-project-id.supabase.co".to_string()),
                 key_env: "SUPABASE_KEY".to_string(),
             },
             data: DataSection {

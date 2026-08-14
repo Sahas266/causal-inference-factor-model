@@ -23,6 +23,51 @@ def iter_endpoint_config_files(endpoints_dir: Path):
         yield config_file
 
 
+def deduplicate_endpoint_provider_jobs(configs: List[Dict]) -> List[Dict]:
+    """Keep one deterministic copy of each exact endpoint/provider job."""
+    seen = set()
+    unique_configs = []
+    for config in configs:
+        if not config.get('providers'):
+            unique_configs.append(config)
+            continue
+        unique_providers = []
+        for index, provider in enumerate(config.get('providers', [])):
+            provider = provider.copy()
+            provider.setdefault('provider_instance_id', str(index))
+            canonical_provider = {
+                key: value
+                for key, value in provider.items()
+                if key != 'provider_instance_id'
+            }
+            key = json.dumps(
+                {
+                    'table': config.get('table'),
+                    'primary_keys': config.get('primary_keys'),
+                    'date_range': config.get('date_range'),
+                    'provider': canonical_provider,
+                },
+                sort_keys=True,
+                separators=(',', ':'),
+                default=str,
+            )
+            if key in seen:
+                logger.warning(
+                    "Skipping duplicate provider job %s[%s]",
+                    config.get('endpoint_id'),
+                    provider['provider_instance_id'],
+                )
+                continue
+            seen.add(key)
+            unique_providers.append(provider)
+
+        if unique_providers:
+            unique_config = config.copy()
+            unique_config['providers'] = unique_providers
+            unique_configs.append(unique_config)
+    return unique_configs
+
+
 class ConfigLoader:
     """Utility class for loading and validating configuration files"""
     
@@ -141,6 +186,7 @@ class ConfigLoader:
             except Exception as e:
                 logger.error(f"Failed to load endpoint config {config_file}: {e}")
         
+        configs = deduplicate_endpoint_provider_jobs(configs)
         logger.info(f"Loaded {len(configs)} endpoint configurations")
         return configs
     

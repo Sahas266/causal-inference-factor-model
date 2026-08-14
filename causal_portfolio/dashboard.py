@@ -647,7 +647,7 @@ with t_dag:
         # so the common path stays free.
         base_dag = (
             data["dag"] if source_key == "cpcm"
-            else build_base_dag(source_key, data.get("assets", []) or [])
+            else build_base_dag(source_key, data["run_config"]["assets"])
         )
         edits = st.session_state.dag_edits_by_source.get(source_label, DagEdits())
         # Everything below — layout, d-separation, identification — reads the
@@ -825,13 +825,15 @@ with t_dag:
 
             current = edge_rows(base_dag, edits)
             if current:
-                labels = [f"{r['source']} -> {r['target']}" for r in current]
-                to_remove = st.multiselect("Remove edges", labels, key="dag_edit_rm")
+                edge_options = [(r["source"], r["target"]) for r in current]
+                to_remove = st.multiselect(
+                    "Remove edges", edge_options, key="dag_edit_rm",
+                    format_func=lambda edge: f"{edge[0]} -> {edge[1]}",
+                )
                 if st.button("Remove selected", disabled=not to_remove,
                              use_container_width=True):
                     pending = edits
-                    for label in to_remove:
-                        src, dst = label.split(" -> ")
+                    for src, dst in to_remove:
                         pending = pending.with_removed(src, dst)
                     _store(pending)
 
@@ -891,22 +893,32 @@ with t_dag:
         node_list = sorted(dag.nodes())
         if len(node_list) < 2:
             st.caption("Add at least two nodes to check d-separation.")
-            st.stop()
-        col_ds1, col_ds2, col_ds3 = st.columns(3)
-        with col_ds1:
-            node_a = st.selectbox("Node A", node_list, index=0)
-        with col_ds2:
-            node_b = st.selectbox("Node B", node_list, index=min(1, len(node_list)-1))
-        with col_ds3:
-            cond_nodes = st.multiselect("Conditioning set", node_list)
+        else:
+            col_ds1, col_ds2, col_ds3 = st.columns(3)
+            with col_ds1:
+                node_a = st.selectbox("Node A", node_list, index=0)
+            with col_ds2:
+                node_b = st.selectbox(
+                    "Node B", node_list, index=min(1, len(node_list)-1)
+                )
+            with col_ds3:
+                cond_nodes = st.multiselect("Conditioning set", node_list)
 
-        if st.button("Check d-separation"):
-            from networkx.algorithms.d_separation import is_d_separator
-            result_dsep = is_d_separator(dag, {node_a}, {node_b}, set(cond_nodes))
-            if result_dsep:
-                st.success(f"✅ {node_a} and {node_b} ARE d-separated given {{{', '.join(cond_nodes) or '∅'}}}.")
-            else:
-                st.error(f"❌ {node_a} and {node_b} are NOT d-separated given {{{', '.join(cond_nodes) or '∅'}}}.")
+            if st.button("Check d-separation"):
+                from networkx.algorithms.d_separation import is_d_separator
+                result_dsep = is_d_separator(
+                    dag, {node_a}, {node_b}, set(cond_nodes)
+                )
+                if result_dsep:
+                    st.success(
+                        f"✅ {node_a} and {node_b} ARE d-separated given "
+                        f"{{{', '.join(cond_nodes) or '∅'}}}."
+                    )
+                else:
+                    st.error(
+                        f"❌ {node_a} and {node_b} are NOT d-separated given "
+                        f"{{{', '.join(cond_nodes) or '∅'}}}."
+                    )
 
 
 # ── Solver tab ────────────────────────────────────────────────────────

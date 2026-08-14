@@ -35,6 +35,7 @@ import logging
 import math
 import statistics
 import sys
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -72,8 +73,9 @@ def _series(con, asset: str, metric: str, provider: str | None = None):
     if provider:
         query.append("and provider = ?")
         params.append(provider)
+    query.append("and time::date < current_date")
     query.append("qualify row_number() over (partition by time::date "
-                 "order by provider_priority) = 1")
+                 "order by provider_priority, time desc, provider, value) = 1")
     query.append("order by d")
     rows = con.execute(" ".join(query), params).fetchall()
     return [(str(d), float(v)) for d, v in rows if v is not None]
@@ -109,25 +111,30 @@ def log_returns_and_sharpe(con, asset: str) -> list[dict]:
     series, provider = _price_series(con, asset)
     if len(series) < 31:
         return []
-    days = [d for d, _ in series]
+    days = [date.fromisoformat(d) for d, _ in series]
     prices = [p for _, p in series]
-    daily = [
-        math.log(prices[i] / prices[i - 1])
-        for i in range(1, len(prices))
-        if prices[i] > 0 and prices[i - 1] > 0
-    ]
     out: list[dict] = []
     for window, metric in ((7, "log_return_7d"), (30, "log_return_30d")):
         for i in range(window, len(prices)):
-            if prices[i] > 0 and prices[i - window] > 0:
-                out.append(_row(asset, metric, days[i],
+            window_days = days[i - window:i + 1]
+            if (
+                window_days[-1] - window_days[0] == timedelta(days=window)
+                and all(price > 0 for price in prices[i - window:i + 1])
+            ):
+                out.append(_row(asset, metric, days[i].isoformat(),
                                 math.log(prices[i] / prices[i - window]) * 100))
-    # daily[i] is the return ending on days[i + 1]
-    for i in range(30, len(daily) + 1):
-        window = daily[i - 30:i]
+    for i in range(30, len(prices)):
+        window_days = days[i - 30:i + 1]
+        window_prices = prices[i - 30:i + 1]
+        if (
+            window_days[-1] - window_days[0] != timedelta(days=30)
+            or any(price <= 0 for price in window_prices)
+        ):
+            continue
+        window = [math.log(window_prices[j] / window_prices[j - 1]) for j in range(1, 31)]
         spread = statistics.stdev(window)          # ddof=1, matches history
         if spread > 0:
-            out.append(_row(asset, "sharpe_30d", days[i],
+            out.append(_row(asset, "sharpe_30d", days[i].isoformat(),
                             statistics.mean(window) / spread * math.sqrt(ANNUALISATION)))
     logger.info("  %-6s log-returns/sharpe from %s (%d rows)", asset, provider, len(out))
     return out
@@ -138,8 +145,34 @@ def net_flow(con, asset: str, source_metric: str, metric: str) -> list[dict]:
     series = _series(con, asset, source_metric)
     out = []
     for i in range(1, len(series)):
-        out.append(_row(asset, metric, series[i][0], series[i][1] - series[i - 1][1]))
+        elapsed = date.fromisoformat(series[i][0]) - date.fromisoformat(series[i - 1][0])
+        if elapsed == timedelta(days=1):
+            out.append(_row(asset, metric, series[i][0], series[i][1] - series[i - 1][1]))
     return out
+
+
+def _new_records(con, records: list[dict]) -> list[dict]:
+    """Return append-only, unique rows for completed UTC days."""
+    maxima = {
+        (asset, metric): timestamp
+        for asset, metric, timestamp in con.execute(
+            "select asset, metric, max(time) from asset_metrics "
+            "where provider = 'derived' group by asset, metric"
+        ).fetchall()
+    }
+    today = datetime.now(timezone.utc).date()
+    unique: dict[tuple[str, str, str], dict] = {}
+    for record in records:
+        observed = datetime.fromisoformat(record["time"].replace("Z", "+00:00"))
+        if observed.date() >= today or observed.time().replace(tzinfo=None) != datetime.min.time():
+            raise ValueError("derived rows must use a completed UTC day at midnight")
+        key = (record["asset"], record["metric"], observed.date().isoformat())
+        if key in unique and unique[key] != record:
+            raise ValueError(f"conflicting derived rows for {key}")
+        latest = maxima.get((record["asset"], record["metric"]))
+        if latest is None or observed > latest.astimezone(timezone.utc):
+            unique[key] = record
+    return list(unique.values())
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -163,6 +196,7 @@ def main(argv: list[str] | None = None) -> int:
         logger.info("computing extra derived metrics for %d asset(s)", len(assets))
 
         records: list[dict] = []
+        failed = False
         for asset in assets:
             try:
                 records.extend(log_returns_and_sharpe(con, asset))
@@ -172,8 +206,15 @@ def main(argv: list[str] | None = None) -> int:
                 )
             except Exception as exc:
                 logger.error("%s failed: %s", asset, exc)
+                failed = True
+        if not failed:
+            records = _new_records(con, records)
     finally:
         con.close()
+
+    if failed:
+        logger.error("derived computation failed; no rows written")
+        return 1
 
     by_metric: dict[str, int] = {}
     for r in records:

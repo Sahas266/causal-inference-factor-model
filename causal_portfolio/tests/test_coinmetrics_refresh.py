@@ -83,8 +83,15 @@ def test_one_day_provider_lag_is_tolerated(tmp_path):
     Requiring data exactly at `end` failed every run launched shortly after
     midnight UTC and threw away the rows it had already fetched.
     """
-    session = _session_with_latest(
-        {"btc": "2026-08-11", "doge": "2026-08-10", "eth": "2026-08-11"}
+    session = SimpleNamespace()
+    session.get = lambda *_args, **_kwargs: _Response(
+        {"data": [
+            _record(asset, "2026-08-10", fee)
+            for asset, fee in (("btc", 2.8), ("doge", 8_800.0), ("eth", 118.0))
+        ] + [
+            _record("btc", "2026-08-11", 2.9, 63_500.0),
+            _record("eth", "2026-08-11", 119.0, 1_880.0),
+        ]}
     )
 
     written = refresh_causal_sources(
@@ -95,6 +102,26 @@ def test_one_day_provider_lag_is_tolerated(tmp_path):
     )
 
     assert written > 0
+
+
+def test_refresh_rejects_an_interior_gap_before_upsert(tmp_path):
+    session = SimpleNamespace()
+    session.get = lambda *_args, **_kwargs: _Response(
+        {"data": [
+            _record(asset, date, fee)
+            for asset, fee in (("btc", 2.8), ("doge", 8_800.0), ("eth", 118.0))
+            for date in ("2026-08-10", "2026-08-12")
+        ]}
+    )
+
+    with pytest.raises(ValueError, match="gaps"):
+        refresh_causal_sources(
+            tmp_path / "causal.duckdb",
+            start="2026-08-10",
+            end="2026-08-12",
+            session=session,
+            max_lag_days=0,
+        )
 
 
 def test_a_series_further_behind_than_the_lag_still_fails(tmp_path):

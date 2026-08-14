@@ -272,7 +272,7 @@ def test_cli_execute_surfaces_post_submit_and_audit_errors(tmp_path, monkeypatch
         min_rebalance_completeness=0.90,
     )
 
-    assert cli.cmd_execute(args) == 0
+    assert cli.cmd_execute(args) == 3
 
     stderr = capsys.readouterr().err
     assert "post-state unavailable" in stderr

@@ -13,7 +13,10 @@ from unittest.mock import MagicMock
 import pytest
 
 pytest.importorskip("hyperliquid", reason="hyperliquid SDK not installed")
-from causal_portfolio.execution.hyperliquid import execute_plan
+from causal_portfolio.execution.hyperliquid import (
+    _account_decommission_state_error,
+    execute_plan,
+)
 
 from causal_portfolio.execution.config import ExecutionConfig
 from causal_portfolio.execution.types import (
@@ -287,6 +290,47 @@ def test_testnet_does_not_need_acknowledgement():
     assert result.submitted
 
 
+def test_live_execution_blocks_when_cancelled_orders_remain_open():
+    plan = _make_plan(address="0xAAA")
+    adapter = _mock_adapter(
+        address="0xAAA",
+        config=ExecutionConfig(testnet=True, dry_run=False),
+    )
+    adapter.fetch_open_order_ids.return_value = [17]
+
+    result = execute_plan(adapter, plan, write_audit=False)
+
+    assert not result.submitted
+    assert result.error == "cancel confirmation failed; open order ids remain: [17]"
+    adapter.submit_orders.assert_not_called()
+
+
+def test_live_execution_rejects_an_unvalidated_diagnostic_target():
+    plan = _make_plan(address="0xAAA")
+    plan = replace(
+        plan,
+        target_snapshot=TargetSnapshot(
+            {"btc": 0.1},
+            as_of=datetime.now(timezone.utc),
+            metadata={
+                "execution_eligible": False,
+                "forward_validation": {"passed": False},
+            },
+        ),
+    )
+    adapter = _mock_adapter(
+        address="0xAAA",
+        config=ExecutionConfig(testnet=True, dry_run=False),
+    )
+
+    result = execute_plan(adapter, plan, write_audit=False)
+
+    assert not result.submitted
+    assert result.error == "target metadata marks this model output as non-executable"
+    adapter.cancel_all_open.assert_not_called()
+    adapter.submit_orders_book_aware.assert_not_called()
+
+
 def test_empty_live_plan_is_audited_without_exchange_calls(monkeypatch):
     from causal_portfolio.execution import audit as audit_mod
 
@@ -317,6 +361,36 @@ def _decommission_config() -> ExecutionConfig:
         account_decommission_expected_address="0xAAA",
         account_decommission_expected_sides=(("BTC", 1),),
     )
+
+
+def test_account_decommission_flat_check_uses_position_size():
+    state = AccountState(
+        address="0xAAA",
+        account_value_usd=10_000.0,
+        margin_used_usd=0.0,
+        positions={"BTC": Position("BTC", 0.001, 100_000.0, 0.0)},
+    )
+
+    error = _account_decommission_state_error(
+        _decommission_config(), state, require_flat=True
+    )
+
+    assert error == "open positions remain: {'BTC': 0.001}"
+
+
+def test_account_decommission_rejects_nonfinite_positions():
+    state = AccountState(
+        address="0xAAA",
+        account_value_usd=10_000.0,
+        margin_used_usd=0.0,
+        positions={"BTC": Position("BTC", float("nan"), 100_000.0, 0.0)},
+    )
+
+    error = _account_decommission_state_error(
+        _decommission_config(), state, require_flat=True
+    )
+
+    assert error == "RP-PCA positions contain non-finite values: ['BTC']"
 
 
 def test_account_decommission_verifies_a_stable_flat_account():
@@ -504,7 +578,8 @@ def test_account_decommission_never_uses_generic_leg_repair():
 
     assert result.submitted
     assert result.repair is None
-    assert result.post_submit_error == "open positions remain: {'BTC': 500.0}"
+    assert "open positions remain: {'BTC': 0.005}" in result.post_submit_error
+    assert "unresolved reconciliation drift" in result.post_submit_error
     adapter.cancel_all_open.assert_not_called()
     adapter.submit_orders.assert_called_once()
     adapter.submit_orders_book_aware.assert_not_called()
