@@ -129,6 +129,15 @@ The layer also holds no runtime assumption about *which* model is driving it:
   monthly cadences are all first-class.
 - **Strategy identity.** `TargetSnapshot.strategy` is provenance only — it
   names the run log and appears in the panel, and is never branched on.
+- **Self-veto.** A model may refuse its own output by setting
+  `execution_eligible: False` in `TargetSnapshot.metadata`; live submission
+  then stops before any exchange write. That single key is the entire
+  contract. Execution never inspects *why* — fold Sharpes, placebo p-values,
+  holdout status and anything else a model records alongside it are opaque
+  here, and belong in metadata purely for audit. An absent key means eligible,
+  so models written before this contract are unaffected; any falsy value
+  refuses. Dry runs are exempt, so a vetoed target can still be planned and
+  inspected.
 - **Cost and safety policy** is uniform across models by design: the cost gate
   reads only orders, mids, books, and config. Model-specific gating belongs
   upstream, in the weights you submit.

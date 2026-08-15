@@ -331,6 +331,81 @@ def test_live_execution_rejects_an_unvalidated_diagnostic_target():
     adapter.submit_orders_book_aware.assert_not_called()
 
 
+def test_veto_is_read_from_one_key_not_from_a_models_evidence():
+    """A model's validation evidence is opaque to execution.
+
+    The gate originally also parsed `forward_validation` expecting the causal
+    model's `{"passed": bool}` shape, and refused anything else. Any other
+    model that used that key — a list of folds, a p-value, a status string —
+    was silently and permanently blocked from trading, with the refusal
+    blaming its own metadata. Execution reads the verdict, never the reasoning.
+    """
+    for evidence in (
+        {"folds": [0.4, 0.9], "note": "shape this layer must not interpret"},
+        [{"fold": 1, "sharpe": 0.4}],
+        "pending",
+        None,
+    ):
+        plan = replace(
+            _make_plan(address="0xAAA"),
+            target_snapshot=TargetSnapshot(
+                {"btc": 0.1},
+                as_of=datetime.now(timezone.utc),
+                metadata={"execution_eligible": True, "forward_validation": evidence},
+            ),
+        )
+        adapter = _mock_adapter(
+            address="0xAAA",
+            config=ExecutionConfig(testnet=True, dry_run=False),
+        )
+
+        result = execute_plan(adapter, plan, write_audit=False)
+
+        assert result.submitted, f"blocked by unreadable evidence: {evidence!r}"
+
+
+def test_a_model_with_no_opinion_on_eligibility_trades():
+    """Absent key means eligible — models predate this contract."""
+    plan = replace(
+        _make_plan(address="0xAAA"),
+        target_snapshot=TargetSnapshot(
+            {"btc": 0.1},
+            as_of=datetime.now(timezone.utc),
+            metadata={"strategy": "some-other-model"},
+        ),
+    )
+    adapter = _mock_adapter(
+        address="0xAAA",
+        config=ExecutionConfig(testnet=True, dry_run=False),
+    )
+
+    result = execute_plan(adapter, plan, write_audit=False)
+
+    assert result.submitted
+
+
+def test_any_falsy_eligibility_refuses_not_only_the_False_singleton():
+    """`is False` let `None` and `0` through — both mean "not cleared"."""
+    for veto in (False, None, 0, ""):
+        plan = replace(
+            _make_plan(address="0xAAA"),
+            target_snapshot=TargetSnapshot(
+                {"btc": 0.1},
+                as_of=datetime.now(timezone.utc),
+                metadata={"execution_eligible": veto},
+            ),
+        )
+        adapter = _mock_adapter(
+            address="0xAAA",
+            config=ExecutionConfig(testnet=True, dry_run=False),
+        )
+
+        result = execute_plan(adapter, plan, write_audit=False)
+
+        assert not result.submitted, f"traded on execution_eligible={veto!r}"
+        adapter.submit_orders_book_aware.assert_not_called()
+
+
 def test_empty_live_plan_is_audited_without_exchange_calls(monkeypatch):
     from causal_portfolio.execution import audit as audit_mod
 

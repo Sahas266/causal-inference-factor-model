@@ -801,12 +801,14 @@ def _execute_plan_inner(
             submitted_orders=[],
         )
 
+    # A model may veto its own output — the causal model does this while its
+    # forward-validation window is still open. Execution honours the veto
+    # without reading why: `execution_eligible` is the whole contract, and a
+    # model's evidence for it (fold Sharpes, placebo p-values, whatever the
+    # next model invents) is never parsed here. Absent key means eligible, so
+    # a model that has no opinion trades normally; any falsy value refuses.
     if not adapter.config.dry_run and plan.target_snapshot is not None:
-        metadata = plan.target_snapshot.metadata
-        validation = metadata.get("forward_validation")
-        if metadata.get("execution_eligible") is False or (
-            isinstance(validation, dict) and validation.get("passed") is not True
-        ):
+        if not plan.target_snapshot.metadata.get("execution_eligible", True):
             return SubmitResult(
                 plan=plan,
                 submitted=False,
